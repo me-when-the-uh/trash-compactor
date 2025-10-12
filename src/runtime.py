@@ -13,7 +13,7 @@ from .file_utils import (
     get_volume_details,
     is_protected_path,
 )
-from .compression import set_worker_cap
+from .compression_module import set_worker_cap
 
 
 def sanitize_path(path: str) -> str:

@@ -27,6 +27,27 @@ SKIP_EXTENSIONS: Final[Set[str]] = _flatten((
     _OFFICE,
 ))
 
+MIN_SAVINGS_PERCENT: Final[float] = 0.0
+MAX_SAVINGS_PERCENT: Final[float] = 90.0
+DEFAULT_MIN_SAVINGS_PERCENT: Final[float] = 10.0
+
+
+def clamp_savings_percent(value: float) -> float:
+    return max(MIN_SAVINGS_PERCENT, min(MAX_SAVINGS_PERCENT, value))
+
+
+def entropy_from_savings(percent: float) -> float:
+    clamped = clamp_savings_percent(percent)
+    return max(0.0, 8.0 * (1 - clamped / 100.0))
+
+
+def savings_from_entropy(entropy: float) -> float:
+    entropy = max(0.0, min(8.0, entropy))
+    return max(0.0, (1 - entropy / 8.0) * 100.0)
+
+
+ENTROPY_SKIP_THRESHOLD: Final[float] = entropy_from_savings(DEFAULT_MIN_SAVINGS_PERCENT)
+
 MIN_COMPRESSIBLE_SIZE: Final[int] = 8 * 1024  # 8KB minimum
 SIZE_THRESHOLDS: Final[Tuple[Tuple[int, str], ...]] = (
     (64 * 1024, 'tiny'),

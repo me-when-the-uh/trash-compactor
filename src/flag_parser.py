@@ -1,4 +1,3 @@
-import os
 import shlex
 from argparse import Namespace
 from dataclasses import dataclass
@@ -6,9 +5,7 @@ from typing import ClassVar, Optional
 
 from colorama import Fore, Style
 
-from . import config
-from .console import EscapeExit, announce_cancelled, read_user_input
-from .runtime import resolve_directory, sanitize_path
+from .config import DEFAULT_MIN_SAVINGS_PERCENT
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
     'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
@@ -16,11 +13,10 @@ FLAG_METADATA: dict[str, tuple[str, str]] = {
     'force_lzx': ('-f', 'Force LZX compression'),
     'thorough': ('-t', 'Thorough checking mode'),
     'brand_files': ('-b', 'Branding mode'),
-    'dry_run': ('-d', 'Dry-run entropy analysis'),
     'single_worker': ('-s', 'Throttle for HDDs'),
     'min_savings': (
         '-m/--min-savings=<percent>',
-        f"Set minimum expected savings percentage ({config.MIN_SAVINGS_PERCENT:.0f}-{config.MAX_SAVINGS_PERCENT:.0f})",
+        "Set minimum expected savings percentage",
     ),
 }
 
@@ -29,7 +25,6 @@ SHORT_FLAG_KEYS: dict[str, str] = {
     'f': 'force_lzx',
     't': 'thorough',
     'b': 'brand_files',
-    'd': 'dry_run',
     's': 'single_worker',
 }
 
@@ -41,20 +36,14 @@ LONG_FLAG_KEYS: dict[str, str] = {
     'force-lzx': 'force_lzx',
     'thorough': 'thorough',
     'brand-files': 'brand_files',
-    'dry-run': 'dry_run',
     'single-worker': 'single_worker',
     'min-savings': 'min_savings',
 }
 
-_START_COMMANDS: set[str] = {'s', 'start'}
-_FLAG_HELP_COMMANDS: set[str] = {'f', 'flags'}
-
 _MUTUALLY_EXCLUSIVE: tuple[tuple[str, str], ...] = (
     ('thorough', 'brand_files'),
     ('no_lzx', 'force_lzx'),
-    ('dry_run', 'brand_files'),
 )
-
 
 @dataclass
 class LaunchState:
@@ -64,9 +53,8 @@ class LaunchState:
     force_lzx: bool = False
     thorough: bool = False
     brand_files: bool = False
-    dry_run: bool = False
     single_worker: bool = False
-    min_savings: float = config.DEFAULT_MIN_SAVINGS_PERCENT
+    min_savings: float = DEFAULT_MIN_SAVINGS_PERCENT
 
     MAX_VERBOSITY: ClassVar[int] = 4
 
@@ -78,7 +66,8 @@ class LaunchState:
         self.verbose = 0 if level == 0 or self.verbose == level else level
 
     def set_min_savings(self, percent: float) -> None:
-        self.min_savings = config.clamp_savings_percent(percent)
+        from .config import clamp_savings_percent
+        self.min_savings = clamp_savings_percent(percent)
 
     def _silence_conflicts(self, key: str) -> None:
         for primary, secondary in _MUTUALLY_EXCLUSIVE:
@@ -98,7 +87,6 @@ class LaunchState:
         if enabled:
             self._silence_conflicts(key)
 
-
 def _format_active_flags(state: LaunchState) -> str:
     items: list[str] = []
     if state.verbose:
@@ -111,12 +99,10 @@ def _format_active_flags(state: LaunchState) -> str:
             items.append(f"{description} ({flag})")
     return ", ".join(items) if items else "<none>"
 
-
 def _print_flag_reference() -> None:
     print(Fore.YELLOW + "\nAvailable flags:" + Style.RESET_ALL)
     for key, (flag, description) in FLAG_METADATA.items():
         print(f"  {flag:<6} {description}")
-
 
 def _coerce_verbose_value(raw: Optional[str]) -> int:
     if raw is None or raw == "":
@@ -126,7 +112,6 @@ def _coerce_verbose_value(raw: Optional[str]) -> int:
     except ValueError:
         return 1
 
-
 def _parse_min_savings(value: Optional[str]) -> Optional[float]:
     if value is None or value == "":
         return None
@@ -135,7 +120,6 @@ def _parse_min_savings(value: Optional[str]) -> Optional[float]:
         return float(stripped)
     except ValueError:
         return None
-
 
 def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -> None:
     key = LONG_FLAG_KEYS.get(option)
@@ -149,14 +133,13 @@ def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -
             print(
                 Fore.RED
                 + "Invalid value for --min-savings. Provide a number between "
-                + f"{config.MIN_SAVINGS_PERCENT:.0f} and {config.MAX_SAVINGS_PERCENT:.0f}."
+                + f"10 and 90."
                 + Style.RESET_ALL
             )
             return
         state.set_min_savings(parsed)
     elif key:
         state.toggle(key)
-
 
 def _handle_short_bundle(bundle: str, state: LaunchState) -> None:
     index = 1
@@ -176,8 +159,7 @@ def _handle_short_bundle(bundle: str, state: LaunchState) -> None:
             state.toggle(mapped)
         index += 1
 
-
-def _apply_flag_string(raw: str, state: LaunchState) -> None:
+def apply_flag_string(raw: str, state: LaunchState) -> None:
     tokens = shlex.split(raw, posix=False)
     index = 0
     while index < len(tokens):
@@ -206,9 +188,7 @@ def _apply_flag_string(raw: str, state: LaunchState) -> None:
                 _handle_short_bundle(token, state)
         index += 1
 
-
-def _split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
-    # Treat leading flags and trailing toggles uniformly; Windows paths don't start with '-'
+def split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
     path_tokens: list[str] = []
     flag_tokens: list[str] = []
     index = 0
@@ -230,8 +210,7 @@ def _split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
         index += 1
     return path_tokens, flag_tokens
 
-
-def _print_interactive_status(state: LaunchState) -> None:
+def print_interactive_status(state: LaunchState) -> None:
     active_flags = _format_active_flags(state)
     current_directory = state.directory or "<not set>"
     print(
@@ -244,144 +223,38 @@ def _print_interactive_status(state: LaunchState) -> None:
         + Style.RESET_ALL
     )
 
-
-def _apply_composite_command(parts: list[str], state: LaunchState) -> bool:
-    # Returns True if a path was supplied, so the caller can short-circuit the default handler
+def apply_composite_command(parts: list[str], state: LaunchState) -> bool:
     if not parts:
         return False
-    path_tokens, flag_tokens = _split_path_and_flags(parts)
+    path_tokens, flag_tokens = split_path_and_flags(parts)
     if flag_tokens:
-        _apply_flag_string(" ".join(flag_tokens), state)
+        apply_flag_string(" ".join(flag_tokens), state)
     if path_tokens:
+        from .runtime import sanitize_path
         state.directory = sanitize_path(" ".join(path_tokens))
         return True
     return False
 
-
-def _read_interactive_command() -> str:
-    try:
-        return read_user_input("> ").strip()
-    except (KeyboardInterrupt, EscapeExit):
-        announce_cancelled()
-        raise SystemExit(0)
-
-
-def _display_flag_help() -> None:
-    print(
-        "Toggle flags by entering their short forms together (e.g. -vx)"
-        " or separately (e.g. -t). Re-enter a flag to disable it."
-    )
-    _print_flag_reference()
-
-
-def _can_start(state: LaunchState) -> bool:
-    if not state.directory:
-        print(Fore.RED + "Directory is required before starting." + Style.RESET_ALL)
-        return False
-    if not os.path.exists(state.directory):
-        print(
-            Fore.RED
-            + f"Directory '{state.directory}' was not found."
-            + Style.RESET_ALL
-        )
-        return False
-    return True
-
-
-def _tokenize_command(command: str) -> list[str]:
-    try:
-        return shlex.split(command, posix=False)
-    except ValueError:
-        return []
-
-
-def _process_command(command: str, state: LaunchState) -> None:
+def process_command(command: str, state: LaunchState) -> None:
     if command.startswith('-'):
-        _apply_flag_string(command, state)
+        apply_flag_string(command, state)
         return
 
-    parts = _tokenize_command(command)
-    if _apply_composite_command(parts, state):
+    parts = shlex.split(command, posix=False)
+    if apply_composite_command(parts, state):
         return
 
+    from .runtime import sanitize_path
     state.directory = sanitize_path(command)
 
-
-def _run_interactive_session(state: LaunchState) -> None:
-    while True:
-        _print_interactive_status(state)
-        print(
-            "Enter a directory path (optionally add flags like '-vx'),"
-            " or use [S]tart to proceed and [F]lag help for tips."
-        )
-
-        command = _read_interactive_command() or 's'
-        lowered = command.lower()
-
-        if lowered in _START_COMMANDS:
-            if _can_start(state):
-                return
-            continue
-
-        if lowered in _FLAG_HELP_COMMANDS:
-            _display_flag_help()
-            continue
-
-        _process_command(command, state)
-
-
-def _apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
+def apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
     args.directory = state.directory
     args.verbose = state.verbose
     args.no_lzx = state.no_lzx
     args.force_lzx = state.force_lzx
     args.thorough = state.thorough
     args.brand_files = state.brand_files
-    setattr(args, 'dry_run', state.dry_run)
     args.single_worker = state.single_worker
-    args.min_savings = config.clamp_savings_percent(state.min_savings)
+    from .config import clamp_savings_percent
+    args.min_savings = clamp_savings_percent(state.min_savings)
     return args
-
-
-def interactive_configure(args: Namespace) -> Namespace:
-    state = LaunchState(
-        directory=sanitize_path(args.directory) if args.directory else "",
-        verbose=args.verbose,
-        no_lzx=args.no_lzx,
-        force_lzx=args.force_lzx,
-        thorough=args.thorough,
-        brand_files=args.brand_files,
-        dry_run=getattr(args, 'dry_run', False),
-        single_worker=getattr(args, 'single_worker', False),
-        min_savings=config.clamp_savings_percent(getattr(args, 'min_savings', config.DEFAULT_MIN_SAVINGS_PERCENT)),
-    )
-
-    print(Fore.YELLOW + "\nInteractive launch detected. Configure your run before starting." + Style.RESET_ALL)
-    _print_flag_reference()
-    _run_interactive_session(state)
-    return _apply_state_to_args(args, state)
-
-
-def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, Namespace]:
-    while True:
-        candidate = sanitize_path(args.directory) if args.directory else ""
-        if candidate and os.path.exists(candidate):
-            return candidate, args
-
-        if candidate:
-            print(Fore.RED + f"Directory '{candidate}' does not exist." + Style.RESET_ALL)
-        else:
-            print(Fore.RED + "No directory provided." + Style.RESET_ALL)
-
-        if interactive_launch:
-            args.directory = ""
-            args = interactive_configure(args)
-        else:
-            try:
-                args.directory = resolve_directory(None)
-            except EscapeExit:
-                announce_cancelled()
-                raise SystemExit(0)
-            except KeyboardInterrupt:
-                announce_cancelled()
-                raise SystemExit(0)
