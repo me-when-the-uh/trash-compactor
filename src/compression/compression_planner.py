@@ -3,8 +3,8 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
-from ..config import COMPRESSION_ALGORITHMS
-from ..file_utils import should_compress_file
+from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy
+from ..file_utils import CompressionDecision, should_compress_file
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory
 from ..stats import CompressionStats, DirectorySkipRecord
 from ..timer import PerformanceMonitor
@@ -62,6 +62,8 @@ def plan_compression(
     min_savings_percent: float,
     verbosity: int,
     progress_callback: Optional[Callable[[Path, int, bool, Optional[str]], None]] = None,
+    file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
+    apply_entropy_filter: bool = True,
 ) -> list[tuple[Path, int, str]]:
     candidates = []
     with monitor.time_file_scan():
@@ -71,6 +73,8 @@ def plan_compression(
             try:
                 decision = should_compress_file(file_path, thorough_check)
                 file_size = file_path.stat().st_size
+                if file_observer:
+                    file_observer(file_path, file_size, decision)
                 stats.total_original_size += file_size
 
                 if decision.should_compress:
@@ -112,13 +116,14 @@ def plan_compression(
                 logging.error("Error processing %s: %s", file_path, exc)
                 if progress_callback:
                     progress_callback(file_path, processed, False, f"Error processing file: {exc}")
-        candidates = _filter_high_entropy_directories(
-            candidates,
-            base_dir=base_dir,
-            stats=stats,
-            min_savings_percent=min_savings_percent,
-            verbosity=verbosity,
-        )
+        if apply_entropy_filter:
+            candidates = _filter_high_entropy_directories(
+                candidates,
+                base_dir=base_dir,
+                stats=stats,
+                min_savings_percent=min_savings_percent,
+                verbosity=verbosity,
+            )
     return candidates
 
 
@@ -145,6 +150,42 @@ def _filter_high_entropy_directories(
     directories = {path.parent for path, _, _ in candidates}
     directories.add(base_dir)
 
+    root_skip_record: Optional[DirectorySkipRecord] = None
+    if any(path.parent == base_dir for path, _, _ in candidates):
+        average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(
+            base_dir,
+            include_subdirectories=False,
+        )
+        if average_entropy is not None and sampled_files > 0 and sampled_bytes >= 1024:
+            estimated_savings = savings_from_entropy(average_entropy)
+            logging.debug(
+                "Root entropy sample for %s: %.2f bits/byte (~%.1f%% savings) across %s files (%s bytes)",
+                base_dir,
+                average_entropy,
+                estimated_savings,
+                sampled_files,
+                sampled_bytes,
+            )
+            if estimated_savings < min_savings_percent:
+                reason = f"High entropy (est. {estimated_savings:.1f}% savings)"
+                root_skip_record = DirectorySkipRecord(
+                    path=str(base_dir),
+                    relative_path='.',
+                    reason=reason,
+                    category='high_entropy',
+                    average_entropy=average_entropy,
+                    estimated_savings=estimated_savings,
+                    sampled_files=sampled_files,
+                    sampled_bytes=sampled_bytes,
+                )
+                append_directory_skip_record(stats, root_skip_record)
+                if verbosity >= 2:
+                    logging.info(
+                        "Skipping root-level files; estimated savings %.1f%% is below threshold %.1f%%",
+                        estimated_savings,
+                        min_savings_percent,
+                    )
+
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
 
     for directory in sorted(directories, key=lambda item: (len(item.parts), str(item).casefold())):
@@ -161,6 +202,16 @@ def _filter_high_entropy_directories(
 
     filtered: list[tuple[Path, int, str]] = []
     for path, file_size, algorithm in candidates:
+        if root_skip_record is not None and path.parent == base_dir:
+            stats.record_file_skip(
+                path,
+                root_skip_record.reason,
+                file_size,
+                file_size,
+                category=root_skip_record.category,
+            )
+            logging.debug("Skipping %s due to %s", path, root_skip_record.reason)
+            continue
         skip_record = _locate_skip_record(path.parent, base_dir, skipped_directories)
         if skip_record is not None:
             stats.record_file_skip(
@@ -183,8 +234,12 @@ def _has_skipped_ancestor(
     skipped: dict[Path, DirectorySkipRecord],
 ) -> bool:
     for ancestor in _ancestors_including_base(directory, base_dir):
-        if ancestor in skipped:
-            return True
+        record = skipped.get(ancestor)
+        if record is None:
+            continue
+        if ancestor == base_dir and directory != base_dir:
+            continue
+        return True
     return False
 
 
@@ -194,8 +249,12 @@ def _locate_skip_record(
     skipped: dict[Path, DirectorySkipRecord],
 ) -> Optional[DirectorySkipRecord]:
     for ancestor in _ancestors_including_base(directory, base_dir):
-        if ancestor in skipped:
-            return skipped[ancestor]
+        record = skipped.get(ancestor)
+        if record is None:
+            continue
+        if ancestor == base_dir and directory != base_dir:
+            continue
+        return record
     return None
 
 

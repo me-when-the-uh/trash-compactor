@@ -120,6 +120,7 @@ class EntropySampleRecord:
     estimated_savings: float
     sampled_files: int
     sampled_bytes: int
+    total_bytes: int
 
 
 @dataclass
@@ -148,6 +149,9 @@ class CompressionStats:
     skip_extension_files: int = 0
     skip_low_savings_files: int = 0
     min_savings_percent: float = 0.0
+    entropy_report_threshold_bytes: int = 0
+    entropy_projected_original_bytes: int = 0
+    entropy_projected_compressed_bytes: int = 0
 
     def set_base_dir(self, base_dir: Path) -> None:
         self.base_dir = base_dir
@@ -234,13 +238,26 @@ def _format_sample_bytes(value: int) -> str:
     return "0 B"
 
 
+def _format_summary_size(value: int) -> str:
+    if value >= 1024 * 1024 * 1024:
+        return f"{value / (1024 * 1024 * 1024):.1f}GB"
+    return f"{value / (1024 * 1024):.1f}MB"
+
+
 def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float) -> None:
     logging.info("\nEntropy Dry Run Summary")
     logging.info("-----------------------")
 
     samples = sorted(stats.entropy_samples, key=lambda record: record.estimated_savings, reverse=True)
     if not samples:
-        logging.info("No eligible directories were analysed.")
+        threshold_bytes = stats.entropy_report_threshold_bytes
+        if threshold_bytes:
+            logging.info(
+                "No directories exceeded the reporting threshold of %.1f MB.",
+                threshold_bytes / (1024 * 1024),
+            )
+        else:
+            logging.info("No eligible directories were analysed.")
         return
 
     logging.info("Minimum savings threshold: %.1f%%", min_savings_percent)
@@ -250,19 +267,32 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float) -
         analysed,
         stats.entropy_directories_below_threshold,
     )
+    threshold_bytes = stats.entropy_report_threshold_bytes
+    if threshold_bytes:
+        logging.info(
+            "Reporting directories with total size >= %.1f MB.",
+            threshold_bytes / (1024 * 1024),
+        )
     logging.info("Directories ordered by projected savings:")
 
     for index, record in enumerate(samples, start=1):
         status_note = " [below threshold]" if record.estimated_savings < min_savings_percent else ""
         logging.info(
-            " %2d. %s (~%.1f%% savings, entropy %.2f, %s files, %s sampled)%s",
+            " %2d. %s (~%.1f%% savings, entropy %.2f, %s files, %s sampled, %s total)%s",
             index,
             record.relative_path,
             record.estimated_savings,
             record.average_entropy,
             record.sampled_files,
             _format_sample_bytes(record.sampled_bytes),
+            _format_sample_bytes(record.total_bytes),
             status_note,
+        )
+    if stats.entropy_projected_original_bytes:
+        logging.info(
+            "\nEstimated savings (pessimistic, WIP, can be 30-50 percent less): %s -> %s",
+            _format_summary_size(stats.entropy_projected_original_bytes),
+            _format_summary_size(stats.entropy_projected_compressed_bytes),
         )
 
 

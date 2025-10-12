@@ -2,7 +2,7 @@ import os
 import sys
 import threading
 import time
-from collections import deque
+from collections import defaultdict, deque
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +16,9 @@ from .skip_logic import log_directory_skips, maybe_skip_directory
 from .stats import CompressionStats, EntropySampleRecord, LegacyCompressionStats, Spinner
 from .timer import PerformanceMonitor
 from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
+
+
+REPORTABLE_DIRECTORY_MIN_BYTES = 5 * 1024 * 1024
 
 
 def compress_directory(
@@ -321,6 +324,7 @@ def entropy_dry_run(
     base_dir = Path(directory_path).resolve()
     stats.set_base_dir(base_dir)
     stats.min_savings_percent = min_savings_percent
+    stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
 
     spinner: Optional[Spinner] = None
     if verbosity == 0 and getattr(sys.stdout, "isatty", lambda: True)():
@@ -346,8 +350,68 @@ def entropy_dry_run(
             spinner.stop("\nEntropy analysis skipped: base directory excluded.\n")
         return stats
 
+    def _ancestors_through_base(path: Path) -> list[Path]:
+        chain: list[Path] = []
+        current = path
+        while True:
+            chain.append(current)
+            if current == base_dir:
+                break
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+        return chain
+
+    all_files = list(
+        iter_files(
+            base_dir,
+            stats,
+            verbosity,
+            min_savings_percent,
+            collect_entropy=False,
+        )
+    )
+
+    monitor = PerformanceMonitor()
+    eligible_directories: set[Path] = {base_dir}
+    eligible_files_found = 0
+    direct_file_bytes: defaultdict[Path, int] = defaultdict(int)
+
+    def _observe_file(file_path: Path, file_size: int, decision) -> None:
+        nonlocal eligible_files_found
+        direct_file_bytes[file_path.parent] += file_size
+        if decision.should_compress:
+            eligible_files_found += 1
+            for ancestor in _ancestors_through_base(file_path.parent):
+                eligible_directories.add(ancestor)
+
+    plan_compression(
+        all_files,
+        stats,
+        monitor,
+        thorough_check=False,
+        base_dir=base_dir,
+        min_savings_percent=min_savings_percent,
+        verbosity=verbosity,
+        progress_callback=None,
+        file_observer=_observe_file,
+        apply_entropy_filter=False,
+    )
+
+    stats.entropy_projected_original_bytes = stats.total_original_size
+
+    if eligible_files_found == 0:
+        if spinner:
+            spinner.stop("\nEntropy analysis skipped: no compressible files detected.\n")
+        return stats
+
     pending = deque([base_dir])
     visited: set[Path] = set()
+    # Track directory topology so we can roll totals up without re-traversing
+    children_map: defaultdict[Path, list[Path]] = defaultdict(list)
+    ordered_dirs: list[Path] = []
+    raw_samples: list[tuple[Path, float, float, int, int]] = []
 
     while pending:
         current = pending.popleft()
@@ -358,6 +422,7 @@ def entropy_dry_run(
         if marker in visited:
             continue
         visited.add(marker)
+        ordered_dirs.append(current)
 
         try:
             entries = sorted(current.iterdir(), key=lambda entry: entry.name.casefold())
@@ -378,9 +443,13 @@ def entropy_dry_run(
             )
             if decision.skip:
                 continue
+            children_map[current].append(entry)
             pending.append(entry)
 
         if current == base_dir:
+            continue
+
+        if current not in eligible_directories:
             continue
 
         average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(current)
@@ -403,16 +472,7 @@ def entropy_dry_run(
                 f"{spinner.format_path(str(current), str(base_dir))} {note}",
             )
 
-        stats.entropy_samples.append(
-            EntropySampleRecord(
-                path=str(current),
-                relative_path=_relative_path(current, base_dir),
-                average_entropy=average_entropy,
-                estimated_savings=estimated_savings,
-                sampled_files=sampled_files,
-                sampled_bytes=sampled_bytes,
-            )
-        )
+        raw_samples.append((current, average_entropy, estimated_savings, sampled_files, sampled_bytes))
 
         if verbosity >= 4:
             logging.debug(
@@ -424,7 +484,108 @@ def entropy_dry_run(
                 sampled_bytes,
             )
 
+    def _relative_depth(path: Path) -> int:
+        if path == base_dir:
+            return 0
+        try:
+            return len(path.relative_to(base_dir).parts)
+        except ValueError:
+            return len(path.parts)
+
+    total_bytes_map: dict[Path, int] = {}
+    # Bottom-up accumulation keeps complexity linear while giving every directory its full size
+    for directory in sorted(ordered_dirs, key=_relative_depth, reverse=True):
+        total = direct_file_bytes.get(directory, 0)
+        for child in children_map.get(directory, []):
+            total += total_bytes_map.get(child, 0)
+        total_bytes_map[directory] = total
+
+    base_total = total_bytes_map.get(base_dir, 0)
+    if base_total and (verbosity >= 4 or base_total >= REPORTABLE_DIRECTORY_MIN_BYTES):
+        average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(
+            base_dir,
+            skip_root_files=True,
+        )
+        if average_entropy is not None and sampled_files > 0 and sampled_bytes > 0:
+            estimated_savings = savings_from_entropy(average_entropy)
+            stats.entropy_directories_sampled += 1
+            below_threshold = estimated_savings < min_savings_percent
+            if below_threshold:
+                stats.entropy_directories_below_threshold += 1
+            if spinner:
+                note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
+                spinner.set_label(
+                    f"Analysing directory entropy ({stats.entropy_directories_sampled})"
+                )
+                spinner.update(
+                    stats.entropy_directories_sampled,
+                    f"{spinner.format_path(str(base_dir), str(base_dir))} {note}",
+                )
+            raw_samples.append((base_dir, average_entropy, estimated_savings, sampled_files, sampled_bytes))
+
+            if verbosity >= 4:
+                logging.debug(
+                    "Dry run sample %s: entropy %.2f (~%.1f%% savings) from %s files (%s bytes)",
+                    base_dir,
+                    average_entropy,
+                    estimated_savings,
+                    sampled_files,
+                    sampled_bytes,
+                )
+
+    sampled_paths = {path for path, *_ in raw_samples}
+    reportable_totals: dict[Path, int] = {}
+    reported_flags: dict[Path, bool] = {}
+
+    # Filter out chains of single-child directories
+    for directory in sorted(ordered_dirs, key=_relative_depth, reverse=True):
+        residual = direct_file_bytes.get(directory, 0)
+        for child in children_map.get(directory, []):
+            if child in sampled_paths:
+                continue
+            residual += total_bytes_map.get(child, 0)
+        reportable_totals[directory] = residual
+        reported_flags[directory] = directory in sampled_paths and residual >= REPORTABLE_DIRECTORY_MIN_BYTES
+
+    records: list[EntropySampleRecord] = []
+    for path, average_entropy, estimated_savings, sampled_files, sampled_bytes in raw_samples:
+        records.append(
+            EntropySampleRecord(
+                path=str(path),
+                relative_path=_relative_path(path, base_dir),
+                average_entropy=average_entropy,
+                estimated_savings=estimated_savings,
+                sampled_files=sampled_files,
+                sampled_bytes=sampled_bytes,
+                total_bytes=total_bytes_map.get(path, 0),
+            )
+        )
+
+    if verbosity >= 4:
+        selected = records
+    else:
+        # Only surface directories that contribute to savings
+        selected = [
+            record for record in records if reported_flags.get(Path(record.path), False)
+        ]
+
+    stats.entropy_samples = selected
     stats.entropy_samples.sort(key=lambda record: record.estimated_savings, reverse=True)
+
+    base_total = total_bytes_map.get(base_dir, 0)
+    projected_total = float(base_total)
+    for record in records:
+        record_path = Path(record.path)
+        share = reportable_totals.get(record_path, total_bytes_map.get(record_path, 0))
+        if share <= 0:
+            continue
+        if record.estimated_savings < min_savings_percent:
+            continue
+        projected_total -= share
+        projected_total += share * max(0.0, 1 - record.estimated_savings / 100.0)
+
+    stats.entropy_projected_original_bytes = base_total
+    stats.entropy_projected_compressed_bytes = max(int(round(projected_total)), 0)
     if spinner:
         summary = (
             f"\nEntropy analysis complete: {stats.entropy_directories_sampled} directories sampled, "

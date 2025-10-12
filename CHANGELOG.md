@@ -4,26 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.4.0-beta2] - 2025-10-11
+## [v0.4.0] - 2025-10-12
 ### Added
-- Dry-run entropy analysis (`-d/--dry-run`) to preview projected savings across subdirectories without compressing files
-
-### Changed
-- Base directory entropy sampling now ignores files at the root level so subdirectories drive the savings estimate
-
-## [0.4.0-beta] - 2025-10-10
-### Added
-- `--min-savings` CLI flag and interactive control to configure the minimum percentage a directory must save before compression runs
+- `-m/--min-savings` CLI flag and interactive control to configure the minimum percentage a directory must save before compression runs
 - Estimated savings are now recorded in skip statistics and surfaced in verbose mode so you can review why directories were skipped
 - Additional verbose and debug messaging around entropy sampling helps validate cache avoidance decisions in real time
+- Dry-run entropy analysis (`-d/--dry-run`) to preview projected savings across subdirectories without compressing files
+- Estimated savings during dry-run analysis (works badly)
 
 ### Changed
-- Entropy sampling now runs for every directory, expanding the sample window to deliver consistent savings estimates before deciding to compress
 - Verbosity level guidance and summaries report savings and entropy figures in percentages instead of raw bit counts for easier interpretation
 - Interactive launcher preserves the configured savings threshold between adjustments and final execution
+- Base directory entropy sampling now ignores files at the root level so subdirectories drive the savings estimate
+- Entropy sampling that runs for every directory, expanding the sample window to deliver consistent savings estimates
 
-### Fixed
-- Corrected an issue where high-entropy directories could slip through when cache heuristics failed, ensuring low-yield media folders stay skipped by default
+
+## [v0.4.0-beta2] - 2025-10-11
+
+## [0.4.0-beta] - 2025-10-10
 
 ## [0.3.2] - 2025-10-08
 ### Added

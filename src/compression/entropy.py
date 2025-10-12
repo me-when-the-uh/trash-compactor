@@ -7,7 +7,6 @@ from typing import Iterator, Optional, Sequence
 
 
 def shannon_entropy(sample: bytes) -> float:
-    """Calculate Shannon entropy of a byte sample."""
     if not sample:
         return 0.0
     total = len(sample)
@@ -21,17 +20,19 @@ def shannon_entropy(sample: bytes) -> float:
 
 def sample_directory_entropy(
     path: Path,
-    max_files: int = 48,
+    max_files: int = 200,
     chunk_size: int = 65536,
-    max_bytes: int = 8 * 1024 * 1024,
+    max_bytes: int = 4 * 1024 * 1024,
     *,
     skip_root_files: bool = False,
+    include_subdirectories: bool = True,
 ) -> tuple[Optional[float], int, int]:
     pending = deque([path])
     root = path
     sampled_files = 0
     sampled_bytes = 0
     weighted_entropy = 0.0
+    root_files_skipped = False
 
     while pending and sampled_files < max_files and sampled_bytes < max_bytes:
         current = pending.popleft()
@@ -43,10 +44,12 @@ def sample_directory_entropy(
 
         for entry in entries:
             if entry.is_dir():
-                pending.append(entry)
+                if include_subdirectories:
+                    pending.append(entry)
                 continue
 
             if skip_root_files and current == root:
+                root_files_skipped = True
                 continue
 
             try:
@@ -70,6 +73,16 @@ def sample_directory_entropy(
 
         if sampled_files >= max_files or sampled_bytes >= max_bytes:
             break
+
+    if sampled_bytes == 0 and skip_root_files and root_files_skipped:
+        return sample_directory_entropy(
+            path,
+            max_files=max_files,
+            chunk_size=chunk_size,
+            max_bytes=max_bytes,
+            skip_root_files=False,
+            include_subdirectories=include_subdirectories,
+        )
 
     if sampled_bytes == 0:
         return None, sampled_files, sampled_bytes

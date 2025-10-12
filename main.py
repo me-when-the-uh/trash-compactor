@@ -22,7 +22,7 @@ from src.launch import acquire_directory, interactive_configure
 from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 
-VERSION = "0.4.0-beta2"
+VERSION = "0.4.0"
 BUILD_DATE = "who cares"
 
 
