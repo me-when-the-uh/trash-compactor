@@ -20,7 +20,7 @@ def shannon_entropy(sample: bytes) -> float:
 
 def sample_directory_entropy(
     path: Path,
-    max_files: int = 200,
+    max_files: int = 50,
     chunk_size: int = 65536,
     max_bytes: int = 4 * 1024 * 1024,
     *,

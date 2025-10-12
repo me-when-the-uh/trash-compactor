@@ -5,7 +5,7 @@ from typing import Callable, Iterable, Iterator, Optional
 
 from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy
 from ..file_utils import CompressionDecision, should_compress_file
-from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory
+from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory, sample_directory_entropy
 from ..stats import CompressionStats, DirectorySkipRecord
 from ..timer import PerformanceMonitor
 
