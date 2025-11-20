@@ -22,7 +22,7 @@ from src.launch import acquire_directory, interactive_configure
 from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 BUILD_DATE = "who cares"
 
 
@@ -194,13 +194,14 @@ def run_compression(directory: str, verbosity: int, thorough: bool, min_savings:
 
 def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> None:
     logging.info("Starting entropy dry run for directory: %s", directory)
-    stats = entropy_dry_run(
+    stats, monitor = entropy_dry_run(
         directory,
         verbosity=verbosity,
         min_savings_percent=min_savings,
     )
     print_entropy_dry_run(stats, min_savings)
     log_directory_skips(stats, verbosity, min_savings)
+    monitor.print_summary()
 
 
 def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
