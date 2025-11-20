@@ -88,6 +88,10 @@ def compress_directory(
     stage_index_map: dict[str, int] = {}
     render_initialized = False
     rendered_lines = 0
+    last_render_time = 0.0
+    stage_render_interval = 0.3
+    stage_render_thread: Optional[threading.Thread] = None
+    stage_render_stop: Optional[threading.Event] = None
     stage_lock = threading.Lock()
 
     if plan and interactive_output:
@@ -100,13 +104,17 @@ def compress_directory(
         stage_processed = {algo: 0 for algo, _ in stage_items}
         stage_index_map = {algo: idx for idx, (algo, _) in enumerate(stage_items)}
 
-    def _render_stage_statuses() -> None:
-        nonlocal rendered_lines, render_initialized
+    def _render_stage_statuses(force: bool = False) -> None:
+        nonlocal rendered_lines, render_initialized, last_render_time
         if not interactive_output or not stage_items:
             return
 
+        now = time.monotonic()
+        if not force and now - last_render_time < stage_render_interval:
+            return
+
         spinner_chars = ['\\', '|', '/', '-']
-        spinner_idx = int(time.time() * 2) % len(spinner_chars)
+        spinner_idx = int(now * 2) % len(spinner_chars)
 
         lines: list[str] = []
         for idx, (state, (algo, entries)) in enumerate(zip(stage_states, stage_items)):
@@ -138,10 +146,21 @@ def compress_directory(
             sys.stdout.write("\r" + line + "\033[K\n")
         sys.stdout.flush()
         rendered_lines = len(lines)
+        last_render_time = now
 
     if plan and interactive_output:
+        stage_render_stop = threading.Event()
+
         with stage_lock:
-            _render_stage_statuses()
+            _render_stage_statuses(force=True)
+
+        def _render_loop() -> None:
+            while not stage_render_stop.wait(stage_render_interval):
+                with stage_lock:
+                    _render_stage_statuses(force=True)
+
+        stage_render_thread = threading.Thread(target=_render_loop, daemon=True)
+        stage_render_thread.start()
 
     def _stage_start_callback(algo: str, total: int) -> None:
         if not interactive_output or algo not in stage_index_map:
@@ -166,29 +185,37 @@ def compress_directory(
                 stage_states[idx] = 'done'
             _render_stage_statuses()
 
-    if plan:
-        xp_workers = xp_worker_count()
-        lzx_workers = lzx_worker_count()
-        execute_compression_plan(
-            plan,
-            stats,
-            monitor,
-            verbosity_level >= 4,
-            xp_workers,
-            lzx_workers,
-            stage_callback=_stage_start_callback,
-            progress_callback=_progress_callback,
-        )
-        if interactive_output:
-            with stage_lock:
-                for algo, _ in stage_items:
-                    idx = stage_index_map.get(algo)
-                    if idx is not None:
-                        stage_states[idx] = 'done'
-                        stage_progress[idx]['processed'] = stage_progress[idx]['total']
-                _render_stage_statuses()
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+    try:
+        if plan:
+            xp_workers = xp_worker_count()
+            lzx_workers = lzx_worker_count()
+            execute_compression_plan(
+                plan,
+                stats,
+                monitor,
+                verbosity_level >= 4,
+                xp_workers,
+                lzx_workers,
+                stage_callback=_stage_start_callback,
+                progress_callback=_progress_callback,
+            )
+            if interactive_output:
+                with stage_lock:
+                    for algo, _ in stage_items:
+                        idx = stage_index_map.get(algo)
+                        if idx is not None:
+                            stage_states[idx] = 'done'
+                            stage_progress[idx]['processed'] = stage_progress[idx]['total']
+                    _render_stage_statuses(force=True)
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+    finally:
+        if stage_render_stop is not None:
+            stage_render_stop.set()
+        if stage_render_thread is not None:
+            stage_render_thread.join(timeout=1.0)
+        stage_render_thread = None
+        stage_render_stop = None
 
     log_directory_skips(stats, verbosity_level, min_savings_percent)
 
@@ -316,10 +343,12 @@ def entropy_dry_run(
     *,
     verbosity: int = 0,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
-) -> CompressionStats:
+) -> tuple[CompressionStats, PerformanceMonitor]:
     import logging
 
     stats = CompressionStats()
+    monitor = PerformanceMonitor()
+    monitor.start_operation()
     min_savings_percent = clamp_savings_percent(min_savings_percent)
     base_dir = Path(directory_path).resolve()
     stats.set_base_dir(base_dir)
@@ -348,7 +377,8 @@ def entropy_dry_run(
         )
         if spinner:
             spinner.stop("\nEntropy analysis skipped: base directory excluded.\n")
-        return stats
+        monitor.end_operation()
+        return stats, monitor
 
     def _ancestors_through_base(path: Path) -> list[Path]:
         chain: list[Path] = []
@@ -372,8 +402,8 @@ def entropy_dry_run(
             collect_entropy=False,
         )
     )
+    monitor.stats.total_files = len(all_files)
 
-    monitor = PerformanceMonitor()
     eligible_directories: set[Path] = {base_dir}
     eligible_files_found = 0
     direct_file_bytes: defaultdict[Path, int] = defaultdict(int)
@@ -398,13 +428,16 @@ def entropy_dry_run(
         file_observer=_observe_file,
         apply_entropy_filter=False,
     )
+    monitor.stats.files_skipped = stats.skipped_files
+    monitor.stats.files_compressed = stats.compressed_files
 
     stats.entropy_projected_original_bytes = stats.total_original_size
 
     if eligible_files_found == 0:
         if spinner:
             spinner.stop("\nEntropy analysis skipped: no compressible files detected.\n")
-        return stats
+        monitor.end_operation()
+        return stats, monitor
 
     pending = deque([base_dir])
     visited: set[Path] = set()
@@ -592,7 +625,8 @@ def entropy_dry_run(
             f"{stats.entropy_directories_below_threshold} below threshold.\n"
         )
         spinner.stop(summary)
-    return stats
+    monitor.end_operation()
+    return stats, monitor
 
 
 def _collect_branding_targets(

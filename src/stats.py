@@ -4,22 +4,25 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from itertools import cycle
 from pathlib import Path
 from typing import List, Optional
 
 
 class Spinner:
-    def __init__(self) -> None:
-        self._chars = ['\\', '|', '/', '-']
-        self._index = 0
-        self._running = False
-        self._thread = None
+    def __init__(self, label: str = "Working") -> None:
+        self._frames = cycle(['\\', '|', '/', '-'])
+        self._label = label
         self._message = ""
-        self._last_line_length = 0
-        self._lock = threading.Lock()
         self.processed = 0
         self.total = 0
-        self._label = "Compressing files"
+
+        self._lock = threading.Lock()
+        self._thread: Optional[threading.Thread] = None
+        self._stop_event = threading.Event()
+        self._render_interval = 0.3
+        self._last_line_length = 0
+        self._last_output = ""
 
     def format_path(self, full_path: str, base_dir: str) -> str:
         try:
@@ -31,39 +34,32 @@ class Spinner:
         if len(parts) <= 2:
             return "/".join(parts)
 
-        # A single ellipsis keeps the spinner readable even for deeply nested files
+        # This thingy keeps the spinner readable even for deeply nested files
         head, tail = parts[0], parts[-1]
         middle = '...'
         return f"{head}/{middle}/{tail}"
 
     def _spin(self) -> None:
-        while self._running:
+        next_tick = time.monotonic()
+        while not self._stop_event.is_set():
+            now = time.monotonic()
+            delay = max(0.0, next_tick - now)
+            if delay:
+                self._stop_event.wait(delay)
+                if self._stop_event.is_set():
+                    break
             with self._lock:
-                progress = f"({self.processed}/{self.total})" if self.total else ""
-                output = f"\r {self._chars[self._index]} {self._label}"
-                if self._message:
-                    output += f" {self._message}"
-                if progress:
-                    output += f" {progress}"
-                output = output.ljust(self._last_line_length)
-                sys.stdout.write(output)
-                sys.stdout.flush()
-                self._last_line_length = len(output)
-                self._index = (self._index + 1) % len(self._chars)
-            time.sleep(0.2)
+                line = self._render_line(next(self._frames))
+                self._write(line)
+            next_tick = time.monotonic() + self._render_interval
 
     def start(self, total: int = 0) -> None:
         with self._lock:
-            if self._running:
-                self.total = max(0, total)
-                if self.total == 0:
-                    self.processed = 0
-                else:
-                    self.processed = min(self.processed, self.total)
-                return
             self.total = max(0, total)
-            self.processed = 0
-            self._running = True
+            self.processed = 0 if self.total == 0 else min(self.processed, self.total)
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop_event.clear()
             self._thread = threading.Thread(target=self._spin, daemon=True)
             self._thread.start()
 
@@ -74,10 +70,7 @@ class Spinner:
     def set_total(self, total: int) -> None:
         with self._lock:
             self.total = max(0, total)
-            if self.total == 0:
-                self.processed = 0
-            else:
-                self.processed = min(self.processed, self.total)
+            self.processed = 0 if self.total == 0 else min(self.processed, self.total)
 
     def set_message(self, message: str) -> None:
         with self._lock:
@@ -85,19 +78,46 @@ class Spinner:
 
     def update(self, processed: int, current_file: Optional[str] = None) -> None:
         with self._lock:
-            self.processed = processed
+            self.processed = min(max(0, processed), self.total or processed)
             if current_file is not None:
                 self._message = current_file
 
     def stop(self, final_message: Optional[str] = None) -> None:
-        self._running = False
+        self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=1.0)
             self._thread = None
-        sys.stdout.write(f"\r{' ' * self._last_line_length}\r")
+        self._clear_line()
         if final_message:
             sys.stdout.write(final_message)
         sys.stdout.flush()
+
+    def _render_line(self, frame: str) -> str:
+        progress = f"({self.processed}/{self.total})" if self.total else ""
+        parts = [frame, self._label]
+        if self._message:
+            parts.append(self._message)
+        if progress:
+            parts.append(progress)
+        return " ".join(parts)
+
+    def _write(self, content: str) -> None:
+        if content == self._last_output:
+            return
+        sys.stdout.write('\r')
+        sys.stdout.write(content)
+        pad = self._last_line_length - len(content)
+        if pad > 0:
+            sys.stdout.write(' ' * pad)
+        sys.stdout.flush()
+        self._last_line_length = len(content)
+        self._last_output = content
+
+    def _clear_line(self) -> None:
+        if self._last_line_length:
+            sys.stdout.write('\r' + ' ' * self._last_line_length + '\r')
+            self._last_line_length = 0
+            self._last_output = ""
 
 
 @dataclass
@@ -290,7 +310,7 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float) -
         )
     if stats.entropy_projected_original_bytes:
         logging.info(
-            "\nEstimated savings (pessimistic, WIP, can be 30-50 percent less): %s -> %s",
+            "\nEstimated savings: %s -> %s",
             _format_summary_size(stats.entropy_projected_original_bytes),
             _format_summary_size(stats.entropy_projected_compressed_bytes),
         )
