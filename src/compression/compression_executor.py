@@ -57,7 +57,7 @@ def execute_compression_plan(
     plan: Sequence[tuple[Path, int, str]],
     stats: CompressionStats,
     monitor: PerformanceMonitor,
-    debug_output: bool,
+    verbosity: int,
     xp_workers: int,
     lzx_workers: int,
     *,
@@ -97,17 +97,25 @@ def execute_compression_plan(
             stats.errors.append(message)
 
     def _record_success(path: Path, compressed_size: int, algo: str, verified: bool) -> None:
-        with stats_lock:
-            stats.compressed_files += 1
-            stats.total_compressed_size += compressed_size
         if verified:
+            with stats_lock:
+                stats.compressed_files += 1
+                stats.total_compressed_size += compressed_size
             logging.debug("Compressed %s using %s", path, algo)
         else:
-            logging.debug(
-                "Compressed %s using %s (verification reported no size change; trusting compact return)",
-                path,
-                algo,
-            )
+            # Verification failed to show size change, so we don't count it as compressed
+            if verbosity >= 2:
+                logging.warning(
+                    "Compressed %s using %s but verification reported no size change",
+                    path,
+                    algo,
+                )
+            else:
+                logging.debug(
+                    "Compressed %s using %s (verification reported no size change; trusting compact return)",
+                    path,
+                    algo,
+                )
         _notify_progress(path, algo)
 
     def _record_failure(path: Path, file_size: int, algo: str, reason: Optional[str] = None) -> None:

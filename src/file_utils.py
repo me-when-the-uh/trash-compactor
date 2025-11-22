@@ -158,24 +158,29 @@ def is_file_compressed(file_path: Path, thorough_check: bool = False) -> tuple[b
     return False, compressed_size
 
 
-def should_compress_file(file_path: Path, thorough_check: bool = False) -> CompressionDecision:
+def should_compress_file(
+    file_path: Path,
+    thorough_check: bool = False,
+    *,
+    file_size: Optional[int] = None,
+) -> CompressionDecision:
     suffix = file_path.suffix.lower()
     if suffix in SKIP_EXTENSIONS:
         return CompressionDecision.deny(f"Skipped due to extension {suffix}")
 
     try:
-        file_size = file_path.stat().st_size
+        resolved_size = file_size if file_size is not None else file_path.stat().st_size
     except OSError as exc:
         logging.error("Failed to stat %s: %s", file_path, exc)
         return CompressionDecision.deny(f"Unable to read file size: {exc}")
 
-    if file_size < MIN_COMPRESSIBLE_SIZE:
-        return CompressionDecision.deny(f"File too small ({file_size} bytes)", file_size)
+    if resolved_size < MIN_COMPRESSIBLE_SIZE:
+        return CompressionDecision.deny(f"File too small ({resolved_size} bytes)", resolved_size)
 
     is_compressed, compressed_size = is_file_compressed(file_path, thorough_check)
     if is_compressed:
         return CompressionDecision.deny("File is already compressed", compressed_size)
 
-    return CompressionDecision.allow(file_size)
+    return CompressionDecision.allow(resolved_size)
 
 

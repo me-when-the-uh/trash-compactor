@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.2] - 2025-11-22
+### Changed
+- Minimum savings threshold increased from 10% to 15%
+- Shuffled verbose output levels around to make it more sensible
+- More readable documentation provided
+
+### Fixed
+- Estimated savings are counted accurately now because previous changes broke total directory size calculation
+- Initial scanning speed is improved by 68.8% thanks to alleviating bottlenecks and disabling faux multi-threading - overall scanning performance improved by some 8%
+- Various bug fixes, necessary foundation for further development if God wills it
+
+
+## [v0.4.1] - 2025-11-20
+### Changed
+- Entropy scanning is now being done in three 16KB bites - at the start, the middle, and the end of the file, instead of just the first 64KB of the file, improving the accuracy of entropy analysis
+- Stats are now displayed during `--dry-run` operation as well
+
+### Fixed
+- Estimated savings are counted accurately now as a result of the change to the entropy scanning approach
+- Scanning speed is now 61% faster just from optimising the entropy scanning by switching to a lightweight `zlib` implementation instead of counting up the entropy by hand
+- The spinner now spins at a fixed rate and the progress report isn't being spammed during entropy analysis stage anymore
+
+
 ## [v0.4.0] - 2025-10-12
 ### Added
 - `-m/--min-savings` CLI flag and interactive control to configure the minimum percentage a directory must save before compression runs

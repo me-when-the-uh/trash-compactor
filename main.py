@@ -22,7 +22,7 @@ from src.launch import acquire_directory, interactive_configure
 from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 BUILD_DATE = "who cares"
 
 
@@ -127,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-savings",
         type=float,
         default=None,
-        help="Skip directories when estimated savings fall below this percentage (0-90, default 10)",
+        help=f"Skip directories when estimated savings fall below this percentage (0-90, default {config.DEFAULT_MIN_SAVINGS_PERCENT:.0f})",
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -232,7 +232,7 @@ def _emit_verbosity_banner(level: int) -> None:
         return
     verbose_labels = {
         1: "Verbosity level 1: cache decisions and summary stats",
-        2: "Verbosity level 2: include stage-level progress",
+        2: "Verbosity level 2: include stage-level progress and verification warnings",
         3: "Verbosity level 3: extended diagnostics for skipped files",
     }
     label = verbose_labels.get(level, "Verbosity level 4: full debug logging enabled")

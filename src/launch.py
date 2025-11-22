@@ -246,7 +246,7 @@ def _print_interactive_status(state: LaunchState) -> None:
 
 
 def _apply_composite_command(parts: list[str], state: LaunchState) -> bool:
-    # Returns True if a path was supplied, so the caller can short-circuit the default handler
+    # Returns True if a path was supplied, so the function caller can short-circuit the default handler
     if not parts:
         return False
     path_tokens, flag_tokens = _split_path_and_flags(parts)
