@@ -29,7 +29,7 @@ SKIP_EXTENSIONS: Final[Set[str]] = _flatten((
 
 MIN_SAVINGS_PERCENT: Final[float] = 0.0
 MAX_SAVINGS_PERCENT: Final[float] = 90.0
-DEFAULT_MIN_SAVINGS_PERCENT: Final[float] = 10.0
+DEFAULT_MIN_SAVINGS_PERCENT: Final[float] = 15.0
 
 
 def clamp_savings_percent(value: float) -> float:

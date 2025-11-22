@@ -63,22 +63,24 @@ def _relative_to_base(path: Path, base: Path) -> str:
 
 def _cache_directory_reason(path: Path) -> Optional[str]:
     parts = path.parts
-    parts_cf = [segment.casefold() for segment in parts]
-    if len(parts_cf) <= 2:
-        return None
-
-    terminal_hint = None
-    for candidate in parts_cf[-2:]:
-        for keyword in _CACHE_TERMINALS:
-            if keyword in candidate:
-                terminal_hint = keyword
+    if len(parts) > 1:
+        last_two = [p.casefold() for p in parts[-2:]]
+        terminal_hint = None
+        for candidate in last_two:
+            for keyword in _CACHE_TERMINALS:
+                if keyword in candidate:
+                    terminal_hint = keyword
+                    break
+            if terminal_hint:
                 break
-        if terminal_hint:
-            break
-
-    if terminal_hint is None:
+        
+        if terminal_hint is None:
+            return None
+    else:
         return None
 
+    parts_cf = [segment.casefold() for segment in parts]
+    
     if not any(marker in parts_cf for marker in _CACHE_ROOT_MARKERS):
         return None
 
@@ -148,7 +150,7 @@ def evaluate_entropy_directory(
     if estimated_savings >= min_savings_percent:
         return None
 
-    if verbosity >= 2:
+    if verbosity >= 1:
         logging.info(
             "Skipping directory %s; estimated savings %.1f%% is below threshold %.1f%%",
             directory,
@@ -218,7 +220,7 @@ def append_directory_skip_record(stats: CompressionStats, record: DirectorySkipR
 
 
 def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_percent: float) -> None:
-    if verbosity < 2:
+    if verbosity < 1:
         return
 
     buckets = {}

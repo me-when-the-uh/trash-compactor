@@ -21,6 +21,25 @@ from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
 REPORTABLE_DIRECTORY_MIN_BYTES = 5 * 1024 * 1024
 
 
+def _setup_context(
+    directory_path: str,
+    min_savings_percent: float,
+    verbosity: int,
+) -> tuple[CompressionStats, PerformanceMonitor, Path, float, int]:
+    stats = CompressionStats()
+    monitor = PerformanceMonitor()
+    monitor.start_operation()
+
+    min_savings_percent = clamp_savings_percent(min_savings_percent)
+    verbosity_level = max(0, int(verbosity))
+
+    base_dir = Path(directory_path).resolve()
+    stats.set_base_dir(base_dir)
+    stats.min_savings_percent = min_savings_percent
+
+    return stats, monitor, base_dir, min_savings_percent, verbosity_level
+
+
 def compress_directory(
     directory_path: str,
     verbosity: int = 0,
@@ -29,18 +48,11 @@ def compress_directory(
 ) -> tuple[CompressionStats, PerformanceMonitor]:
     import logging
 
-    stats = CompressionStats()
-    monitor = PerformanceMonitor()
-    monitor.start_operation()
-
-    min_savings_percent = clamp_savings_percent(min_savings_percent)
-
-    verbosity_level = max(0, int(verbosity))
+    stats, monitor, base_dir, min_savings_percent, verbosity_level = _setup_context(
+        directory_path, min_savings_percent, verbosity
+    )
     interactive_output = verbosity_level == 0
 
-    base_dir = Path(directory_path).resolve()
-    stats.set_base_dir(base_dir)
-    stats.min_savings_percent = min_savings_percent
     if thorough_check:
         logging.info("Using thorough checking mode - this will be slower but more accurate for previously compressed files")
 
@@ -193,7 +205,7 @@ def compress_directory(
                 plan,
                 stats,
                 monitor,
-                verbosity_level >= 4,
+                verbosity_level,
                 xp_workers,
                 lzx_workers,
                 stage_callback=_stage_start_callback,
@@ -346,17 +358,13 @@ def entropy_dry_run(
 ) -> tuple[CompressionStats, PerformanceMonitor]:
     import logging
 
-    stats = CompressionStats()
-    monitor = PerformanceMonitor()
-    monitor.start_operation()
-    min_savings_percent = clamp_savings_percent(min_savings_percent)
-    base_dir = Path(directory_path).resolve()
-    stats.set_base_dir(base_dir)
-    stats.min_savings_percent = min_savings_percent
+    stats, monitor, base_dir, min_savings_percent, verbosity_level = _setup_context(
+        directory_path, min_savings_percent, verbosity
+    )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
 
     spinner: Optional[Spinner] = None
-    if verbosity == 0 and getattr(sys.stdout, "isatty", lambda: True)():
+    if verbosity_level == 0 and getattr(sys.stdout, "isatty", lambda: True)():
         spinner = Spinner()
         spinner.set_label("Analysing directory entropy")
         spinner.start()
@@ -393,6 +401,17 @@ def entropy_dry_run(
             current = parent
         return chain
 
+    eligible_directories: set[Path] = {base_dir}
+    eligible_files_found = 0
+    direct_file_bytes: defaultdict[Path, int] = defaultdict(int)
+
+    def _skipped_file_callback(file_path: Path) -> None:
+        try:
+            size = file_path.stat().st_size
+            direct_file_bytes[file_path.parent] += size
+        except OSError:
+            pass
+
     all_files = list(
         iter_files(
             base_dir,
@@ -400,13 +419,10 @@ def entropy_dry_run(
             verbosity,
             min_savings_percent,
             collect_entropy=False,
+            skipped_file_callback=_skipped_file_callback,
         )
     )
     monitor.stats.total_files = len(all_files)
-
-    eligible_directories: set[Path] = {base_dir}
-    eligible_files_found = 0
-    direct_file_bytes: defaultdict[Path, int] = defaultdict(int)
 
     def _observe_file(file_path: Path, file_size: int, decision) -> None:
         nonlocal eligible_files_found

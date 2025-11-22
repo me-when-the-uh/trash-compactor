@@ -63,7 +63,7 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
 Launching without arguments opens an interactive shell that lets you browse to the target directory, toggle flags, and adjust the minimum savings threshold before starting.
 
 - Enter a path directly, optionally followed by flags (for example: `D:\Games -vx`).
-- Use `--min-savings=<percent>` to change the skip threshold on the fly, or rely on the default 10% savings.
+- Use `--min-savings=<percent>` to change the skip threshold on the fly, or rely on the default 15% savings.
 - Press `S` or hit enter on an empty line to begin once the directory and flags look good.
 
 ### Operation Modes
