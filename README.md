@@ -1,11 +1,11 @@
 # Trash-Compactor
-  A utility for intelligent file compression on Windows 10/11 systems using the built-in NTFS compression algorithms and Windows' built-in "compact.exe" utility. Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) (another tool that is based on compact.exe and primarily designed for compressing Steam games), this utility automatically selects the optimal compression algorithm based on file size - this lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression, keeping things DRY (also known as "Don't Repeat Yourself").
+  A utility for intelligent file compression on Windows 10/11 systems using the built-in NTFS compression algorithms and Windows' built-in "compact.exe" utility. Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) (another tool that is based on compact.exe and primarily designed for compressing Steam games), this utility automatically selects the optimal compression algorithm based on file size - this lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression and preventing excessive SSD wear, keeping things DRY.
 
   ## Features
 
   - Automated compression using Windows NTFS compression
   - Smart algorithm selection based on file size
-  - Always-on entropy sampling to avoid high-entropy media directories
+  - Entropy analysis to evaluate compression potential and choose to compress only the files that will make sense to compress
   - Configurable minimum savings threshold (`--min-savings`) with interactive controls
   - Multiple operation modes for different use cases
   - Skips poorly-compressed file formats (zip, media files, etc.)
@@ -54,7 +54,7 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
 2. Enter the directory path you want to compress.
 3. The program will automatically:
     - Scan all files recursively
-    - Skip incompatible files
+    - Skip poorly compressible files
     - Apply optimal compression algorithms
     - Display compression statistics
 
@@ -64,7 +64,7 @@ Launching without arguments opens an interactive shell that lets you browse to t
 
 - Enter a path directly, optionally followed by flags (for example: `D:\Games -vx`).
 - Use `--min-savings=<percent>` to change the skip threshold on the fly, or rely on the default 15% savings.
-- Press `S` or hit enter on an empty line to begin once the directory and flags look good.
+- Press `s` or hit enter on an empty line to begin once the directory and flags look good.
 
 ### Operation Modes
 
@@ -78,47 +78,23 @@ Be aware that temporarily disabling the anti-virus or whitelisting this program 
 .\trash-compactor.exe C:\path\to\compress
 ```
 
-#### Thorough Mode (-t)
-For daily or scheduled compression tasks on directories that have already been compressed. Uses more intensive checking to accurately identify compressed files and avoid reprocessing (because Windows doesn't have reliable and fast methods to check if some files have been compressed before).
+#### Dry-run Mode (-d)
+To check how well a directory will compress without writing anything to the drive. SSDs have a finite amount of data that can be written, so some users might check if it's worth bothering to compress their directory.
 ```powershell
-.\trash-compactor.exe -t C:\path\to\compress
-```
-
-#### Branding Mode (-b)
-For ensuring proper marking of files as compressed in Windows. Run this after initial compression if you plan to do daily or scheduled compression tasks, either after the Thorough Mode or after that.
-```powershell
-.\trash-compactor.exe -b C:\path\to\compress
+.\trash-compactor.exe -d C:\path\to\compress
 ```
 
 #### Disabling (-x) or Forcing (-f) LZX Compression
 LZX compression is turned **on** for large files by default.
-LZX compression is resource-intensive and may impact performance a bit more, though it does result in better compression of both compressible binaries and the files that XPRESS16K doesn't compress well. But if you have a computer that was build or made before AD 2021, or if battery life is absolutely critical for you (a big problem on Intel Coffee Lake laptops), you may want to disable it the older your computer is.
+LZX compression is resource-intensive and files will take some time to compress, though it does result in better compression of both compressible binaries and the files that XPRESS16K doesn't compress as well. But if you have a computer that was build or made before AD 2021, or if battery life is absolutely critical for you (a big problem on Intel Coffee Lake laptops), you may want to disable it
 
-### Recommended Workflow for Scheduled Compression
-
-For optimal results when running compression tasks regularly (daily/weekly):
-
-1. **Initial compression**: Run in normal mode
-   ```powershell
-   .\trash-compactor.exe C:\path\to\compress
-   ```
-
-2. **Branding**: Run in branding mode to properly mark all files
-   ```powershell
-   .\trash-compactor.exe -b C:\path\to\compress
-   ```
-
-3. **For ongoing daily/scheduled tasks**: Use thorough mode aftwewards
-   ```powershell
-   .\trash-compactor.exe -t C:\path\to\compress
-   ```
+#### Running with a single worker (-s) for HDDs
+HDDs read data sequentially and they can't handle the extreme I/O that the program will hammer the drive with, so to avoid excessive fragmentation, one should use this flag to reduce fragmentation somewhat. 
 
 ### Additional Options
 
-- `-v, --verbose`: Show exclusion decisions with entropy sampling (supports up to `-vvvv` for debug logs)
-- `-x, --no-lzx`: Disable LZX compression for better system responsiveness
-- `-f, --force-lzx`: Force LZX compression even on less capable CPUs
-- `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 10). Directories predicted to save less are skipped automatically.
+- `-v, --verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
+- `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 15). Directories predicted to save less are skipped automatically
 
 ## Development
 
@@ -130,6 +106,7 @@ To contribute to this project:
 ## To-Do
 
 ### Short-term Goals
+- Let users start compression after a dry run without having to relaunch the program
 - Add basic test suite for core functionality
   - Implement a single-thread benchmark to check if the CPU is fast enough to use LZX (to check if the CPU is not an Intel Atom with numerous, but weak cores)
   - Test compression detection accuracy
