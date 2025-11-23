@@ -124,16 +124,12 @@ For optimal results when running compression tasks regularly (daily/weekly):
 
 To contribute to this project:
 
-1. Fork the repository.
-2. Create a new branch for your feature.
-3. Submit a pull request.
+1. Create a new branch for your feature.
+2. Submit a pull request.
 
 ## To-Do
 
 ### Short-term Goals
-- Land a default exclusion map for Windows/system directories, emit skip reasons, and surface toggles for future overrides
-- Persist user overrides and low-yield directory notes to a lightweight JSON/INI profile so unattended runs inherit past decisions
-- Record poorly compressible hits in the info log to build a reusable "do not touch" ledger during normal runs
 - Add basic test suite for core functionality
   - Implement a single-thread benchmark to check if the CPU is fast enough to use LZX (to check if the CPU is not an Intel Atom with numerous, but weak cores)
   - Test compression detection accuracy
@@ -141,16 +137,10 @@ To contribute to this project:
   - Check error handling paths
 
 ### Long-term Goals
-- Create a 1-click/unattended mode of operation built on the recorded skip map:
+- Create a 1-click/unattended mode of operation:
   - Automatically discover large folders (replacing WizTree and having to manually scour through folders)
   - Avoid compressing specific folders, such as ones mentioned in short-term goals
   - Make life easier for The Greatest Technicians That Have Ever Lived
-- Implement smart compression detection that can make decisions without touching the filesystem twice:
-  - Use entropy analysis for compressibility estimation
-  - Sample data chunks strategically
-  - Cache results per file type
-  - Add file type detection beyond extensions, i.e. based on file content
-    - Compress easily compressable files (based on the extension first), then decide what to do with potentially problematic files later
 - Research advanced compression methods:
   - Evaluate alternative NTFS compression APIs, like [UPX](https://github.com/upx/upx)
   - Consider filesystem-agnostic approaches (moving compressed files in/out of the source drive unpacks them)
