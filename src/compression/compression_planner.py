@@ -124,6 +124,7 @@ def plan_compression(
     progress_callback: Optional[Callable[[Path, int, bool, Optional[str]], None]] = None,
     file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
     apply_entropy_filter: bool = True,
+    entropy_progress_callback: Optional[Callable[[Path, int], None]] = None,
 ) -> list[tuple[Path, int, str]]:
     ordered_candidates: list[tuple[int, Path, int, str]] = []
     with monitor.time_file_scan():
@@ -180,13 +181,16 @@ def plan_compression(
     ordered_candidates.sort(key=lambda item: item[0])
     candidates = [(path, file_size, algorithm) for _, path, file_size, algorithm in ordered_candidates]
     if apply_entropy_filter:
-        candidates = _filter_high_entropy_directories(
-            candidates,
-            base_dir=base_dir,
-            stats=stats,
-            min_savings_percent=min_savings_percent,
-            verbosity=verbosity,
-        )
+        with monitor.time_entropy_analysis():
+            candidates = _filter_high_entropy_directories(
+                candidates,
+                base_dir=base_dir,
+                stats=stats,
+                monitor=monitor,
+                min_savings_percent=min_savings_percent,
+                verbosity=verbosity,
+                progress_callback=entropy_progress_callback,
+            )
     return candidates
 
 
@@ -204,8 +208,10 @@ def _filter_high_entropy_directories(
     *,
     base_dir: Path,
     stats: CompressionStats,
+    monitor: Optional[PerformanceMonitor] = None,
     min_savings_percent: float,
     verbosity: int,
+    progress_callback: Optional[Callable[[Path, int], None]] = None,
 ) -> list[tuple[Path, int, str]]:
     if not candidates or min_savings_percent <= 0:
         return candidates
@@ -219,6 +225,9 @@ def _filter_high_entropy_directories(
             base_dir,
             include_subdirectories=False,
         )
+        if monitor and sampled_files > 0:
+            monitor.stats.files_analyzed_for_entropy += sampled_files
+
         if average_entropy is not None and sampled_files > 0 and sampled_bytes >= 1024:
             estimated_savings = savings_from_entropy(average_entropy)
             logging.debug(
@@ -250,12 +259,17 @@ def _filter_high_entropy_directories(
                     )
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
-    entropy_records = _evaluate_directories_parallel(
+    entropy_records = evaluate_directories_parallel(
         (directory for directory in directories if directory != base_dir),
         base_dir,
         min_savings_percent,
         verbosity,
+        progress_callback=progress_callback,
     )
+
+    if monitor:
+        for record in entropy_records.values():
+            monitor.stats.files_analyzed_for_entropy += record.sampled_files
 
     for directory in sorted(directories, key=lambda item: (len(item.parts), str(item).casefold())):
         if _has_skipped_ancestor(directory, base_dir, skipped_directories):
@@ -341,21 +355,31 @@ def _ancestors_including_base(path: Path, base_dir: Path) -> list[Path]:
     return ancestors
 
 
-def _evaluate_directories_parallel(
+def evaluate_directories_parallel(
     directories: Iterable[Path],
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
+    progress_callback: Optional[Callable[[Path, int], None]] = None,
 ) -> dict[Path, DirectorySkipRecord]:
     directory_list = list(directories)
     if not directory_list:
         return {}
 
     worker_count = entropy_worker_count()
+    processed_count = 0
+
+    def _on_complete(directory: Path) -> None:
+        nonlocal processed_count
+        processed_count += 1
+        if progress_callback:
+            progress_callback(directory, processed_count)
+
     if worker_count <= 1 or len(directory_list) == 1:
         results: dict[Path, DirectorySkipRecord] = {}
         for directory in directory_list:
             record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
+            _on_complete(directory)
             if record:
                 results[directory] = record
         return results
@@ -375,9 +399,13 @@ def _evaluate_directories_parallel(
 
         for future in as_completed(future_map):
             directory = future_map[future]
-            record = future.result()
-            if record:
-                results[directory] = record
+            _on_complete(directory)
+            try:
+                record = future.result()
+                if record:
+                    results[directory] = record
+            except Exception:
+                pass
 
     return results
 

@@ -9,9 +9,8 @@ from pathlib import Path
 from typing import List, Optional
 
 
-class Spinner:
+class ProgressTimer:
     def __init__(self, label: str = "Working") -> None:
-        self._frames = cycle(['\\', '|', '/', '-'])
         self._label = label
         self._message = ""
         self.processed = 0
@@ -20,9 +19,10 @@ class Spinner:
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
-        self._render_interval = 0.3
+        self._render_interval = 0.1
         self._last_line_length = 0
         self._last_output = ""
+        self._start_time: float = 0.0
 
     def format_path(self, full_path: str, base_dir: str) -> str:
         try:
@@ -49,7 +49,7 @@ class Spinner:
                 if self._stop_event.is_set():
                     break
             with self._lock:
-                line = self._render_line(next(self._frames))
+                line = self._render_line()
                 self._write(line)
             next_tick = time.monotonic() + self._render_interval
 
@@ -57,6 +57,7 @@ class Spinner:
         with self._lock:
             self.total = max(0, total)
             self.processed = 0 if self.total == 0 else min(self.processed, self.total)
+            self._start_time = time.monotonic()
             if self._thread and self._thread.is_alive():
                 return
             self._stop_event.clear()
@@ -92,13 +93,14 @@ class Spinner:
             sys.stdout.write(final_message)
         sys.stdout.flush()
 
-    def _render_line(self, frame: str) -> str:
+    def _render_line(self) -> str:
+        elapsed = time.monotonic() - self._start_time
         progress = f"({self.processed}/{self.total})" if self.total else ""
-        parts = [frame, self._label]
-        if self._message:
-            parts.append(self._message)
+        parts = [f"[{elapsed:6.1f}s]", self._label]
         if progress:
             parts.append(progress)
+        if self._message:
+            parts.append(self._message)
         return " ".join(parts)
 
     def _write(self, content: str) -> None:
@@ -264,7 +266,7 @@ def _format_summary_size(value: int) -> str:
     return f"{value / (1024 * 1024):.1f}MB"
 
 
-def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float) -> None:
+def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, verbosity: int = 0) -> None:
     logging.info("\nEntropy Dry Run Summary")
     logging.info("-----------------------")
 
@@ -287,33 +289,49 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float) -
         analysed,
         stats.entropy_directories_below_threshold,
     )
-    threshold_bytes = stats.entropy_report_threshold_bytes
-    if threshold_bytes:
-        logging.info(
-            "Reporting directories with total size >= %.1f MB.",
-            threshold_bytes / (1024 * 1024),
-        )
-    logging.info("Directories ordered by projected savings:")
+    
+    if verbosity >= 1:
+        threshold_bytes = stats.entropy_report_threshold_bytes
+        if threshold_bytes:
+            logging.info(
+                "Reporting directories with total size >= %.1f MB.",
+                threshold_bytes / (1024 * 1024),
+            )
+        logging.info("Directories ordered by projected savings:")
 
-    for index, record in enumerate(samples, start=1):
-        status_note = " [below threshold]" if record.estimated_savings < min_savings_percent else ""
-        logging.info(
-            " %2d. %s (~%.1f%% savings, entropy %.2f, %s files, %s sampled, %s total)%s",
-            index,
-            record.relative_path,
-            record.estimated_savings,
-            record.average_entropy,
-            record.sampled_files,
-            _format_sample_bytes(record.sampled_bytes),
-            _format_sample_bytes(record.total_bytes),
-            status_note,
-        )
+        for index, record in enumerate(samples, start=1):
+            status_note = " [below threshold]" if record.estimated_savings < min_savings_percent else ""
+            logging.info(
+                " %2d. %s (~%.1f%% savings, entropy %.2f, %s files, %s sampled, %s total)%s",
+                index,
+                record.relative_path,
+                record.estimated_savings,
+                record.average_entropy,
+                record.sampled_files,
+                _format_sample_bytes(record.sampled_bytes),
+                _format_sample_bytes(record.total_bytes),
+                status_note,
+            )
+
     if stats.entropy_projected_original_bytes:
-        logging.info(
-            "\nEstimated savings: %s -> %s",
-            _format_summary_size(stats.entropy_projected_original_bytes),
-            _format_summary_size(stats.entropy_projected_compressed_bytes),
-        )
+        original = stats.entropy_projected_original_bytes
+        base_compressed = stats.entropy_projected_compressed_bytes
+        alt_compressed = int(round(base_compressed * 1.062))
+
+        def _log_savings_line(comp_bytes: int, label: str) -> None:
+            savings = max(0, original - comp_bytes)
+            ratio = round((savings / original) * 100) if original > 0 else 0
+            logging.info(
+                "\t%s -> %s (%d%% %s)",
+                _format_summary_size(original),
+                _format_summary_size(comp_bytes),
+                ratio,
+                label,
+            )
+
+        logging.info("\nEstimated savings:")
+        _log_savings_line(base_compressed, "with LZX")
+        _log_savings_line(alt_compressed, "w/o LZX")
 
 
 def print_compression_summary(stats: CompressionStats) -> None:

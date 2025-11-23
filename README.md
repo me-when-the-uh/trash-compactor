@@ -5,7 +5,7 @@
 
   - Automated compression using Windows NTFS compression
   - Smart algorithm selection based on file size
-  - Always-on entropy sampling to avoid cache and high-entropy media directories
+  - Always-on entropy sampling to avoid high-entropy media directories
   - Configurable minimum savings threshold (`--min-savings`) with interactive controls
   - Multiple operation modes for different use cases
   - Skips poorly-compressed file formats (zip, media files, etc.)
@@ -115,7 +115,7 @@ For optimal results when running compression tasks regularly (daily/weekly):
 
 ### Additional Options
 
-- `-v, --verbose`: Show cache exclusion decisions with entropy sampling (supports up to `-vvvv` for debug logs)
+- `-v, --verbose`: Show exclusion decisions with entropy sampling (supports up to `-vvvv` for debug logs)
 - `-x, --no-lzx`: Disable LZX compression for better system responsiveness
 - `-f, --force-lzx`: Force LZX compression even on less capable CPUs
 - `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 10). Directories predicted to save less are skipped automatically.
@@ -133,7 +133,6 @@ To contribute to this project:
 ### Short-term Goals
 - Land a default exclusion map for Windows/system directories, emit skip reasons, and surface toggles for future overrides
 - Persist user overrides and low-yield directory notes to a lightweight JSON/INI profile so unattended runs inherit past decisions
-- Expand cache heuristics for well-known applications (Chromium/Electron/Telegram/Teams, etc.) ahead of entropy analysis
 - Record poorly compressible hits in the info log to build a reusable "do not touch" ledger during normal runs
 - Add basic test suite for core functionality
   - Implement a single-thread benchmark to check if the CPU is fast enough to use LZX (to check if the CPU is not an Intel Atom with numerous, but weak cores)

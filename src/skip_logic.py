@@ -7,120 +7,12 @@ from .compression.entropy import sample_directory_entropy
 from .file_utils import DirectoryDecision, should_skip_directory
 from .stats import CompressionStats, DirectorySkipRecord
 
-_CACHE_TERMINALS = (
-    'cache',
-    'cache2',
-    'cache_data',
-    'cachedata',
-    'media cache',
-    'code cache',
-    'gpu cache',
-    'cache storage',
-    'cache_storage',
-    'shadercache',
-)
-
-_CACHE_ROOT_MARKERS = (
-    'appdata',
-    'programdata',
-    'locallow',
-    'localcache',
-    'localappdata',
-    'users',
-    'temp',
-)
-
-_CACHE_HINTS = (
-    'chrome',
-    'chromium',
-    'brave',
-    'edge',
-    'electron',
-    'discord',
-    'teams',
-    'steam',
-    'telegram',
-    'whatsapp',
-    'slack',
-    'vivaldi',
-    'opera',
-    'githubdesktop',
-    'riot',
-    'epic',
-    'zoom',
-    'spotify',
-    'firefox',
-    'mozilla',
-)
-
 
 def _relative_to_base(path: Path, base: Path) -> str:
     try:
         return str(path.relative_to(base))
     except ValueError:
         return str(path)
-
-
-def _cache_directory_reason(path: Path) -> Optional[str]:
-    parts = path.parts
-    if len(parts) > 1:
-        last_two = [p.casefold() for p in parts[-2:]]
-        terminal_hint = None
-        for candidate in last_two:
-            for keyword in _CACHE_TERMINALS:
-                if keyword in candidate:
-                    terminal_hint = keyword
-                    break
-            if terminal_hint:
-                break
-        
-        if terminal_hint is None:
-            return None
-    else:
-        return None
-
-    parts_cf = [segment.casefold() for segment in parts]
-    
-    if not any(marker in parts_cf for marker in _CACHE_ROOT_MARKERS):
-        return None
-
-    hint = None
-    for original, lowered in zip(parts, parts_cf):
-        for token in _CACHE_HINTS:
-            if token in lowered:
-                hint = original
-                break
-        if hint:
-            break
-
-    descriptor = hint or parts[-1]
-    return f"{descriptor} cache directory"
-
-
-def _evaluate_cache_directory(directory: Path, base_dir: Path, collect_entropy: bool) -> Optional[DirectorySkipRecord]:
-    reason = _cache_directory_reason(directory)
-    if reason is None:
-        return None
-
-    average_entropy = None
-    sampled_files = 0
-    sampled_bytes = 0
-    estimated_savings = None
-    if collect_entropy:
-        average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(directory)
-        if average_entropy is not None:
-            estimated_savings = savings_from_entropy(average_entropy)
-
-    return DirectorySkipRecord(
-        path=str(directory),
-        relative_path=_relative_to_base(directory, base_dir),
-        reason=reason,
-        category='cache',
-        average_entropy=average_entropy,
-        estimated_savings=estimated_savings,
-        sampled_files=sampled_files,
-        sampled_bytes=sampled_bytes,
-    )
 
 
 def evaluate_entropy_directory(
@@ -191,11 +83,6 @@ def maybe_skip_directory(
         append_directory_skip_record(stats, record)
         return DirectoryDecision.deny(reason)
 
-    cache_record = _evaluate_cache_directory(directory, base_dir, collect_entropy)
-    if cache_record:
-        append_directory_skip_record(stats, cache_record)
-        return DirectoryDecision.deny(cache_record.reason)
-
     if not collect_entropy:
         return DirectoryDecision.allow_path()
 
@@ -211,8 +98,6 @@ def append_directory_skip_record(stats: CompressionStats, record: DirectorySkipR
     stats.directory_skips.append(record)
     if record.category == 'system':
         logging.debug("Skipping system directory %s: %s", record.path, record.reason)
-    elif record.category == 'cache':
-        logging.debug("Skipping cache directory %s: %s", record.path, record.reason)
     elif record.category == 'high_entropy':
         logging.debug("Skipping high entropy directory %s: %s", record.path, record.reason)
     else:
@@ -229,22 +114,6 @@ def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_per
 
     if not buckets:
         return
-
-    if verbosity >= 3 and 'cache' in buckets:
-        cache_records = buckets['cache']
-        logging.info("Skipped %s cache directories:", len(cache_records))
-        for record in cache_records:
-            if record.average_entropy is not None and record.estimated_savings is not None:
-                logging.info(
-                    " - %s - %s (~%.1f%% savings, entropy %.2f, %s files)",
-                    record.relative_path,
-                    record.reason,
-                    record.estimated_savings,
-                    record.average_entropy,
-                    record.sampled_files,
-                )
-            else:
-                logging.info(" - %s - %s", record.relative_path, record.reason)
 
     if 'high_entropy' in buckets:
         entropy_records = buckets['high_entropy']

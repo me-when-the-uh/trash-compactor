@@ -22,7 +22,7 @@ from src.launch import acquire_directory, interactive_configure
 from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 BUILD_DATE = "who cares"
 
 
@@ -199,7 +199,7 @@ def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> N
         verbosity=verbosity,
         min_savings_percent=min_savings,
     )
-    print_entropy_dry_run(stats, min_savings)
+    print_entropy_dry_run(stats, min_savings, verbosity)
     log_directory_skips(stats, verbosity, min_savings)
     monitor.print_summary()
 
