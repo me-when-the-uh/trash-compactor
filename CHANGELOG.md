@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.4.3] - 2025-11-23
+### Changed
+- Replaced spinner with a timer for progress report
+- Now reports entropy scanning progress
+- Primitive cache directory checks removed
+
+### Fixed
+- Total directory size is now counted correctly after removing the cache directory check
+- Further scanning speed improvements - it's like 30% faster idk thanks to removing cache directory checks (aka optimising code) and other tweaks
+- Progress report fixes
+
 ## [v0.4.2] - 2025-11-22
 ### Changed
 - Minimum savings threshold increased from 10% to 15%
