@@ -2,7 +2,7 @@ from .compression_module import compress_directory, compress_directory_legacy, e
 from .stats import (
 	CompressionStats,
 	LegacyCompressionStats,
-	Spinner,
+	ProgressTimer,
 	print_compression_summary,
 	print_entropy_dry_run,
 )

@@ -7,10 +7,12 @@ from typing import Optional
 class TimingStats:
     total_time: float = 0.0
     file_scan_time: float = 0.0
+    entropy_analysis_time: float = 0.0
     compression_time: float = 0.0
     total_files: int = 0
     files_compressed: int = 0
     files_skipped: int = 0
+    files_analyzed_for_entropy: int = 0
 
 
     @property
@@ -26,26 +28,36 @@ class TimingStats:
         return self.total_files / self.file_scan_time if self.file_scan_time else 0.0
 
     @property
+    def entropy_throughput(self) -> float:
+        return self.files_analyzed_for_entropy / self.entropy_analysis_time if self.entropy_analysis_time else 0.0
+
+    @property
     def work_throughput(self) -> float:
         return self.files_compressed / self.work_duration if self.work_duration else 0.0
 
     @property
     def work_duration(self) -> float:
-        return self.total_time - self.file_scan_time if self.total_time > self.file_scan_time else 0.0
+        return self.compression_time
 
     def print_summary(self) -> None:
         logging.info("")
         logging.info("Performance summary")
         logging.info("  elapsed total : %.3fs", self.total_time)
         logging.info("  scan duration : %.3fs (%s)", self.file_scan_time, self._percent(self.file_scan_time))
+        if self.entropy_analysis_time > 0:
+            logging.info("  entropy check : %.3fs (%s)", self.entropy_analysis_time, self._percent(self.entropy_analysis_time))
         logging.info("  work duration : %.3fs (%s)", self.work_duration, self._percent(self.work_duration))
         logging.info("  files handled : %d", self.total_files)
         logging.info("    compressed  : %d", self.files_compressed)
         logging.info("    skipped     : %d", self.files_skipped)
+        if self.files_analyzed_for_entropy > 0:
+            logging.info("    analyzed for entropy: %d", self.files_analyzed_for_entropy)
         logging.info("  avg per file  : %.4fs", self.avg_time_per_file)
         if self.files_compressed:
             logging.info("  avg compress  : %.4fs", self.avg_compression_time)
         logging.info("  scan throughput    : %.2f files/s", self.scan_throughput)
+        if self.entropy_analysis_time > 0:
+            logging.info("  entropy throughput : %.2f files/s", self.entropy_throughput)
         logging.info("  work throughput    : %.2f files/s", self.work_throughput)
 
     def _percent(self, span: float) -> str:
@@ -89,6 +101,9 @@ class PerformanceMonitor:
 
     def time_file_scan(self) -> "SectionTimer":
         return SectionTimer(self, 'file_scan_time')
+
+    def time_entropy_analysis(self) -> "SectionTimer":
+        return SectionTimer(self, 'entropy_analysis_time')
 
     def time_compression(self) -> "SectionTimer":
         return SectionTimer(self, 'compression_time')

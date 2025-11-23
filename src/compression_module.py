@@ -3,8 +3,9 @@ import sys
 import threading
 import time
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from colorama import Fore, Style
 
@@ -13,9 +14,9 @@ from .compression.compression_planner import iter_files, plan_compression
 from .compression.entropy import sample_directory_entropy
 from .config import DEFAULT_MIN_SAVINGS_PERCENT, clamp_savings_percent, savings_from_entropy
 from .skip_logic import log_directory_skips, maybe_skip_directory
-from .stats import CompressionStats, EntropySampleRecord, LegacyCompressionStats, Spinner
+from .stats import CompressionStats, EntropySampleRecord, LegacyCompressionStats, ProgressTimer
 from .timer import PerformanceMonitor
-from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
+from .workers import entropy_worker_count, lzx_worker_count, set_worker_cap, xp_worker_count
 
 
 REPORTABLE_DIRECTORY_MIN_BYTES = 5 * 1024 * 1024
@@ -60,14 +61,14 @@ def compress_directory(
     total_files = len(all_files)
     monitor.stats.total_files = total_files
 
-    spinner: Optional[Spinner] = None
+    timer: Optional[ProgressTimer] = None
     plan: list[tuple[Path, int, str]] = []
 
     if interactive_output and total_files and getattr(sys.stdout, "isatty", lambda: True)():
-        spinner = Spinner()
-        spinner.set_label("Scanning files...")
-        spinner.start(total=total_files)
-        spinner.update(0, "")
+        timer = ProgressTimer()
+        timer.set_label("Scanning files...")
+        timer.start(total=total_files)
+        timer.update(0, "")
 
     try:
         plan = _plan_compression(
@@ -75,21 +76,21 @@ def compress_directory(
             stats,
             monitor,
             thorough_check,
-            spinner,
+            timer,
             verbosity_level,
             base_dir=base_dir,
             min_savings_percent=min_savings_percent,
         )
     finally:
-        if spinner:
+        if timer:
             if total_files:
                 final_skip_message = (
                     f"\n{stats.skipped_files} out of {total_files} files are poorly compressible\n"
                 )
             else:
                 final_skip_message = "\nNo files discovered for compression.\n"
-            spinner.stop(final_message=final_skip_message)
-            spinner = None
+            timer.stop(final_message=final_skip_message)
+            timer = None
 
     monitor.stats.files_skipped = stats.skipped_files
 
@@ -98,10 +99,11 @@ def compress_directory(
     stage_progress: list[dict[str, int]] = []
     stage_processed: dict[str, int] = {}
     stage_index_map: dict[str, int] = {}
+    stage_start_times: dict[str, float] = {}
     render_initialized = False
     rendered_lines = 0
     last_render_time = 0.0
-    stage_render_interval = 0.3
+    stage_render_interval = 0.1
     stage_render_thread: Optional[threading.Thread] = None
     stage_render_stop: Optional[threading.Event] = None
     stage_lock = threading.Lock()
@@ -125,19 +127,21 @@ def compress_directory(
         if not force and now - last_render_time < stage_render_interval:
             return
 
-        spinner_chars = ['\\', '|', '/', '-']
-        spinner_idx = int(now * 2) % len(spinner_chars)
-
         lines: list[str] = []
         for idx, (state, (algo, entries)) in enumerate(zip(stage_states, stage_items)):
             total = stage_progress[idx]['total']
             processed = min(stage_progress[idx]['processed'], total)
             if state == 'done':
+                elapsed = now - stage_start_times.get(algo, now)
+                if algo in stage_start_times:
+                     pass
                 lines.append(Fore.GREEN + f"Compressing {total} files with {algo}... done" + Style.RESET_ALL)
             elif state == 'running':
+                start_t = stage_start_times.get(algo, now)
+                elapsed = now - start_t
                 lines.append(
                     Fore.YELLOW
-                    + f"{spinner_chars[spinner_idx]} Compressing {processed}/{total} files with {algo}..."
+                    + f"[{elapsed:6.1f}s] Compressing {processed}/{total} files with {algo}..."
                     + Style.RESET_ALL
                 )
             else:
@@ -182,6 +186,8 @@ def compress_directory(
             stage_progress[idx]['total'] = total
             if stage_states[idx] != 'done':
                 stage_states[idx] = 'running'
+                if algo not in stage_start_times:
+                    stage_start_times[algo] = time.monotonic()
             _render_stage_statuses()
 
     def _progress_callback(path: Path, algo: str) -> None:
@@ -193,6 +199,8 @@ def compress_directory(
             stage_progress[idx]['processed'] = stage_processed[algo]
             if stage_states[idx] == 'pending':
                 stage_states[idx] = 'running'
+                if algo not in stage_start_times:
+                    stage_start_times[algo] = time.monotonic()
             if stage_processed[algo] >= stage_progress[idx]['total']:
                 stage_states[idx] = 'done'
             _render_stage_statuses()
@@ -201,16 +209,17 @@ def compress_directory(
         if plan:
             xp_workers = xp_worker_count()
             lzx_workers = lzx_worker_count()
-            execute_compression_plan(
-                plan,
-                stats,
-                monitor,
-                verbosity_level,
-                xp_workers,
-                lzx_workers,
-                stage_callback=_stage_start_callback,
-                progress_callback=_progress_callback,
-            )
+            with monitor.time_compression():
+                execute_compression_plan(
+                    plan,
+                    stats,
+                    monitor,
+                    verbosity_level,
+                    xp_workers,
+                    lzx_workers,
+                    stage_callback=_stage_start_callback,
+                    progress_callback=_progress_callback,
+                )
             if interactive_output:
                 with stage_lock:
                     for algo, _ in stage_items:
@@ -306,7 +315,7 @@ def _plan_compression(
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     thorough_check: bool,
-    spinner: Optional[Spinner],
+    timer: Optional[ProgressTimer],
     verbosity: int,
     *,
     base_dir: Path,
@@ -315,18 +324,30 @@ def _plan_compression(
     if not files:
         return []
 
-    if spinner:
-        spinner.set_label("Analysing files...")
-        spinner.set_total(len(files))
-        spinner.set_message("")
+    if timer:
+        timer.set_label("Analysing files:")
+        timer.set_total(len(files))
+        timer.set_message("")
 
     def _on_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str]) -> None:
-        if not spinner:
+        if not timer:
             return
-        display = spinner.format_path(str(path), str(base_dir))
+        display = timer.format_path(str(path), str(base_dir))
         if not should_compress and reason:
             display = f"{display} [skip]"
-        spinner.update(processed, display)
+        timer.update(processed, display)
+    
+    entropy_started = False
+    def _entropy_callback_wrapper(path: Path, processed: int) -> None:
+        nonlocal entropy_started
+        if not timer:
+            return
+        if not entropy_started:
+            timer.set_label("Analysing directory entropy")
+            entropy_started = True
+        
+        display = timer.format_path(str(path), str(base_dir))
+        timer.update(processed, display)
 
     return plan_compression(
         files,
@@ -337,6 +358,7 @@ def _plan_compression(
         min_savings_percent=min_savings_percent,
         verbosity=verbosity,
         progress_callback=_on_progress,
+        entropy_progress_callback=_entropy_callback_wrapper,
     )
 
 
@@ -348,6 +370,43 @@ def _relative_path(path: Path, base_dir: Path) -> str:
             return str(path.resolve().relative_to(base_dir))
         except Exception:
             return str(path)
+
+
+def _sample_directories_parallel(
+    directories: list[Path],
+    callback: Optional[Callable[[Path, tuple[Optional[float], int, int]], None]] = None,
+) -> dict[Path, tuple[Optional[float], int, int]]:
+    if not directories:
+        return {}
+
+    worker_count = entropy_worker_count()
+    if worker_count <= 1 or len(directories) == 1:
+        results = {}
+        for directory in directories:
+            result = sample_directory_entropy(directory)
+            results[directory] = result
+            if callback:
+                callback(directory, result)
+        return results
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        future_map = {
+            executor.submit(sample_directory_entropy, directory): directory
+            for directory in directories
+        }
+
+        for future in as_completed(future_map):
+            directory = future_map[future]
+            try:
+                result = future.result()
+            except Exception:
+                result = (None, 0, 0)
+            results[directory] = result
+            if callback:
+                callback(directory, result)
+
+    return results
 
 
 def entropy_dry_run(
@@ -363,11 +422,11 @@ def entropy_dry_run(
     )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
 
-    spinner: Optional[Spinner] = None
+    timer: Optional[ProgressTimer] = None
     if verbosity_level == 0 and getattr(sys.stdout, "isatty", lambda: True)():
-        spinner = Spinner()
-        spinner.set_label("Analysing directory entropy")
-        spinner.start()
+        timer = ProgressTimer()
+        timer.set_label("Scanning files...")
+        timer.start()
 
     root_decision = maybe_skip_directory(
         base_dir,
@@ -383,8 +442,8 @@ def entropy_dry_run(
             base_dir,
             root_decision.reason or "excluded",
         )
-        if spinner:
-            spinner.stop("\nEntropy analysis skipped: base directory excluded.\n")
+        if timer:
+            timer.stop("\nEntropy analysis skipped: base directory excluded.\n")
         monitor.end_operation()
         return stats, monitor
 
@@ -412,16 +471,17 @@ def entropy_dry_run(
         except OSError:
             pass
 
-    all_files = list(
-        iter_files(
-            base_dir,
-            stats,
-            verbosity,
-            min_savings_percent,
-            collect_entropy=False,
-            skipped_file_callback=_skipped_file_callback,
+    with monitor.time_file_scan():
+        all_files = list(
+            iter_files(
+                base_dir,
+                stats,
+                verbosity,
+                min_savings_percent,
+                collect_entropy=False,
+                skipped_file_callback=_skipped_file_callback,
+            )
         )
-    )
     monitor.stats.total_files = len(all_files)
 
     def _observe_file(file_path: Path, file_size: int, decision) -> None:
@@ -432,26 +492,28 @@ def entropy_dry_run(
             for ancestor in _ancestors_through_base(file_path.parent):
                 eligible_directories.add(ancestor)
 
-    plan_compression(
-        all_files,
-        stats,
-        monitor,
-        thorough_check=False,
-        base_dir=base_dir,
-        min_savings_percent=min_savings_percent,
-        verbosity=verbosity,
-        progress_callback=None,
-        file_observer=_observe_file,
-        apply_entropy_filter=False,
-    )
+    with monitor.time_file_scan():
+        plan_compression(
+            all_files,
+            stats,
+            monitor,
+            thorough_check=False,
+            base_dir=base_dir,
+            min_savings_percent=min_savings_percent,
+            verbosity=verbosity,
+            progress_callback=None,
+            file_observer=_observe_file,
+            apply_entropy_filter=False,
+        )
     monitor.stats.files_skipped = stats.skipped_files
     monitor.stats.files_compressed = stats.compressed_files
+    monitor.stats.files_analyzed_for_entropy = eligible_files_found
 
     stats.entropy_projected_original_bytes = stats.total_original_size
 
     if eligible_files_found == 0:
-        if spinner:
-            spinner.stop("\nEntropy analysis skipped: no compressible files detected.\n")
+        if timer:
+            timer.stop("\nEntropy analysis skipped: no compressible files detected.\n")
         monitor.end_operation()
         return stats, monitor
 
@@ -461,6 +523,7 @@ def entropy_dry_run(
     children_map: defaultdict[Path, list[Path]] = defaultdict(list)
     ordered_dirs: list[Path] = []
     raw_samples: list[tuple[Path, float, float, int, int]] = []
+    directories_to_sample: list[Path] = []
 
     while pending:
         current = pending.popleft()
@@ -501,7 +564,36 @@ def entropy_dry_run(
         if current not in eligible_directories:
             continue
 
-        average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(current)
+        directories_to_sample.append(current)
+
+    if timer:
+        timer.set_label("Analysing entropy")
+        timer.set_total(len(directories_to_sample))
+        timer.update(0, "")
+
+    def _entropy_callback(path: Path, result: tuple[Optional[float], int, int]) -> None:
+        if not timer:
+            return
+        
+        average_entropy, _, _ = result
+        if average_entropy is None:
+            return
+
+        estimated_savings = savings_from_entropy(average_entropy)
+        below_threshold = estimated_savings < min_savings_percent
+        note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
+        
+        timer.update(timer.processed + 1, f"{timer.format_path(str(path), str(base_dir))} {note}")
+
+    with monitor.time_entropy_analysis():
+        sampled_results = _sample_directories_parallel(directories_to_sample, callback=_entropy_callback)
+
+    for current in directories_to_sample:
+        result = sampled_results.get(current)
+        if not result:
+            continue
+        
+        average_entropy, sampled_files, sampled_bytes = result
         if average_entropy is None or sampled_files == 0 or sampled_bytes == 0:
             continue
 
@@ -511,16 +603,8 @@ def entropy_dry_run(
         if below_threshold:
             stats.entropy_directories_below_threshold += 1
 
-        if spinner:
-            note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
-            spinner.set_label(
-                f"Analysing directory entropy ({stats.entropy_directories_sampled})"
-            )
-            spinner.update(
-                stats.entropy_directories_sampled,
-                f"{spinner.format_path(str(current), str(base_dir))} {note}",
-            )
-
+        # Timer update moved to callback
+        
         raw_samples.append((current, average_entropy, estimated_savings, sampled_files, sampled_bytes))
 
         if verbosity >= 4:
@@ -561,14 +645,14 @@ def entropy_dry_run(
             below_threshold = estimated_savings < min_savings_percent
             if below_threshold:
                 stats.entropy_directories_below_threshold += 1
-            if spinner:
+            if timer:
                 note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
-                spinner.set_label(
+                timer.set_label(
                     f"Analysing directory entropy ({stats.entropy_directories_sampled})"
                 )
-                spinner.update(
+                timer.update(
                     stats.entropy_directories_sampled,
-                    f"{spinner.format_path(str(base_dir), str(base_dir))} {note}",
+                    f"{timer.format_path(str(base_dir), str(base_dir))} {note}",
                 )
             raw_samples.append((base_dir, average_entropy, estimated_savings, sampled_files, sampled_bytes))
 
@@ -635,12 +719,12 @@ def entropy_dry_run(
 
     stats.entropy_projected_original_bytes = base_total
     stats.entropy_projected_compressed_bytes = max(int(round(projected_total)), 0)
-    if spinner:
+    if timer:
         summary = (
             f"\nEntropy analysis complete: {stats.entropy_directories_sampled} directories sampled, "
             f"{stats.entropy_directories_below_threshold} below threshold.\n"
         )
-        spinner.stop(summary)
+        timer.stop(summary)
     monitor.end_operation()
     return stats, monitor
 
