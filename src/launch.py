@@ -1,5 +1,6 @@
 import os
 import shlex
+import subprocess
 from argparse import Namespace
 from dataclasses import dataclass
 from typing import ClassVar, Optional
@@ -10,6 +11,35 @@ from . import config
 from .console import EscapeExit, announce_cancelled, read_user_input
 from .runtime import resolve_directory, sanitize_path
 from .i18n import _
+
+def pick_directory_dialog() -> Optional[str]:
+    ps_script = """
+    Add-Type -AssemblyName System.Windows.Forms
+    $f = New-Object System.Windows.Forms.FolderBrowserDialog
+    $f.Description = 'Select directory to compress'
+    $f.ShowNewFolderButton = $true
+    if ($f.ShowDialog() -eq 'OK') {
+        Write-Host $f.SelectedPath
+    }
+    """
+    
+    cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+    
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    
+    try:
+        result = subprocess.run(
+            cmd, 
+            capture_output=True, 
+            text=True, 
+            startupinfo=startupinfo
+        )
+        path = result.stdout.strip()
+        return path if path else None
+    except FileNotFoundError:
+        return None
+
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
     'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
@@ -310,7 +340,7 @@ def _run_interactive_session(state: LaunchState) -> None:
     while True:
         _print_interactive_status(state)
         print(
-            _("Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.")
+            _("Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.")
         )
 
         command = _read_interactive_command() or 's'
@@ -319,6 +349,12 @@ def _run_interactive_session(state: LaunchState) -> None:
         if lowered in _START_COMMANDS:
             if _can_start(state):
                 return
+            continue
+
+        if lowered == 'c':
+            selected = pick_directory_dialog()
+            if selected:
+                state.directory = sanitize_path(selected)
             continue
 
         if lowered in _FLAG_HELP_COMMANDS:

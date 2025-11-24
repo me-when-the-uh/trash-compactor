@@ -23,7 +23,7 @@ from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_pat
 from src.skip_logic import log_directory_skips
 from src.i18n import _, load_translations
 
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 BUILD_DATE = "who cares"
 
 

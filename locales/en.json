@@ -17,7 +17,7 @@
     "Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -t). Re-enter a flag to disable it.": "Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -t). Re-enter a flag to disable it.",
     "Directory is required before starting.": "Directory is required before starting.",
     "Directory '{directory}' was not found.": "Directory '{directory}' was not found.",
-    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.": "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.",
+    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.": "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.",
     "\nInteractive launch detected. Configure your run before starting.": "\nInteractive launch detected. Configure your run before starting.",
     "Directory '{candidate}' does not exist.": "Directory '{candidate}' does not exist.",
     "No directory provided.": "No directory provided.",

@@ -17,7 +17,7 @@
     "Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -t). Re-enter a flag to disable it.": "Activez/désactivez les drapeaux en entrant leurs formes courtes ensemble (ex. -vx) ou séparément (ex. -t). Entrez à nouveau un drapeau pour le désactiver.",
     "Directory is required before starting.": "Le répertoire est requis avant de commencer.",
     "Directory '{directory}' was not found.": "Le répertoire '{directory}' est introuvable.",
-    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.": "Entrez un chemin de répertoire (ajoutez éventuellement des drapeaux comme '-vx'), ou utilisez [S]tart pour continuer et [F]lag help pour des conseils.",
+    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.": "Entrez un chemin de répertoire (ajoutez éventuellement des drapeaux comme '-vx'), ou utilisez [S]tart pour continuer, [C]hoose directory pour choisir et [F]lag help pour des conseils.",
     "\nInteractive launch detected. Configure your run before starting.": "\nLancement interactif détecté. Configurez votre exécution avant de commencer.",
     "Directory '{candidate}' does not exist.": "Le répertoire '{candidate}' n'existe pas.",
     "No directory provided.": "Aucun répertoire fourni.",
