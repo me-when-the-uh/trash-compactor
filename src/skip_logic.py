@@ -2,6 +2,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from .i18n import _
 from .config import savings_from_entropy
 from .compression.entropy import sample_directory_entropy
 from .file_utils import DirectoryDecision, should_skip_directory
@@ -44,13 +45,13 @@ def evaluate_entropy_directory(
 
     if verbosity >= 1:
         logging.info(
-            "Skipping directory %s; estimated savings %.1f%% is below threshold %.1f%%",
+            _("Skipping directory %s; estimated savings %.1f%% is below threshold %.1f%%"),
             directory,
             estimated_savings,
             min_savings_percent,
         )
 
-    reason = f"High entropy (est. {estimated_savings:.1f}% savings)"
+    reason = _("High entropy (est. {savings:.1f}% savings)").format(savings=estimated_savings)
     return DirectorySkipRecord(
         path=str(directory),
         relative_path=_relative_to_base(directory, base_dir),
@@ -73,7 +74,7 @@ def maybe_skip_directory(
 ) -> DirectoryDecision:
     decision = should_skip_directory(directory)
     if decision.skip:
-        reason = decision.reason or "Excluded system directory"
+        reason = decision.reason or _("Excluded system directory")
         record = DirectorySkipRecord(
             path=str(directory),
             relative_path=_relative_to_base(directory, base_dir),
@@ -118,7 +119,7 @@ def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_per
     if 'high_entropy' in buckets:
         entropy_records = buckets['high_entropy']
         logging.info(
-            "Skipped %s directories due to low expected savings (<%.1f%%):",
+            _("Skipped %s directories due to low expected savings (<%.1f%%):"),
             len(entropy_records),
             min_savings_percent,
         )
@@ -134,6 +135,6 @@ def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_per
 
     if verbosity >= 4 and 'system' in buckets:
         system_records = buckets['system']
-        logging.info("Skipped %s protected directories:", len(system_records))
+        logging.info(_("Skipped %s protected directories:"), len(system_records))
         for record in system_records:
             logging.info(" - %s - %s", record.relative_path, record.reason)

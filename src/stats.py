@@ -8,6 +8,8 @@ from itertools import cycle
 from pathlib import Path
 from typing import List, Optional
 
+from .i18n import _
+
 
 class ProgressTimer:
     def __init__(self, label: str = "Working") -> None:
@@ -267,7 +269,7 @@ def _format_summary_size(value: int) -> str:
 
 
 def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, verbosity: int = 0) -> None:
-    logging.info("\nEntropy Dry Run Summary")
+    logging.info(_("\nEntropy Dry Run Summary"))
     logging.info("-----------------------")
 
     samples = sorted(stats.entropy_samples, key=lambda record: record.estimated_savings, reverse=True)
@@ -275,17 +277,17 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, v
         threshold_bytes = stats.entropy_report_threshold_bytes
         if threshold_bytes:
             logging.info(
-                "No directories exceeded the reporting threshold of %.1f MB.",
+                _("No directories exceeded the reporting threshold of %.1f MB."),
                 threshold_bytes / (1024 * 1024),
             )
         else:
-            logging.info("No eligible directories were analysed.")
+            logging.info(_("No eligible directories were analysed."))
         return
 
-    logging.info("Minimum savings threshold: %.1f%%", min_savings_percent)
+    logging.info(_("Minimum savings threshold: %.1f%%"), min_savings_percent)
     analysed = stats.entropy_directories_sampled or len(samples)
     logging.info(
-        "Analysed %s directories (%s below threshold).",
+        _("Analysed %s directories (%s below threshold)."),
         analysed,
         stats.entropy_directories_below_threshold,
     )
@@ -294,13 +296,13 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, v
         threshold_bytes = stats.entropy_report_threshold_bytes
         if threshold_bytes:
             logging.info(
-                "Reporting directories with total size >= %.1f MB.",
+                _("Reporting directories with total size >= %.1f MB."),
                 threshold_bytes / (1024 * 1024),
             )
-        logging.info("Directories ordered by projected savings:")
+        logging.info(_("Directories ordered by projected savings:"))
 
         for index, record in enumerate(samples, start=1):
-            status_note = " [below threshold]" if record.estimated_savings < min_savings_percent else ""
+            status_note = _(" [below threshold]") if record.estimated_savings < min_savings_percent else ""
             logging.info(
                 " %2d. %s (~%.1f%% savings, entropy %.2f, %s files, %s sampled, %s total)%s",
                 index,
@@ -329,47 +331,47 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, v
                 label,
             )
 
-        logging.info("\nEstimated savings:")
-        _log_savings_line(base_compressed, "with LZX")
-        _log_savings_line(alt_compressed, "w/o LZX")
+        logging.info(_("\nEstimated savings:"))
+        _log_savings_line(base_compressed, _("with LZX"))
+        _log_savings_line(alt_compressed, _("w/o LZX"))
 
 
 def print_compression_summary(stats: CompressionStats) -> None:
-    logging.info("\nCompression Summary")
+    logging.info(_("\nCompression Summary"))
     logging.info("------------------")
-    logging.info("Files compressed: %s", stats.compressed_files)
-    logging.info("Files skipped: %s", stats.skipped_files)
+    logging.info(_("Files compressed: %s"), stats.compressed_files)
+    logging.info(_("Files skipped: %s"), stats.skipped_files)
     logging.info(
-        "     %s are compressed with Trash-Compactor",
+        _("     %s are compressed with Trash-Compactor"),
         stats.already_compressed_files,
     )
     logging.info(
-        "     %s have compressed file types",
+        _("     %s have compressed file types"),
         stats.skip_extension_files,
     )
     logging.info(
-        "     %s fall below %.1f%% projected savings",
+        _("     %s fall below %.1f%% projected savings"),
         stats.skip_low_savings_files,
         stats.min_savings_percent,
     )
 
     if stats.compressed_files == 0:
-        logging.info("\nThis directory may have already been compressed.")
+        logging.info(_("\nThis directory may have already been compressed."))
         return
 
     total_original = stats.total_original_size
     total_compressed = stats.total_compressed_size
-    logging.info("\nOriginal size: %.2f MB", total_original / (1024 * 1024))
+    logging.info(_("\nOriginal size: %.2f MB"), total_original / (1024 * 1024))
 
     if total_original > 0:
         space_saved = max(0, total_original - total_compressed)
         ratio = (space_saved / total_original) * 100
-        logging.info("Space saved: %.2f MB", space_saved / (1024 * 1024))
-        logging.info("Overall compression ratio: %.2f%%", ratio)
-        logging.info("Size after compression: %.2f MB", total_compressed / (1024 * 1024))
+        logging.info(_("Space saved: %.2f MB"), space_saved / (1024 * 1024))
+        logging.info(_("Overall compression ratio: %.2f%%"), ratio)
+        logging.info(_("Size after compression: %.2f MB"), total_compressed / (1024 * 1024))
 
     if stats.errors:
-        logging.info("\nErrors encountered:")
+        logging.info(_("\nErrors encountered:"))
         for error in stats.errors:
             logging.error(error)
 

@@ -13,6 +13,7 @@ from .compression.compression_executor import execute_compression_plan, legacy_c
 from .compression.compression_planner import iter_files, plan_compression
 from .compression.entropy import sample_directory_entropy
 from .config import DEFAULT_MIN_SAVINGS_PERCENT, clamp_savings_percent, savings_from_entropy
+from .i18n import _
 from .skip_logic import log_directory_skips, maybe_skip_directory
 from .stats import CompressionStats, EntropySampleRecord, LegacyCompressionStats, ProgressTimer
 from .timer import PerformanceMonitor
@@ -55,7 +56,7 @@ def compress_directory(
     interactive_output = verbosity_level == 0
 
     if thorough_check:
-        logging.info("Using thorough checking mode - this will be slower but more accurate for previously compressed files")
+        logging.info(_("Using thorough checking mode - this will be slower but more accurate for previously compressed files"))
 
     all_files = list(iter_files(base_dir, stats, verbosity_level, min_savings_percent, collect_entropy=False))
     total_files = len(all_files)
@@ -66,7 +67,7 @@ def compress_directory(
 
     if interactive_output and total_files and getattr(sys.stdout, "isatty", lambda: True)():
         timer = ProgressTimer()
-        timer.set_label("Scanning files...")
+        timer.set_label(_("Scanning files..."))
         timer.start(total=total_files)
         timer.update(0, "")
 
@@ -85,10 +86,12 @@ def compress_directory(
         if timer:
             if total_files:
                 final_skip_message = (
-                    f"\n{stats.skipped_files} out of {total_files} files are poorly compressible\n"
+                    _("\n{skipped} out of {total} files are poorly compressible\n").format(
+                        skipped=stats.skipped_files, total=total_files
+                    )
                 )
             else:
-                final_skip_message = "\nNo files discovered for compression.\n"
+                final_skip_message = _("\nNo files discovered for compression.\n")
             timer.stop(final_message=final_skip_message)
             timer = None
 
@@ -325,7 +328,7 @@ def _plan_compression(
         return []
 
     if timer:
-        timer.set_label("Analysing files:")
+        timer.set_label(_("Analysing files:"))
         timer.set_total(len(files))
         timer.set_message("")
 
@@ -343,7 +346,7 @@ def _plan_compression(
         if not timer:
             return
         if not entropy_started:
-            timer.set_label("Analysing directory entropy")
+            timer.set_label(_("Analysing directory entropy"))
             entropy_started = True
         
         display = timer.format_path(str(path), str(base_dir))
@@ -425,7 +428,7 @@ def entropy_dry_run(
     timer: Optional[ProgressTimer] = None
     if verbosity_level == 0 and getattr(sys.stdout, "isatty", lambda: True)():
         timer = ProgressTimer()
-        timer.set_label("Scanning files...")
+        timer.set_label(_("Scanning files..."))
         timer.start()
 
     root_decision = maybe_skip_directory(
@@ -438,12 +441,12 @@ def entropy_dry_run(
     )
     if root_decision.skip:
         logging.warning(
-            "Dry run aborted: base directory %s is excluded (%s)",
+            _("Dry run aborted: base directory %s is excluded (%s)"),
             base_dir,
             root_decision.reason or "excluded",
         )
         if timer:
-            timer.stop("\nEntropy analysis skipped: base directory excluded.\n")
+            timer.stop(_("\nEntropy analysis skipped: base directory excluded.\n"))
         monitor.end_operation()
         return stats, monitor
 
@@ -513,7 +516,7 @@ def entropy_dry_run(
 
     if eligible_files_found == 0:
         if timer:
-            timer.stop("\nEntropy analysis skipped: no compressible files detected.\n")
+            timer.stop(_("\nEntropy analysis skipped: no compressible files detected.\n"))
         monitor.end_operation()
         return stats, monitor
 
@@ -567,7 +570,7 @@ def entropy_dry_run(
         directories_to_sample.append(current)
 
     if timer:
-        timer.set_label("Analysing entropy")
+        timer.set_label(_("Analysing entropy"))
         timer.set_total(len(directories_to_sample))
         timer.update(0, "")
 
@@ -648,7 +651,7 @@ def entropy_dry_run(
             if timer:
                 note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
                 timer.set_label(
-                    f"Analysing directory entropy ({stats.entropy_directories_sampled})"
+                    _("Analysing directory entropy ({sampled})").format(sampled=stats.entropy_directories_sampled)
                 )
                 timer.update(
                     stats.entropy_directories_sampled,
@@ -721,8 +724,10 @@ def entropy_dry_run(
     stats.entropy_projected_compressed_bytes = max(int(round(projected_total)), 0)
     if timer:
         summary = (
-            f"\nEntropy analysis complete: {stats.entropy_directories_sampled} directories sampled, "
-            f"{stats.entropy_directories_below_threshold} below threshold.\n"
+            _("\nEntropy analysis complete: {sampled} directories sampled, {below} below threshold.\n").format(
+                sampled=stats.entropy_directories_sampled,
+                below=stats.entropy_directories_below_threshold
+            )
         )
         timer.stop(summary)
     monitor.end_operation()

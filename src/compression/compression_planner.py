@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
+from ..i18n import _
 from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy
 from ..file_utils import CompressionDecision, should_compress_file
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory, sample_directory_entropy
@@ -97,7 +98,7 @@ def _scan_single(index: int, entry: os.DirEntry, thorough_check: bool) -> _ScanP
     try:
         file_size = entry.stat().st_size
     except OSError as exc:
-        return _ScanPayload(index, file_path, 0, None, f"Error processing {file_path}: {exc}")
+        return _ScanPayload(index, file_path, 0, None, _("Error processing {file_path}: {exc}").format(file_path=file_path, exc=exc))
 
     decision = should_compress_file(file_path, thorough_check, file_size=file_size)
     return _ScanPayload(index, file_path, file_size, decision)

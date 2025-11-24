@@ -9,13 +9,12 @@ from colorama import Fore, Style
 from . import config
 from .console import EscapeExit, announce_cancelled, read_user_input
 from .runtime import resolve_directory, sanitize_path
+from .i18n import _
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
     'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
     'no_lzx': ('-x', 'Disable LZX compression'),
     'force_lzx': ('-f', 'Force LZX compression'),
-    'thorough': ('-t', 'Thorough checking mode'),
-    'brand_files': ('-b', 'Branding mode'),
     'dry_run': ('-d', 'Dry-run entropy analysis'),
     'single_worker': ('-s', 'Throttle for HDDs'),
     'min_savings': (
@@ -102,20 +101,20 @@ class LaunchState:
 def _format_active_flags(state: LaunchState) -> str:
     items: list[str] = []
     if state.verbose:
-        items.append(f"Verbose level {state.verbose} (-{'v' * state.verbose})")
+        items.append(_("Verbose level {level} (-{flags})").format(level=state.verbose, flags='v' * state.verbose))
 
     for key, (flag, description) in FLAG_METADATA.items():
         if key == 'verbose' or key == 'min_savings':
             continue
         if getattr(state, key):
-            items.append(f"{description} ({flag})")
-    return ", ".join(items) if items else "<none>"
+            items.append(f"{_(description)} ({flag})")
+    return ", ".join(items) if items else _("<none>")
 
 
 def _print_flag_reference() -> None:
-    print(Fore.YELLOW + "\nAvailable flags:" + Style.RESET_ALL)
+    print(Fore.YELLOW + _("\nAvailable flags:") + Style.RESET_ALL)
     for key, (flag, description) in FLAG_METADATA.items():
-        print(f"  {flag:<6} {description}")
+        print(f"  {flag:<6} {_(description)}")
 
 
 def _coerce_verbose_value(raw: Optional[str]) -> int:
@@ -148,8 +147,9 @@ def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -
         if parsed is None:
             print(
                 Fore.RED
-                + "Invalid value for --min-savings. Provide a number between "
-                + f"{config.MIN_SAVINGS_PERCENT:.0f} and {config.MAX_SAVINGS_PERCENT:.0f}."
+                + _("Invalid value for --min-savings. Provide a number between {min} and {max}.").format(
+                    min=config.MIN_SAVINGS_PERCENT, max=config.MAX_SAVINGS_PERCENT
+                )
                 + Style.RESET_ALL
             )
             return
@@ -233,13 +233,13 @@ def _split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
 
 def _print_interactive_status(state: LaunchState) -> None:
     active_flags = _format_active_flags(state)
-    current_directory = state.directory or "<not set>"
+    current_directory = state.directory or _("<not set>")
     print(
         Fore.CYAN
-        + (
-            f"\nCurrent directory: {current_directory}"
-            f"\nActive flags: {active_flags}"
-            f"\nMin savings threshold: {state.min_savings:.1f}%"
+        + _("\nCurrent directory: {directory}\nActive flags: {flags}\nMin savings threshold: {savings:.1f}%").format(
+            directory=current_directory,
+            flags=active_flags,
+            savings=state.min_savings
         )
         + Style.RESET_ALL
     )
@@ -268,20 +268,19 @@ def _read_interactive_command() -> str:
 
 def _display_flag_help() -> None:
     print(
-        "Toggle flags by entering their short forms together (e.g. -vx)"
-        " or separately (e.g. -t). Re-enter a flag to disable it."
+        _("Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -t). Re-enter a flag to disable it.")
     )
     _print_flag_reference()
 
 
 def _can_start(state: LaunchState) -> bool:
     if not state.directory:
-        print(Fore.RED + "Directory is required before starting." + Style.RESET_ALL)
+        print(Fore.RED + _("Directory is required before starting.") + Style.RESET_ALL)
         return False
     if not os.path.exists(state.directory):
         print(
             Fore.RED
-            + f"Directory '{state.directory}' was not found."
+            + _("Directory '{directory}' was not found.").format(directory=state.directory)
             + Style.RESET_ALL
         )
         return False
@@ -311,8 +310,7 @@ def _run_interactive_session(state: LaunchState) -> None:
     while True:
         _print_interactive_status(state)
         print(
-            "Enter a directory path (optionally add flags like '-vx'),"
-            " or use [S]tart to proceed and [F]lag help for tips."
+            _("Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.")
         )
 
         command = _read_interactive_command() or 's'
@@ -356,7 +354,7 @@ def interactive_configure(args: Namespace) -> Namespace:
         min_savings=config.clamp_savings_percent(getattr(args, 'min_savings', config.DEFAULT_MIN_SAVINGS_PERCENT)),
     )
 
-    print(Fore.YELLOW + "\nInteractive launch detected. Configure your run before starting." + Style.RESET_ALL)
+    print(Fore.YELLOW + _("\nInteractive launch detected. Configure your run before starting.") + Style.RESET_ALL)
     _print_flag_reference()
     _run_interactive_session(state)
     return _apply_state_to_args(args, state)
@@ -369,9 +367,9 @@ def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, N
             return candidate, args
 
         if candidate:
-            print(Fore.RED + f"Directory '{candidate}' does not exist." + Style.RESET_ALL)
+            print(Fore.RED + _("Directory '{candidate}' does not exist.").format(candidate=candidate) + Style.RESET_ALL)
         else:
-            print(Fore.RED + "No directory provided." + Style.RESET_ALL)
+            print(Fore.RED + _("No directory provided.") + Style.RESET_ALL)
 
         if interactive_launch:
             args.directory = ""

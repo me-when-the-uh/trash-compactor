@@ -1,5 +1,6 @@
 import sys
 from colorama import Fore, Style
+from .i18n import _
 
 
 BANNER = r"""
@@ -17,7 +18,7 @@ class EscapeExit(Exception):
 
 
 def announce_cancelled() -> None:
-    print(Fore.CYAN + "\nOperation cancelled by user." + Style.RESET_ALL)
+    print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
 
 
 def _read_msvcrt_input(prompt: str) -> str:
@@ -78,7 +79,7 @@ def read_user_input(prompt: str) -> str:
 
 def display_banner(version: str, build_date: str) -> None:
     print(Fore.CYAN + Style.BRIGHT + BANNER)
-    print(Fore.GREEN + f"Version: {version}    Build Date: {build_date}\n")
+    print(Fore.GREEN + _("Version: {version}    Build Date: {build_date}\n").format(version=version, build_date=build_date))
 
 
 def prompt_exit() -> None:
@@ -86,13 +87,13 @@ def prompt_exit() -> None:
         import msvcrt
     except ImportError:
         try:
-            input("\nPress Enter twice to exit...")
+            input(_("\nPress Enter twice to exit..."))
             input()
         except KeyboardInterrupt:
             pass
         return
 
-    print(Fore.YELLOW + "\nPress Esc twice to exit, or use Ctrl+C." + Style.RESET_ALL)
+    print(Fore.YELLOW + _("\nPress Esc twice to exit, or use Ctrl+C.") + Style.RESET_ALL)
     escape_count = 0
     try:
         while True:
@@ -100,7 +101,7 @@ def prompt_exit() -> None:
             if key == '\x1b':
                 escape_count += 1
                 if escape_count >= 2:
-                    print(Fore.CYAN + "Exiting..." + Style.RESET_ALL)
+                    print(Fore.CYAN + _("Exiting...") + Style.RESET_ALL)
                     return
                 continue
             if key == '\x03':

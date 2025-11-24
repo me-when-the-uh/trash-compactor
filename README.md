@@ -41,11 +41,11 @@ Note: For Option 2, ensure Git and Python 3.8+ are installed on your system.
 
 Optional: you can compile the app yourself as I did, using PyInstaller:
     ```
-    python -m PyInstaller --onefile --name trash-compactor --uac-admin main.py 
+    python -m PyInstaller --onefile --add-data "locales;locales" --name trash-compactor --uac-admin main.py 
     ```
-    or
+    or, since we're interested in squeezing programs into small packages, you can install a build of [UPX](https://github.com/upx/upx) to build an app with compressed binaries:
     ```
-    python -m PyInstaller --onefile --name trash-compactor --uac-admin main.py --upx-dir 'c:\path\to\upx-win64'
+    python -m PyInstaller --onefile --add-data "locales;locales" --name trash-compactor --uac-admin main.py --upx-dir 'c:\path\to\upx-win64'
     ```
 
 ## Usage
