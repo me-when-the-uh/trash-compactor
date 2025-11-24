@@ -6,13 +6,12 @@ from typing import ClassVar, Optional
 from colorama import Fore, Style
 
 from .config import DEFAULT_MIN_SAVINGS_PERCENT
+from .i18n import _
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
     'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
     'no_lzx': ('-x', 'Disable LZX compression'),
     'force_lzx': ('-f', 'Force LZX compression'),
-    'thorough': ('-t', 'Thorough checking mode'),
-    'brand_files': ('-b', 'Branding mode'),
     'single_worker': ('-s', 'Throttle for HDDs'),
     'min_savings': (
         '-m/--min-savings=<percent>',
@@ -90,19 +89,19 @@ class LaunchState:
 def _format_active_flags(state: LaunchState) -> str:
     items: list[str] = []
     if state.verbose:
-        items.append(f"Verbose level {state.verbose} (-{'v' * state.verbose})")
+        items.append(_("Verbose level {level} (-{flags})").format(level=state.verbose, flags='v' * state.verbose))
 
     for key, (flag, description) in FLAG_METADATA.items():
         if key == 'verbose' or key == 'min_savings':
             continue
         if getattr(state, key):
-            items.append(f"{description} ({flag})")
-    return ", ".join(items) if items else "<none>"
+            items.append(f"{_(description)} ({flag})")
+    return ", ".join(items) if items else _("<none>")
 
 def _print_flag_reference() -> None:
-    print(Fore.YELLOW + "\nAvailable flags:" + Style.RESET_ALL)
+    print(Fore.YELLOW + _("\nAvailable flags:") + Style.RESET_ALL)
     for key, (flag, description) in FLAG_METADATA.items():
-        print(f"  {flag:<6} {description}")
+        print(f"  {flag:<6} {_(description)}")
 
 def _coerce_verbose_value(raw: Optional[str]) -> int:
     if raw is None or raw == "":
@@ -132,8 +131,7 @@ def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -
         if parsed is None:
             print(
                 Fore.RED
-                + "Invalid value for --min-savings. Provide a number between "
-                + f"10 and 90."
+                + _("Invalid value for --min-savings. Provide a number between {min} and {max}.").format(min=10, max=90)
                 + Style.RESET_ALL
             )
             return
@@ -212,13 +210,13 @@ def split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
 
 def print_interactive_status(state: LaunchState) -> None:
     active_flags = _format_active_flags(state)
-    current_directory = state.directory or "<not set>"
+    current_directory = state.directory or _("<not set>")
     print(
         Fore.CYAN
-        + (
-            f"\nCurrent directory: {current_directory}"
-            f"\nActive flags: {active_flags}"
-            f"\nMin savings threshold: {state.min_savings:.1f}%"
+        + _("\nCurrent directory: {directory}\nActive flags: {flags}\nMin savings threshold: {savings:.1f}%").format(
+            directory=current_directory,
+            flags=active_flags,
+            savings=state.min_savings
         )
         + Style.RESET_ALL
     )

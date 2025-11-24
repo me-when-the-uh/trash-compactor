@@ -23,9 +23,6 @@ def entropy_worker_count() -> int:
     physical, _ = get_cpu_info()
     if not physical or physical <= 1:
         return _apply_worker_cap(1)
-    # Entropy sampling benefits from parallelism (I/O + compression),
-    # so we use available physical cores.
-    # Note: Scanning phase uses a dedicated single-threaded approach.
     default = physical - 1
     return _apply_worker_cap(default)
 

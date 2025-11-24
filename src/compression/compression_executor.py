@@ -5,6 +5,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence
 
+from ..i18n import _
 from ..config import COMPRESSION_ALGORITHMS
 from ..file_utils import is_file_compressed
 from ..stats import CompressionStats
@@ -120,7 +121,7 @@ def execute_compression_plan(
 
     def _record_failure(path: Path, file_size: int, algo: str, reason: Optional[str] = None) -> None:
         with stats_lock:
-            stats.record_file_skip(path, reason or "Compression failed", file_size, file_size)
+            stats.record_file_skip(path, reason or _("Compression failed"), file_size, file_size)
         if reason:
             logging.debug("Compression skipped for %s using %s: %s", path, algo, reason)
         else:
@@ -140,7 +141,7 @@ def execute_compression_plan(
         try:
             verified, compressed_size = is_file_compressed(path, thorough_check=False)
         except OSError as exc:
-            _record_error(f"Error verifying {path}: {exc}")
+            _record_error(_("Error verifying {path}: {exc}").format(path=path, exc=exc))
             logging.error("Error verifying %s after %s compression: %s", path, context, exc)
             _record_success(path, fallback_size, algo, verified=False)
         else:
@@ -194,7 +195,7 @@ def execute_compression_plan(
                         exc,
                     )
                     for path, file_size in batch:
-                        _record_error(f"Batch exception for {path}: {exc}")
+                        _record_error(_("Batch exception for {path}: {exc}").format(path=path, exc=exc))
                         _compress_single(path, file_size, algorithm)
                     continue
 

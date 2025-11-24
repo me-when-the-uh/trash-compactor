@@ -21,8 +21,9 @@ from src.console import display_banner, prompt_exit
 from src.launch import acquire_directory, interactive_configure
 from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
+from src.i18n import _, load_translations
 
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 BUILD_DATE = "who cares"
 
 
@@ -54,13 +55,22 @@ def setup_logging(verbosity: int) -> None:
     root_logger.setLevel(logging.DEBUG if debug_enabled else logging.INFO)
 
 
+def _detect_language_override(argv: Sequence[str]) -> Optional[str]:
+    for i, arg in enumerate(argv):
+        if arg in ("--language", "-l") and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--language="):
+            return arg.split("=", 1)[1]
+    return None
+
+
 def build_parser() -> argparse.ArgumentParser:
     description = dedent(
-        """
+        _("""
         Trash-Compactor applies Windows NTFS compression with guardrails that avoid
         low-yield cache folders. Run without arguments to launch the interactive 
         window, or supply flags if you want to automate your run.
-        """
+        """)
     ).strip()
 
     epilog = dedent(
@@ -89,45 +99,50 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "directory",
         nargs="?",
-        help="Target directory to compress. Omit to start the interactive walkthrough.",
+        help=_("Target directory to compress. Omit to start the interactive walkthrough."),
     )
     parser.add_argument(
         "-v",
         "--verbose",
         action="count",
         default=0,
-        help="Increase logging verbosity",
+        help=_("Increase logging verbosity"),
     )
     parser.add_argument(
         "-x",
         "--no-lzx",
         action="store_true",
-        help="Disable LZX compression for better performance on low-end CPUs",
+        help=_("Disable LZX compression for better performance on low-end CPUs"),
     )
     parser.add_argument(
         "-f",
         "--force-lzx",
         action="store_true",
-        help="Force LZX compression even if the CPU is deemed less capable for peak compression",
+        help=_("Force LZX compression even if the CPU is deemed less capable for peak compression"),
     )
     parser.add_argument(
         "-s",
         "--single-worker",
         action="store_true",
-        help="Throttle compression to a single worker to reduce disk fragmentation",
+        help=_("Throttle compression to a single worker to reduce disk fragmentation"),
     )
     parser.add_argument(
         "-d",
         "--dry-run",
         action="store_true",
-        help="Analyse directory entropy without compressing files",
+        help=_("Analyse directory entropy without compressing files"),
     )
     parser.add_argument(
         "-m",
         "--min-savings",
         type=float,
         default=None,
-        help=f"Skip directories when estimated savings fall below this percentage (0-90, default {config.DEFAULT_MIN_SAVINGS_PERCENT:.0f})",
+        help=_("Skip directories when estimated savings fall below this percentage (0-90, default {default:.0f})").format(default=config.DEFAULT_MIN_SAVINGS_PERCENT),
+    )
+    parser.add_argument(
+        "-l",
+        "--language",
+        help=_("Force a specific language (e.g., 'en', 'ru')"),
     )
 
     mode_group = parser.add_mutually_exclusive_group()
@@ -135,13 +150,13 @@ def build_parser() -> argparse.ArgumentParser:
         "-b",
         "--brand-files",
         action="store_true",
-        help="Branding mode. Runs compact.exe for Windows to mark files as compressed, if some files are reported as not",
+        help=_("Branding mode. Runs compact.exe for Windows to mark files as compressed, if some files are reported as not"),
     )
     mode_group.add_argument(
         "-t",
         "--thorough",
         action="store_true",
-        help="Thorough mode. Performs slower but has more accurate compression state checks for scheduled runs",
+        help=_("Thorough mode. Performs slower but has more accurate compression state checks for scheduled runs"),
     )
     return parser
 
@@ -149,13 +164,13 @@ def build_parser() -> argparse.ArgumentParser:
 def announce_mode(args: argparse.Namespace) -> None:
     notices: list[str] = []
     if getattr(args, "dry_run", False):
-        notices.append("Dry run: analyse entropy without compressing files.")
+        notices.append(_("Dry run: analyse entropy without compressing files."))
     if args.brand_files:
-        notices.append("Branding mode: ensure Windows records compressed attributes after the initial pass.")
+        notices.append(_("Branding mode: ensure Windows records compressed attributes after the initial pass."))
     elif args.thorough:
-        notices.append("Thorough mode: perform deeper compression status checks suited for scheduled runs.")
+        notices.append(_("Thorough mode: perform deeper compression status checks suited for scheduled runs."))
     if getattr(args, "single_worker", False):
-        notices.append("Single-worker mode: queue batches sequentially to minimise disk head contention.")
+        notices.append(_("Single-worker mode: queue batches sequentially to minimise disk head contention."))
 
     if not notices:
         return
@@ -166,22 +181,22 @@ def announce_mode(args: argparse.Namespace) -> None:
 
 
 def run_branding(directory: str, thorough: bool) -> None:
-    print(Fore.CYAN + "\nStarting file branding process..." + Style.RESET_ALL)
+    print(Fore.CYAN + _("\nStarting file branding process...") + Style.RESET_ALL)
     legacy_stats = compress_directory_legacy(directory, thorough_check=thorough)
 
-    print(Fore.CYAN + "\nFile Branding Summary:" + Style.RESET_ALL)
-    print(f"Total files processed: {legacy_stats.total_files}")
-    print(f"Files branded as compressed: {legacy_stats.branded_files}")
+    print(Fore.CYAN + _("\nFile Branding Summary:") + Style.RESET_ALL)
+    print(_("Total files processed: {total}").format(total=legacy_stats.total_files))
+    print(_("Files branded as compressed: {branded}").format(branded=legacy_stats.branded_files))
     if legacy_stats.branded_files:
         percentage = (legacy_stats.branded_files / legacy_stats.total_files) * 100 if legacy_stats.total_files else 0
-        print(f"Percentage of files branded: {percentage:.2f}%")
+        print(_("Percentage of files branded: {percentage:.2f}%").format(percentage=percentage))
     if legacy_stats.still_unmarked:
-        print(Fore.YELLOW + f"Warning: {legacy_stats.still_unmarked} files are still not properly marked as compressed.")
-        print("These files may be repeatedly processed in future runs.")
+        print(Fore.YELLOW + _("Warning: {count} files are still not properly marked as compressed.").format(count=legacy_stats.still_unmarked))
+        print(_("These files may be repeatedly processed in future runs."))
 
 
 def run_compression(directory: str, verbosity: int, thorough: bool, min_savings: float) -> None:
-    logging.info("Starting compression of directory: %s", directory)
+    logging.info(_("Starting compression of directory: %s"), directory)
     stats, monitor = compress_directory(
         directory,
         verbosity=verbosity,
@@ -193,7 +208,7 @@ def run_compression(directory: str, verbosity: int, thorough: bool, min_savings:
 
 
 def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> None:
-    logging.info("Starting entropy dry run for directory: %s", directory)
+    logging.info(_("Starting entropy dry run for directory: %s"), directory)
     stats, monitor = entropy_dry_run(
         directory,
         verbosity=verbosity,
@@ -219,10 +234,10 @@ def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
 
 def _validate_modes(args: argparse.Namespace) -> bool:
     if args.no_lzx and args.force_lzx:
-        print(Fore.RED + "Error: Cannot disable and force LZX compression at the same time." + Style.RESET_ALL)
+        print(Fore.RED + _("Error: Cannot disable and force LZX compression at the same time.") + Style.RESET_ALL)
         return False
     if getattr(args, "dry_run", False) and args.brand_files:
-        print(Fore.RED + "Error: Cannot combine dry-run mode with branding." + Style.RESET_ALL)
+        print(Fore.RED + _("Error: Cannot combine dry-run mode with branding.") + Style.RESET_ALL)
         return False
     return True
 
@@ -231,11 +246,11 @@ def _emit_verbosity_banner(level: int) -> None:
     if not level:
         return
     verbose_labels = {
-        1: "Verbosity level 1: cache decisions and summary stats",
-        2: "Verbosity level 2: include stage-level progress and verification warnings",
-        3: "Verbosity level 3: extended diagnostics for skipped files",
+        1: _("Verbosity level 1: cache decisions and summary stats"),
+        2: _("Verbosity level 2: include stage-level progress and verification warnings"),
+        3: _("Verbosity level 3: extended diagnostics for skipped files"),
     }
-    label = verbose_labels.get(level, "Verbosity level 4: full debug logging enabled")
+    label = verbose_labels.get(level, _("Verbosity level 4: full debug logging enabled"))
     print(Fore.BLUE + label + Style.RESET_ALL)
 
 
@@ -243,7 +258,7 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
     set_worker_cap(1 if getattr(args, "single_worker", False) else None)
 
     if not is_admin():
-        logging.error("This script requires administrator privileges")
+        logging.error(_("This script requires administrator privileges"))
         return None
 
     physical_cores, logical_cores = get_cpu_info()
@@ -264,9 +279,9 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
     protection_reason = describe_protected_path(directory)
     if protection_reason:
-        logging.error("Cannot compress protected path: %s", protection_reason)
+        logging.error(_("Cannot compress protected path: %s"), protection_reason)
         if 'Windows' in protection_reason:
-            logging.error("To compress Windows system files, use 'compact.exe /compactos:always' instead")
+            logging.error(_("To compress Windows system files, use 'compact.exe /compactos:always' instead"))
         return None
 
     if not confirm_hdd_usage(directory, force_serial=args.single_worker):
@@ -276,6 +291,10 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
 
 def main() -> None:
+    # Detect language override before anything else to ensure banner and help text are translated
+    override_lang = _detect_language_override(sys.argv[1:])
+    load_translations(override_lang)
+    
     init(autoreset=True)
     display_banner(VERSION, BUILD_DATE)
 
@@ -310,7 +329,7 @@ def main() -> None:
             min_savings=args.min_savings,
         )
 
-    print("\nOperation completed.")
+    print(_("\nOperation completed."))
     prompt_exit()
 
 

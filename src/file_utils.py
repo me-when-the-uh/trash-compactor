@@ -8,6 +8,7 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
+from .i18n import _
 from .config import DEFAULT_EXCLUDE_DIRECTORIES, MIN_COMPRESSIBLE_SIZE, SIZE_THRESHOLDS, SKIP_EXTENSIONS
 from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, is_hard_drive, get_volume_details
 
@@ -28,10 +29,10 @@ _DEFAULT_EXCLUDE_MAP: dict[str, str] = {
 def _match_exclusion(normalized: str) -> tuple[bool, Optional[str]]:
     for excluded_norm, display in _DEFAULT_EXCLUDE_MAP.items():
         if normalized == excluded_norm:
-            return True, f"Protected system directory ({display})"
+            return True, _("Protected system directory ({display})").format(display=display)
         prefix = excluded_norm + os.sep
         if normalized.startswith(prefix):
-            return True, f"Within protected system directory ({display})"
+            return True, _("Within protected system directory ({display})").format(display=display)
     return False, None
 
 
@@ -77,7 +78,7 @@ class CompressionDecision:
 
     @classmethod
     def allow(cls, size_hint: int) -> "CompressionDecision":
-        return cls(True, "File eligible for compression", size_hint)
+        return cls(True, _("File eligible for compression"), size_hint)
 
     @classmethod
     def deny(cls, reason: str, size_hint: int = 0) -> "CompressionDecision":
@@ -93,7 +94,7 @@ def should_skip_directory(directory: Path) -> DirectoryDecision:
     normalized = _normalize_for_compare(directory)
     match, reason = _match_exclusion(normalized)
     if match:
-        return DirectoryDecision.deny(reason or "Protected system directory")
+        return DirectoryDecision.deny(reason or _("Protected system directory"))
     return DirectoryDecision.allow_path()
 
 
@@ -166,20 +167,20 @@ def should_compress_file(
 ) -> CompressionDecision:
     suffix = file_path.suffix.lower()
     if suffix in SKIP_EXTENSIONS:
-        return CompressionDecision.deny(f"Skipped due to extension {suffix}")
+        return CompressionDecision.deny(_("Skipped due to extension {suffix}").format(suffix=suffix))
 
     try:
         resolved_size = file_size if file_size is not None else file_path.stat().st_size
     except OSError as exc:
         logging.error("Failed to stat %s: %s", file_path, exc)
-        return CompressionDecision.deny(f"Unable to read file size: {exc}")
+        return CompressionDecision.deny(_("Unable to read file size: {exc}").format(exc=exc))
 
     if resolved_size < MIN_COMPRESSIBLE_SIZE:
-        return CompressionDecision.deny(f"File too small ({resolved_size} bytes)", resolved_size)
+        return CompressionDecision.deny(_("File too small ({size} bytes)").format(size=resolved_size), resolved_size)
 
     is_compressed, compressed_size = is_file_compressed(file_path, thorough_check)
     if is_compressed:
-        return CompressionDecision.deny("File is already compressed", compressed_size)
+        return CompressionDecision.deny(_("File is already compressed"), compressed_size)
 
     return CompressionDecision.allow(resolved_size)
 
