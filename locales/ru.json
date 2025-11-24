@@ -17,7 +17,7 @@
     "Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -t). Re-enter a flag to disable it.": "Переключайте флаги, вводя их короткие формы вместе (например, -vx) или отдельно (например, -t). Введите флаг повторно, чтобы отключить его.",
     "Directory is required before starting.": "Перед запуском необходимо указать директорию.",
     "Directory '{directory}' was not found.": "Директория '{directory}' не найдена.",
-    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.": "Введите путь к директории (можно добавить флаги, например, '-vx'), или используйте [S]tart для запуска и [F]lag help для подсказок.",
+    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.": "Введите путь к директории (можно добавить флаги, например, '-vx'), или используйте [S]tart для запуска, [C]hoose directory для выбора директории и [F]lag help для подсказок.",
     "\nInteractive launch detected. Configure your run before starting.": "\nОбнаружен интерактивный запуск. Настройте параметры перед началом.",
     "Directory '{candidate}' does not exist.": "Директория '{candidate}' не существует.",
     "No directory provided.": "Директория не указана.",

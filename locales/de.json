@@ -17,7 +17,7 @@
     "Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -t). Re-enter a flag to disable it.": "Schalten Sie Flags um, indem Sie ihre Kurzformen zusammen (z. B. -vx) oder separat (z. B. -t) eingeben. Geben Sie ein Flag erneut ein, um es zu deaktivieren.",
     "Directory is required before starting.": "Verzeichnis ist vor dem Start erforderlich.",
     "Directory '{directory}' was not found.": "Verzeichnis '{directory}' wurde nicht gefunden.",
-    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed and [F]lag help for tips.": "Geben Sie einen Verzeichnispfad ein (fügen Sie optional Flags wie '-vx' hinzu) oder verwenden Sie [S]tart zum Fortfahren und [F]lag help für Tipps.",
+    "Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.": "Geben Sie einen Verzeichnispfad ein (fügen Sie optional Flags wie '-vx' hinzu) oder verwenden Sie [S]tart zum Fortfahren, [C]hoose directory zum Auswählen und [F]lag help für Tipps.",
     "\nInteractive launch detected. Configure your run before starting.": "\nInteraktiver Start erkannt. Konfigurieren Sie Ihren Lauf vor dem Start.",
     "Directory '{candidate}' does not exist.": "Verzeichnis '{candidate}' existiert nicht.",
     "No directory provided.": "Kein Verzeichnis angegeben.",
