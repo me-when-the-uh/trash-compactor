@@ -2,13 +2,14 @@ import logging
 import os
 import shlex
 import subprocess
+import threading
 from argparse import Namespace
 from dataclasses import dataclass
 from typing import ClassVar, Optional
 
 from colorama import Fore, Style
 
-from . import config
+from . import config, benchmark
 from .console import EscapeExit, announce_cancelled, read_user_input
 from .file_utils import (
     DRIVE_FIXED,
@@ -518,6 +519,12 @@ def interactive_configure(args: Namespace) -> Namespace:
 
     print(Fore.YELLOW + _("\nInteractive launch detected. Configure your run before starting.") + Style.RESET_ALL)
     _print_flag_reference()
+
+    # Run benchmark to gauge system performance
+    if not benchmark.run_benchmark():
+        state.no_lzx = True
+        print(Fore.YELLOW + _("\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.") + Style.RESET_ALL)
+
     _run_interactive_session(state)
     return _apply_state_to_args(args, state)
 
