@@ -146,5 +146,7 @@
     "Dry run aborted: base directory %s is excluded (%s)": "Тестовый прогон прерван: базовая директория %s исключена (%s)",
     "<none>": "<нет>",
     "<not set>": "<не задано>",
-    "Set minimum expected savings percentage (0-90)": "Установить минимальный ожидаемый процент экономии (0-90)"
+    "Set minimum expected savings percentage (0-90)": "Установить минимальный ожидаемый процент экономии (0-90)",
+    "Performance benchmark completed in {elapsed:.3f} seconds.": "Тест производительности завершен за {elapsed:.3f} сек.",
+    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nПримечание: Сжатие LZX отключено для предотвращения медленного запуска сжатых приложений."
 }

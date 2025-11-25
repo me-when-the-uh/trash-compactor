@@ -142,5 +142,7 @@
     "Dry run aborted: base directory %s is excluded (%s)": "Simulacro abortado: directorio base %s está excluido (%s)",
     "<none>": "<ninguno>",
     "<not set>": "<no establecido>",
-    "Set minimum expected savings percentage (0-90)": "Establecer porcentaje mínimo de ahorro de espacio esperado (0-90)"
+    "Set minimum expected savings percentage (0-90)": "Establecer porcentaje mínimo de ahorro de espacio esperado (0-90)",
+    "Performance benchmark completed in {elapsed:.3f}s.": "Performance benchmark completed in {elapsed:.3f}s.",
+    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications."
 }

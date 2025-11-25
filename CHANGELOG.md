@@ -4,9 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v0.5.0-beta]
+## [v0.5.0-beta] - 2025-11-25
+### Added
+- A simple benchmark to test whether the computer is too slow to use LZX compression
+
 ### Changed
 - Refactored launch logic to remove WET code and have a centralised menu
+
+### Fixed
+- Bugs that were occuring with the old approach to the CLI interface because of two different menus
 
 
 ## [v0.4.5] - 2025-11-24
