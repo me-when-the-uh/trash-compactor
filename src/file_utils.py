@@ -13,6 +13,19 @@ from .config import DEFAULT_EXCLUDE_DIRECTORIES, MIN_COMPRESSIBLE_SIZE, SIZE_THR
 from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, is_hard_drive, get_volume_details
 
 
+def sanitize_path(path: str) -> str:
+    return os.path.normpath(path.strip(" '\""))
+
+
+def is_admin() -> bool:
+    try:
+        return os.getuid() == 0
+    except AttributeError:
+        import ctypes
+
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+
+
 def _normalize_for_compare(path: str | Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(path)))
     if len(normalized) == 2 and normalized[1] == ':':
@@ -108,6 +121,10 @@ def get_protection_reason(path: str | Path) -> Optional[str]:
     normalized = _normalize_for_compare(path)
     _, reason = _match_exclusion(normalized)
     return reason
+
+
+def describe_protected_path(directory: str) -> Optional[str]:
+    return get_protection_reason(directory)
 
 
 def _hidden_startupinfo() -> subprocess.STARTUPINFO:

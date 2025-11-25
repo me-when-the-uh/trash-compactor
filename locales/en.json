@@ -61,8 +61,6 @@
     "LZX compression requires at least {min_physical} cores and {min_logical} threads.": "LZX compression requires at least {min_physical} cores and {min_logical} threads.",
     "LZX compression has been disabled for better system responsiveness.": "LZX compression has been disabled for better system responsiveness.",
     "Use -f flag to force LZX if you're feeling adventurous.": "Use -f flag to force LZX if you're feeling adventurous.",
-    "Enter  irectory path to compress: ": "Enter directory path to compress: ",
-    "Directory path cannot be empty.": "Directory path cannot be empty.",
     "Unable to resolve the target volume. Please verify the path.": "Unable to resolve the target volume. Please verify the path.",
     "Network shares are not supported targets for compression.": "Network shares are not supported targets for compression.",
     "Please select a local NTFS volume instead.": "Please select a local NTFS volume instead.",

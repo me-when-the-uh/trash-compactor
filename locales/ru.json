@@ -61,8 +61,6 @@
     "LZX compression requires at least {min_physical} cores and {min_logical} threads.": "Сжатие LZX требует как минимум {min_physical} ядер и {min_logical} потоков.",
     "LZX compression has been disabled for better system responsiveness.": "Сжатие LZX отключено для лучшей отзывчивости системы.",
     "Use -f flag to force LZX if you're feeling adventurous.": "Используйте флаг -f для принудительного включения LZX, если хотите рискнуть.",
-    "Enter directory path to compress: ": "Введите путь к директории для сжатия: ",
-    "Directory path cannot be empty.": "Путь к директории не может быть пустым.",
     "Unable to resolve the target volume. Please verify the path.": "Не удалось определить целевой том. Пожалуйста, проверьте путь.",
     "Network shares are not supported targets for compression.": "Сетевые ресурсы не поддерживаются для сжатия.",
     "Please select a local NTFS volume instead.": "Пожалуйста, выберите локальный том NTFS.",

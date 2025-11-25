@@ -225,7 +225,7 @@ def compress_directory(
                 )
             if interactive_output:
                 with stage_lock:
-                    for algo, _ in stage_items:
+                    for algo, _ignored in stage_items:
                         idx = stage_index_map.get(algo)
                         if idx is not None:
                             stage_states[idx] = 'done'

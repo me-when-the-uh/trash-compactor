@@ -18,12 +18,12 @@ from src import (
     set_worker_cap,
 )
 from src.console import display_banner, prompt_exit
-from src.launch import acquire_directory, interactive_configure
-from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
+from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
+from src.file_utils import describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 from src.i18n import _, load_translations
 
-VERSION = "0.4.5"
+VERSION = "0.5.0-beta"
 BUILD_DATE = "who cares"
 
 
@@ -225,7 +225,8 @@ def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
         args.min_savings = config.DEFAULT_MIN_SAVINGS_PERCENT
     else:
         args.min_savings = config.clamp_savings_percent(args.min_savings)
-    interactive_launch = len(argv) == 0
+    
+    interactive_launch = not args.directory
     if interactive_launch:
         args = interactive_configure(args)
         args.min_savings = config.clamp_savings_percent(args.min_savings)

@@ -1,3 +1,4 @@
+import logging
 import os
 import shlex
 import subprocess
@@ -9,7 +10,13 @@ from colorama import Fore, Style
 
 from . import config
 from .console import EscapeExit, announce_cancelled, read_user_input
-from .runtime import resolve_directory, sanitize_path
+from .file_utils import (
+    DRIVE_FIXED,
+    DRIVE_REMOTE,
+    get_volume_details,
+    sanitize_path,
+)
+from .workers import set_worker_cap
 from .i18n import _
 
 def pick_directory_dialog() -> Optional[str]:
@@ -39,6 +46,125 @@ def pick_directory_dialog() -> Optional[str]:
         return path if path else None
     except FileNotFoundError:
         return None
+
+
+def configure_lzx(choice_enabled: bool, force_lzx: bool, cpu_capable: bool, physical: int, logical: int) -> bool:
+    if not choice_enabled:
+        if force_lzx:
+            logging.info(_("Ignoring -f because -x disables LZX explicitly"))
+        print(Fore.YELLOW + _("-x: LZX compression disabled via command line flag."))
+        config.COMPRESSION_ALGORITHMS['large'] = 'XPRESS16K'
+        return False
+
+    if cpu_capable or force_lzx:
+        config.COMPRESSION_ALGORITHMS['large'] = 'LZX'
+        if force_lzx and not cpu_capable:
+            logging.info(
+                _("Forcing LZX compression despite CPU having only {physical} cores and {logical} threads").format(
+                    physical=physical, logical=logical
+                )
+            )
+        else:
+            logging.info(
+                _("Using LZX compression (CPU deemed capable - it has {physical} cores and {logical} threads)").format(
+                    physical=physical, logical=logical
+                )
+            )
+        return True
+
+    config.COMPRESSION_ALGORITHMS['large'] = 'XPRESS16K'
+    print(Fore.YELLOW + _("\nNotice: Your CPU has {physical} cores and {logical} threads.").format(physical=physical, logical=logical))
+    print(_("LZX compression requires at least {min_physical} cores and {min_logical} threads.").format(
+        min_physical=config.MIN_PHYSICAL_CORES_FOR_LZX, min_logical=config.MIN_LOGICAL_CORES_FOR_LZX
+    ))
+    print(_("LZX compression has been disabled for better system responsiveness."))
+    print(_("Use -f flag to force LZX if you're feeling adventurous."))
+    return False
+
+
+def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
+    details = get_volume_details(directory)
+    throttle_requested = force_serial  # Carry over manual single-worker overrides
+    target_label = details.drive_letter or directory
+
+    if details.anchor is None:
+        logging.error(_("Unable to resolve volume for %s"), directory)
+        print(Fore.RED + _("Unable to resolve the target volume. Please verify the path.") + Style.RESET_ALL)
+        return False
+
+    if details.drive_type == DRIVE_REMOTE:
+        logging.error(_("Network shares are not supported for compression targets: %s"), directory)
+        print(Fore.RED + _("Network shares are not supported targets for compression.") + Style.RESET_ALL)
+        print(_("Please select a local NTFS volume instead."))
+        return False
+
+    if details.filesystem and details.filesystem != 'NTFS':
+        logging.error(
+            _("Compression requires NTFS, but %s reports %s"),
+            details.drive_letter or directory,
+            details.filesystem,
+        )
+        print(Fore.RED + _("Windows compression requires NTFS.") + Style.RESET_ALL)
+        print(_("Detected filesystem: {filesystem}").format(filesystem=details.filesystem or 'unknown'))
+        return False
+
+    if details.drive_type != DRIVE_FIXED:
+        logging.info(
+            _("Volume %s is not a fixed disk (type=%s); skipping HDD warning."),
+            target_label,
+            details.drive_type,
+        )
+        if throttle_requested:
+            set_worker_cap(1)
+            logging.info(_("Single-worker mode honored even though the drive is not fixed media."))
+        return True
+
+    if details.rotational is not True:
+        if details.rotational is None:
+            logging.debug(
+                _("Drive %s did not report seek penalty; treating as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag."),
+                target_label,
+            )
+        if throttle_requested:
+            set_worker_cap(1)
+            logging.info(_("Single-worker mode requested explicitly for %s."), target_label)
+        return True
+
+    print(Fore.YELLOW + _("Detected a traditional spinning hard drive for this path.") + Style.RESET_ALL)
+    print(_("Sustained compression can thrash the disk heads, fragment files, and slow app/game launches.") + Style.RESET_ALL)
+    print(Fore.YELLOW + _("\nRecommendation:") + Style.RESET_ALL)
+    print(_("• Run the task during idle hours and use the single-worker mode (-s)"))
+    print(_("• Defragment the drive once compression finishes"))
+    print(_("• Prefer compressing rarely modified folders on HDDs"))
+
+
+    print("\n" + Fore.YELLOW + _("\nDo you want to proceed anyway? (y/n): ") + Style.RESET_ALL, end="")
+    try:
+        response = read_user_input("").strip().lower()
+    except (KeyboardInterrupt, EscapeExit):
+        announce_cancelled()
+        return False
+    if response not in {"y", "yes"}:
+        print(Fore.CYAN + _("Operation cancelled.") + Style.RESET_ALL)
+        return False
+
+    if not throttle_requested:
+        print(Fore.YELLOW + _("\nThrottle compression to a single worker to avoid disk fragmentation? (Y/n): ") + Style.RESET_ALL, end="")
+        try:
+            throttle_response = read_user_input("").strip().lower()
+        except (KeyboardInterrupt, EscapeExit):
+            announce_cancelled()
+            return False
+        throttle_requested = throttle_response in {"", "y", "yes"}
+
+    if throttle_requested:
+        set_worker_cap(1)
+        logging.info(_("Single-worker mode engaged for %s due to HDD safeguards."), target_label)
+        if not force_serial:
+            print(Fore.YELLOW + _("Running sequentially to keep fragmentation in check.") + Style.RESET_ALL)
+
+    print(Fore.YELLOW + _("\nProceeding with compression on HDD. This may impact system performance.") + Style.RESET_ALL)
+    return True
 
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
@@ -407,15 +533,6 @@ def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, N
         else:
             print(Fore.RED + _("No directory provided.") + Style.RESET_ALL)
 
-        if interactive_launch:
-            args.directory = ""
-            args = interactive_configure(args)
-        else:
-            try:
-                args.directory = resolve_directory(None)
-            except EscapeExit:
-                announce_cancelled()
-                raise SystemExit(0)
-            except KeyboardInterrupt:
-                announce_cancelled()
-                raise SystemExit(0)
+        # Force interactive mode if directory is missing/invalid
+        args.directory = ""
+        args = interactive_configure(args)
