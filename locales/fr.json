@@ -144,5 +144,8 @@
     "<not set>": "<non défini>",
     "Set minimum expected savings percentage (0-90)": "Définir le pourcentage minimum d'économie d'espace attendu (0-90)",
     "Performance benchmark completed in {elapsed:.3f}s.": "Performance benchmark completed in {elapsed:.3f}s.",
-    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications."
+    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.",
+    "Do you want to proceed with compression? [y/N]: ": "\nVoulez-vous procéder à la compression ? [o/N] : ",
+    "Compression cancelled.": "Compression annulée.",
+    "\nStarting compression...": "Démarrage de la compression..."
 }

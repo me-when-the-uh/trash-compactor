@@ -12,16 +12,20 @@ from src import (
     compress_directory_legacy,
     config,
     entropy_dry_run,
+    execute_compression_plan_wrapper,
     get_cpu_info,
     print_compression_summary,
     print_entropy_dry_run,
     set_worker_cap,
 )
-from src.console import display_banner, prompt_exit
+from src.console import display_banner, prompt_exit, read_user_input
 from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
 from src.file_utils import describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 from src.i18n import _, load_translations
+from src.stats import CompressionStats
+from src.timer import PerformanceMonitor
+from pathlib import Path
 
 VERSION = "0.5.0-beta"
 BUILD_DATE = "who cares"
@@ -207,9 +211,9 @@ def run_compression(directory: str, verbosity: int, thorough: bool, min_savings:
     monitor.print_summary()
 
 
-def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> None:
+def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
     logging.info(_("Starting entropy dry run for directory: %s"), directory)
-    stats, monitor = entropy_dry_run(
+    stats, monitor, plan = entropy_dry_run(
         directory,
         verbosity=verbosity,
         min_savings_percent=min_savings,
@@ -217,6 +221,7 @@ def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> N
     print_entropy_dry_run(stats, min_savings, verbosity)
     log_directory_skips(stats, verbosity, min_savings)
     monitor.print_summary()
+    return stats, monitor, plan
 
 
 def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
@@ -315,11 +320,30 @@ def main() -> None:
         return
 
     if getattr(args, "dry_run", False):
-        run_entropy_dry_run(
+        stats, monitor, plan = run_entropy_dry_run(
             directory,
             verbosity=args.verbose,
             min_savings=args.min_savings,
         )
+        
+        if plan:
+            print()
+            response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+            if response in ('y', 'yes'):
+                print(_("\nStarting compression..."))
+                monitor.start_operation()
+                stats, monitor = execute_compression_plan_wrapper(
+                    stats,
+                    monitor,
+                    plan,
+                    verbosity_level=args.verbose,
+                    interactive_output=True,
+                    min_savings_percent=args.min_savings
+                )
+                print_compression_summary(stats)
+                monitor.print_summary()
+            else:
+                print(_("Compression cancelled."))
     elif args.brand_files:
         run_branding(directory, thorough=args.thorough)
     else:

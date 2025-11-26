@@ -42,12 +42,12 @@ def _setup_context(
     return stats, monitor, base_dir, min_savings_percent, verbosity_level
 
 
-def compress_directory(
+def create_compression_plan(
     directory_path: str,
     verbosity: int = 0,
     thorough_check: bool = False,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
-) -> tuple[CompressionStats, PerformanceMonitor]:
+) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]], Path, float, int]:
     import logging
 
     stats, monitor, base_dir, min_savings_percent, verbosity_level = _setup_context(
@@ -94,7 +94,33 @@ def compress_directory(
                 final_skip_message = _("\nNo files discovered for compression.\n")
             timer.stop(final_message=final_skip_message)
             timer = None
+            
+    return stats, monitor, plan, base_dir, min_savings_percent, verbosity_level
 
+
+def compress_directory(
+    directory_path: str,
+    verbosity: int = 0,
+    thorough_check: bool = False,
+    min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
+) -> tuple[CompressionStats, PerformanceMonitor]:
+    
+    stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
+        directory_path, verbosity, thorough_check, min_savings_percent
+    )
+    interactive_output = verbosity_level == 0
+
+    return execute_compression_plan_wrapper(stats, monitor, plan, verbosity_level, interactive_output, min_savings_percent)
+
+
+def execute_compression_plan_wrapper(
+    stats: CompressionStats,
+    monitor: PerformanceMonitor,
+    plan: list[tuple[Path, int, str]],
+    verbosity_level: int,
+    interactive_output: bool,
+    min_savings_percent: float,
+) -> tuple[CompressionStats, PerformanceMonitor]:
     monitor.stats.files_skipped = stats.skipped_files
 
     stage_items: list[tuple[str, list[tuple[Path, int]]]] = []
@@ -417,321 +443,40 @@ def entropy_dry_run(
     *,
     verbosity: int = 0,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
-) -> tuple[CompressionStats, PerformanceMonitor]:
-    import logging
-
-    stats, monitor, base_dir, min_savings_percent, verbosity_level = _setup_context(
-        directory_path, min_savings_percent, verbosity
+) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
+    
+    stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
+        directory_path, verbosity, thorough_check=False, min_savings_percent=min_savings_percent
     )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
 
-    timer: Optional[ProgressTimer] = None
-    if verbosity_level == 0 and getattr(sys.stdout, "isatty", lambda: True)():
-        timer = ProgressTimer()
-        timer.set_label(_("Scanning files..."))
-        timer.start()
-
-    root_decision = maybe_skip_directory(
-        base_dir,
-        base_dir,
-        stats,
-        collect_entropy=False,
-        min_savings_percent=min_savings_percent,
-        verbosity=verbosity,
-    )
-    if root_decision.skip:
-        logging.warning(
-            _("Dry run aborted: base directory %s is excluded (%s)"),
-            base_dir,
-            root_decision.reason or "excluded",
-        )
-        if timer:
-            timer.stop(_("\nEntropy analysis skipped: base directory excluded.\n"))
-        monitor.end_operation()
-        return stats, monitor
-
-    def _ancestors_through_base(path: Path) -> list[Path]:
-        chain: list[Path] = []
-        current = path
-        while True:
-            chain.append(current)
-            if current == base_dir:
-                break
-            parent = current.parent
-            if parent == current:
-                break
-            current = parent
-        return chain
-
-    eligible_directories: set[Path] = {base_dir}
-    eligible_files_found = 0
-    direct_file_bytes: defaultdict[Path, int] = defaultdict(int)
-
-    def _skipped_file_callback(file_path: Path) -> None:
-        try:
-            size = file_path.stat().st_size
-            direct_file_bytes[file_path.parent] += size
-        except OSError:
-            pass
-
-    with monitor.time_file_scan():
-        all_files = list(
-            iter_files(
-                base_dir,
-                stats,
-                verbosity,
-                min_savings_percent,
-                collect_entropy=False,
-                skipped_file_callback=_skipped_file_callback,
-            )
-        )
-    monitor.stats.total_files = len(all_files)
-
-    def _observe_file(file_path: Path, file_size: int, decision) -> None:
-        nonlocal eligible_files_found
-        direct_file_bytes[file_path.parent] += file_size
-        if decision.should_compress:
-            eligible_files_found += 1
-            for ancestor in _ancestors_through_base(file_path.parent):
-                eligible_directories.add(ancestor)
-
-    with monitor.time_file_scan():
-        plan_compression(
-            all_files,
-            stats,
-            monitor,
-            thorough_check=False,
-            base_dir=base_dir,
-            min_savings_percent=min_savings_percent,
-            verbosity=verbosity,
-            progress_callback=None,
-            file_observer=_observe_file,
-            apply_entropy_filter=False,
-        )
-    monitor.stats.files_skipped = stats.skipped_files
-    monitor.stats.files_compressed = stats.compressed_files
-    monitor.stats.files_analyzed_for_entropy = eligible_files_found
-
     stats.entropy_projected_original_bytes = stats.total_original_size
-
-    if eligible_files_found == 0:
-        if timer:
-            timer.stop(_("\nEntropy analysis skipped: no compressible files detected.\n"))
-        monitor.end_operation()
-        return stats, monitor
-
-    pending = deque([base_dir])
-    visited: set[Path] = set()
-    # Track directory topology so we can roll totals up without re-traversing
-    children_map: defaultdict[Path, list[Path]] = defaultdict(list)
-    ordered_dirs: list[Path] = []
-    raw_samples: list[tuple[Path, float, float, int, int]] = []
-    directories_to_sample: list[Path] = []
-
-    while pending:
-        current = pending.popleft()
-        try:
-            marker = current.resolve()
-        except OSError:
-            marker = current
-        if marker in visited:
-            continue
-        visited.add(marker)
-        ordered_dirs.append(current)
-
-        try:
-            entries = sorted(current.iterdir(), key=lambda entry: entry.name.casefold())
-        except OSError as exc:
-            logging.debug("Unable to inspect %s during dry run: %s", current, exc)
-            continue
-
-        for entry in entries:
-            if not entry.is_dir():
-                continue
-            decision = maybe_skip_directory(
-                entry,
-                base_dir,
-                stats,
-                collect_entropy=False,
-                min_savings_percent=min_savings_percent,
-                verbosity=verbosity,
-            )
-            if decision.skip:
-                continue
-            children_map[current].append(entry)
-            pending.append(entry)
-
-        if current == base_dir:
-            continue
-
-        if current not in eligible_directories:
-            continue
-
-        directories_to_sample.append(current)
-
-    if timer:
-        timer.set_label(_("Analysing entropy"))
-        timer.set_total(len(directories_to_sample))
-        timer.update(0, "")
-
-    def _entropy_callback(path: Path, result: tuple[Optional[float], int, int]) -> None:
-        if not timer:
-            return
+    
+    entropy_map = {Path(r.path): r for r in stats.entropy_samples}
+    
+    projected_compressed_lzx = 0.0
+    projected_compressed_xpress = 0.0
+    
+    for path, size, algo in plan:
+        parent = path.parent
+        record = entropy_map.get(parent)
         
-        average_entropy, _, _ = result
-        if average_entropy is None:
-            return
+        if record:
+            savings_factor = max(0.0, record.estimated_savings / 100.0)
+            compressed_size = size * (1.0 - savings_factor)
+            projected_compressed_lzx += compressed_size
+            projected_compressed_xpress += compressed_size * 1.062
+        else:
+            # Fallback if no entropy record found (e.g. sampling failed or skipped)
+            projected_compressed_lzx += size
+            projected_compressed_xpress += size
 
-        estimated_savings = savings_from_entropy(average_entropy)
-        below_threshold = estimated_savings < min_savings_percent
-        note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
-        
-        timer.update(timer.processed + 1, f"{timer.format_path(str(path), str(base_dir))} {note}")
-
-    with monitor.time_entropy_analysis():
-        sampled_results = _sample_directories_parallel(directories_to_sample, callback=_entropy_callback)
-
-    for current in directories_to_sample:
-        result = sampled_results.get(current)
-        if not result:
-            continue
-        
-        average_entropy, sampled_files, sampled_bytes = result
-        if average_entropy is None or sampled_files == 0 or sampled_bytes == 0:
-            continue
-
-        estimated_savings = savings_from_entropy(average_entropy)
-        stats.entropy_directories_sampled += 1
-        below_threshold = estimated_savings < min_savings_percent
-        if below_threshold:
-            stats.entropy_directories_below_threshold += 1
-
-        # Timer update moved to callback
-        
-        raw_samples.append((current, average_entropy, estimated_savings, sampled_files, sampled_bytes))
-
-        if verbosity >= 4:
-            logging.debug(
-                "Dry run sample %s: entropy %.2f (~%.1f%% savings) from %s files (%s bytes)",
-                current,
-                average_entropy,
-                estimated_savings,
-                sampled_files,
-                sampled_bytes,
-            )
-
-    def _relative_depth(path: Path) -> int:
-        if path == base_dir:
-            return 0
-        try:
-            return len(path.relative_to(base_dir).parts)
-        except ValueError:
-            return len(path.parts)
-
-    total_bytes_map: dict[Path, int] = {}
-    # Bottom-up accumulation keeps complexity linear while giving every directory its full size
-    for directory in sorted(ordered_dirs, key=_relative_depth, reverse=True):
-        total = direct_file_bytes.get(directory, 0)
-        for child in children_map.get(directory, []):
-            total += total_bytes_map.get(child, 0)
-        total_bytes_map[directory] = total
-
-    base_total = total_bytes_map.get(base_dir, 0)
-    if base_total and (verbosity >= 4 or base_total >= REPORTABLE_DIRECTORY_MIN_BYTES):
-        average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(
-            base_dir,
-            skip_root_files=True,
-        )
-        if average_entropy is not None and sampled_files > 0 and sampled_bytes > 0:
-            estimated_savings = savings_from_entropy(average_entropy)
-            stats.entropy_directories_sampled += 1
-            below_threshold = estimated_savings < min_savings_percent
-            if below_threshold:
-                stats.entropy_directories_below_threshold += 1
-            if timer:
-                note = "below threshold" if below_threshold else f"~{estimated_savings:.1f}% savings"
-                timer.set_label(
-                    _("Analysing directory entropy ({sampled})").format(sampled=stats.entropy_directories_sampled)
-                )
-                timer.update(
-                    stats.entropy_directories_sampled,
-                    f"{timer.format_path(str(base_dir), str(base_dir))} {note}",
-                )
-            raw_samples.append((base_dir, average_entropy, estimated_savings, sampled_files, sampled_bytes))
-
-            if verbosity >= 4:
-                logging.debug(
-                    "Dry run sample %s: entropy %.2f (~%.1f%% savings) from %s files (%s bytes)",
-                    base_dir,
-                    average_entropy,
-                    estimated_savings,
-                    sampled_files,
-                    sampled_bytes,
-                )
-
-    sampled_paths = {path for path, *_ in raw_samples}
-    reportable_totals: dict[Path, int] = {}
-    reported_flags: dict[Path, bool] = {}
-
-    # Filter out chains of single-child directories
-    for directory in sorted(ordered_dirs, key=_relative_depth, reverse=True):
-        residual = direct_file_bytes.get(directory, 0)
-        for child in children_map.get(directory, []):
-            if child in sampled_paths:
-                continue
-            residual += total_bytes_map.get(child, 0)
-        reportable_totals[directory] = residual
-        reported_flags[directory] = directory in sampled_paths and residual >= REPORTABLE_DIRECTORY_MIN_BYTES
-
-    records: list[EntropySampleRecord] = []
-    for path, average_entropy, estimated_savings, sampled_files, sampled_bytes in raw_samples:
-        records.append(
-            EntropySampleRecord(
-                path=str(path),
-                relative_path=_relative_path(path, base_dir),
-                average_entropy=average_entropy,
-                estimated_savings=estimated_savings,
-                sampled_files=sampled_files,
-                sampled_bytes=sampled_bytes,
-                total_bytes=total_bytes_map.get(path, 0),
-            )
-        )
-
-    if verbosity >= 4:
-        selected = records
-    else:
-        # Only surface directories that contribute to savings
-        selected = [
-            record for record in records if reported_flags.get(Path(record.path), False)
-        ]
-
-    stats.entropy_samples = selected
-    stats.entropy_samples.sort(key=lambda record: record.estimated_savings, reverse=True)
-
-    base_total = total_bytes_map.get(base_dir, 0)
-    projected_total = float(base_total)
-    for record in records:
-        record_path = Path(record.path)
-        share = reportable_totals.get(record_path, total_bytes_map.get(record_path, 0))
-        if share <= 0:
-            continue
-        if record.estimated_savings < min_savings_percent:
-            continue
-        projected_total -= share
-        projected_total += share * max(0.0, 1 - record.estimated_savings / 100.0)
-
-    stats.entropy_projected_original_bytes = base_total
-    stats.entropy_projected_compressed_bytes = max(int(round(projected_total)), 0)
-    if timer:
-        summary = (
-            _("\nEntropy analysis complete: {sampled} directories sampled, {below} below threshold.\n").format(
-                sampled=stats.entropy_directories_sampled,
-                below=stats.entropy_directories_below_threshold
-            )
-        )
-        timer.stop(summary)
+    skipped_size = stats.total_compressed_size
+    stats.entropy_projected_compressed_bytes = int(round(projected_compressed_lzx + skipped_size))
+    stats.entropy_projected_compressed_bytes_conservative = int(round(projected_compressed_xpress + skipped_size))
+    
     monitor.end_operation()
-    return stats, monitor
+    return stats, monitor, plan
 
 
 def _collect_branding_targets(

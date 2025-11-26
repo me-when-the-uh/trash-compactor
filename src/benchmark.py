@@ -16,7 +16,6 @@ def run_benchmark() -> bool:
     window = bytearray(window_size)
     pos = 0
     
-    # LCG state
     state = 123456789
     
     for _i in range(iterations):

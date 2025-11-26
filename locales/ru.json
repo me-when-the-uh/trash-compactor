@@ -148,5 +148,8 @@
     "<not set>": "<не задано>",
     "Set minimum expected savings percentage (0-90)": "Установить минимальный ожидаемый процент экономии (0-90)",
     "Performance benchmark completed in {elapsed:.3f} seconds.": "Тест производительности завершен за {elapsed:.3f} сек.",
-    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nПримечание: Сжатие LZX отключено для предотвращения медленного запуска сжатых приложений."
+    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nПримечание: Сжатие LZX отключено для предотвращения медленного запуска сжатых приложений.",
+    "Do you want to proceed with compression? [y/N]: ": "Вы хотите продолжить сжатие? [y/N]: ",
+    "Compression cancelled.": "Сжатие отменено.",
+    "\nStarting compression...": "\nНачинается сжатие..."
 }

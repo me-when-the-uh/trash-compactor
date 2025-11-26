@@ -1,4 +1,10 @@
-from .compression_module import compress_directory, compress_directory_legacy, entropy_dry_run, set_worker_cap
+from .compression_module import (
+    compress_directory,
+    compress_directory_legacy,
+    entropy_dry_run,
+    execute_compression_plan_wrapper,
+    set_worker_cap,
+)
 from .stats import (
 	CompressionStats,
 	LegacyCompressionStats,
