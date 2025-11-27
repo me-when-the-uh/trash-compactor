@@ -9,7 +9,7 @@ from ..i18n import _
 from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy
 from ..file_utils import CompressionDecision, should_compress_file
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory, sample_directory_entropy
-from ..stats import CompressionStats, DirectorySkipRecord
+from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
 
@@ -239,6 +239,23 @@ def _filter_high_entropy_directories(
                 sampled_files,
                 sampled_bytes,
             )
+            
+            # Record sample for root
+            from ..skip_logic import _relative_to_base
+            root_sample = EntropySampleRecord(
+                path=str(base_dir),
+                relative_path=_relative_to_base(base_dir, base_dir),
+                average_entropy=average_entropy,
+                estimated_savings=estimated_savings,
+                sampled_files=sampled_files,
+                sampled_bytes=sampled_bytes,
+                total_bytes=0,
+            )
+            stats.entropy_samples.append(root_sample)
+            stats.entropy_directories_sampled += 1
+            if estimated_savings < min_savings_percent:
+                stats.entropy_directories_below_threshold += 1
+
             if estimated_savings < min_savings_percent:
                 reason = f"High entropy (est. {estimated_savings:.1f}% savings)"
                 root_skip_record = DirectorySkipRecord(
@@ -260,7 +277,7 @@ def _filter_high_entropy_directories(
                     )
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
-    entropy_records = evaluate_directories_parallel(
+    entropy_records, sample_records = evaluate_directories_parallel(
         (directory for directory in directories if directory != base_dir),
         base_dir,
         min_savings_percent,
@@ -269,8 +286,14 @@ def _filter_high_entropy_directories(
     )
 
     if monitor:
-        for record in entropy_records.values():
+        for record in sample_records:
             monitor.stats.files_analyzed_for_entropy += record.sampled_files
+    
+    for record in sample_records:
+        stats.entropy_samples.append(record)
+        stats.entropy_directories_sampled += 1
+        if record.estimated_savings < min_savings_percent:
+            stats.entropy_directories_below_threshold += 1
 
     for directory in sorted(directories, key=lambda item: (len(item.parts), str(item).casefold())):
         if _has_skipped_ancestor(directory, base_dir, skipped_directories):
@@ -362,10 +385,10 @@ def evaluate_directories_parallel(
     min_savings_percent: float,
     verbosity: int,
     progress_callback: Optional[Callable[[Path, int], None]] = None,
-) -> dict[Path, DirectorySkipRecord]:
+) -> tuple[dict[Path, DirectorySkipRecord], list[EntropySampleRecord]]:
     directory_list = list(directories)
     if not directory_list:
-        return {}
+        return {}, []
 
     worker_count = entropy_worker_count()
     processed_count = 0
@@ -376,16 +399,19 @@ def evaluate_directories_parallel(
         if progress_callback:
             progress_callback(directory, processed_count)
 
-    if worker_count <= 1 or len(directory_list) == 1:
-        results: dict[Path, DirectorySkipRecord] = {}
-        for directory in directory_list:
-            record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
-            _on_complete(directory)
-            if record:
-                results[directory] = record
-        return results
+    skip_results: dict[Path, DirectorySkipRecord] = {}
+    sample_results: list[EntropySampleRecord] = []
 
-    results: dict[Path, DirectorySkipRecord] = {}
+    if worker_count <= 1 or len(directory_list) == 1:
+        for directory in directory_list:
+            skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
+            _on_complete(directory)
+            if skip_record:
+                skip_results[directory] = skip_record
+            if sample_record:
+                sample_results.append(sample_record)
+        return skip_results, sample_results
+
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
         future_map = {
             executor.submit(
@@ -402,11 +428,13 @@ def evaluate_directories_parallel(
             directory = future_map[future]
             _on_complete(directory)
             try:
-                record = future.result()
-                if record:
-                    results[directory] = record
+                skip_record, sample_record = future.result()
+                if skip_record:
+                    skip_results[directory] = skip_record
+                if sample_record:
+                    sample_results.append(sample_record)
             except Exception:
                 pass
 
-    return results
+    return skip_results, sample_results
 

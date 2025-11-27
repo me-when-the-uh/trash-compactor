@@ -238,7 +238,7 @@ def _compression_probe_entropy(sample: bytes) -> float:
     if not sample:
         return 0.0
     try:
-        compressed = zlib.compress(sample, level=1)
+        compressed = zlib.compress(sample, level=2)
     except Exception as exc:  # pragma: no cover - extremely rare
         logging.debug("Falling back to Shannon entropy for probe failure: %s", exc)
         return shannon_entropy(sample)

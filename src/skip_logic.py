@@ -6,7 +6,7 @@ from .i18n import _
 from .config import savings_from_entropy
 from .compression.entropy import sample_directory_entropy
 from .file_utils import DirectoryDecision, should_skip_directory
-from .stats import CompressionStats, DirectorySkipRecord
+from .stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 
 
 def _relative_to_base(path: Path, base: Path) -> str:
@@ -21,13 +21,13 @@ def evaluate_entropy_directory(
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-) -> Optional[DirectorySkipRecord]:
+) -> tuple[Optional[DirectorySkipRecord], Optional[EntropySampleRecord]]:
     if directory == base_dir:
-        return None
+        return None, None
 
     average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(directory)
     if average_entropy is None or sampled_files == 0 or sampled_bytes < 1024:
-        return None
+        return None, None
 
     estimated_savings = savings_from_entropy(average_entropy)
 
@@ -40,8 +40,18 @@ def evaluate_entropy_directory(
         sampled_bytes,
     )
 
+    sample_record = EntropySampleRecord(
+        path=str(directory),
+        relative_path=_relative_to_base(directory, base_dir),
+        average_entropy=average_entropy,
+        estimated_savings=estimated_savings,
+        sampled_files=sampled_files,
+        sampled_bytes=sampled_bytes,
+        total_bytes=0,  # Will be filled later if needed
+    )
+
     if estimated_savings >= min_savings_percent:
-        return None
+        return None, sample_record
 
     if verbosity >= 1:
         logging.info(
@@ -52,7 +62,7 @@ def evaluate_entropy_directory(
         )
 
     reason = _("High entropy (est. {savings:.1f}% savings)").format(savings=estimated_savings)
-    return DirectorySkipRecord(
+    skip_record = DirectorySkipRecord(
         path=str(directory),
         relative_path=_relative_to_base(directory, base_dir),
         reason=reason,
@@ -62,6 +72,7 @@ def evaluate_entropy_directory(
         sampled_files=sampled_files,
         sampled_bytes=sampled_bytes,
     )
+    return skip_record, sample_record
 
 
 def maybe_skip_directory(
@@ -87,10 +98,17 @@ def maybe_skip_directory(
     if not collect_entropy:
         return DirectoryDecision.allow_path()
 
-    entropy_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
-    if entropy_record:
-        append_directory_skip_record(stats, entropy_record)
-        return DirectoryDecision.deny(entropy_record.reason)
+    skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
+    
+    if sample_record:
+        stats.entropy_samples.append(sample_record)
+        stats.entropy_directories_sampled += 1
+        if sample_record.estimated_savings < min_savings_percent:
+            stats.entropy_directories_below_threshold += 1
+
+    if skip_record:
+        append_directory_skip_record(stats, skip_record)
+        return DirectoryDecision.deny(skip_record.reason)
 
     return DirectoryDecision.allow_path()
 
