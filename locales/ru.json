@@ -61,8 +61,6 @@
     "LZX compression requires at least {min_physical} cores and {min_logical} threads.": "Сжатие LZX требует как минимум {min_physical} ядер и {min_logical} потоков.",
     "LZX compression has been disabled for better system responsiveness.": "Сжатие LZX отключено для лучшей отзывчивости системы.",
     "Use -f flag to force LZX if you're feeling adventurous.": "Используйте флаг -f для принудительного включения LZX, если хотите рискнуть.",
-    "Enter directory path to compress: ": "Введите путь к директории для сжатия: ",
-    "Directory path cannot be empty.": "Путь к директории не может быть пустым.",
     "Unable to resolve the target volume. Please verify the path.": "Не удалось определить целевой том. Пожалуйста, проверьте путь.",
     "Network shares are not supported targets for compression.": "Сетевые ресурсы не поддерживаются для сжатия.",
     "Please select a local NTFS volume instead.": "Пожалуйста, выберите локальный том NTFS.",
@@ -148,5 +146,10 @@
     "Dry run aborted: base directory %s is excluded (%s)": "Тестовый прогон прерван: базовая директория %s исключена (%s)",
     "<none>": "<нет>",
     "<not set>": "<не задано>",
-    "Set minimum expected savings percentage (0-90)": "Установить минимальный ожидаемый процент экономии (0-90)"
+    "Set minimum expected savings percentage (0-90)": "Установить минимальный ожидаемый процент экономии (0-90)",
+    "Performance benchmark completed in {elapsed:.3f} seconds.": "Тест производительности завершен за {elapsed:.3f} сек.",
+    "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nПримечание: Сжатие LZX отключено для предотвращения медленного запуска сжатых приложений.",
+    "Do you want to proceed with compression? [y/N]: ": "Вы хотите продолжить сжатие? [y/N]: ",
+    "Compression cancelled.": "Сжатие отменено.",
+    "\nStarting compression...": "\nНачинается сжатие..."
 }

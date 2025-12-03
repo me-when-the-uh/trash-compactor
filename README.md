@@ -122,11 +122,6 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 
 ### Short-term Goals
 - Let users start compression after a dry run without having to relaunch the program
-- Add basic test suite for core functionality
-  - Implement a single-thread benchmark to check if the CPU is fast enough to use LZX (to check if the CPU is not an Intel Atom with numerous, but weak cores)
-  - Test compression detection accuracy
-  - Verify that API calls work correctly
-  - Check error handling paths
 
 ### Long-term Goals
 - Create a 1-click/unattended mode of operation:

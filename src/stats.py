@@ -176,6 +176,7 @@ class CompressionStats:
     entropy_report_threshold_bytes: int = 0
     entropy_projected_original_bytes: int = 0
     entropy_projected_compressed_bytes: int = 0
+    entropy_projected_compressed_bytes_conservative: int = 0
 
     def set_base_dir(self, base_dir: Path) -> None:
         self.base_dir = base_dir
@@ -318,7 +319,7 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, v
     if stats.entropy_projected_original_bytes:
         original = stats.entropy_projected_original_bytes
         base_compressed = stats.entropy_projected_compressed_bytes
-        alt_compressed = int(round(base_compressed * 1.062))
+        alt_compressed = stats.entropy_projected_compressed_bytes_conservative
 
         def _log_savings_line(comp_bytes: int, label: str) -> None:
             savings = max(0, original - comp_bytes)
