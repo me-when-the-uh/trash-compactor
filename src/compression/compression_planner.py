@@ -125,7 +125,7 @@ def plan_compression(
     progress_callback: Optional[Callable[[Path, int, bool, Optional[str]], None]] = None,
     file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
     apply_entropy_filter: bool = True,
-    entropy_progress_callback: Optional[Callable[[Path, int], None]] = None,
+    entropy_progress_callback: Optional[Callable[[Path, int, int], None]] = None,
 ) -> list[tuple[Path, int, str]]:
     ordered_candidates: list[tuple[int, Path, int, str]] = []
     with monitor.time_file_scan():
@@ -212,7 +212,7 @@ def _filter_high_entropy_directories(
     monitor: Optional[PerformanceMonitor] = None,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int], None]] = None,
+    progress_callback: Optional[Callable[[Path, int, int], None]] = None,
 ) -> list[tuple[Path, int, str]]:
     if not candidates or min_savings_percent <= 0:
         return candidates
@@ -384,7 +384,7 @@ def evaluate_directories_parallel(
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int], None]] = None,
+    progress_callback: Optional[Callable[[Path, int, int], None]] = None,
 ) -> tuple[dict[Path, DirectorySkipRecord], list[EntropySampleRecord]]:
     directory_list = list(directories)
     if not directory_list:
@@ -392,12 +392,13 @@ def evaluate_directories_parallel(
 
     worker_count = entropy_worker_count()
     processed_count = 0
+    total_count = len(directory_list)
 
     def _on_complete(directory: Path) -> None:
         nonlocal processed_count
         processed_count += 1
         if progress_callback:
-            progress_callback(directory, processed_count)
+            progress_callback(directory, processed_count, total_count)
 
     skip_results: dict[Path, DirectorySkipRecord] = {}
     sample_results: list[EntropySampleRecord] = []

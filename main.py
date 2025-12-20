@@ -25,9 +25,10 @@ from src.skip_logic import log_directory_skips
 from src.i18n import _, load_translations
 from src.stats import CompressionStats
 from src.timer import PerformanceMonitor
+from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.5.0-beta"
+VERSION = "0.5.0"
 BUILD_DATE = "who cares"
 
 
@@ -104,6 +105,14 @@ def build_parser() -> argparse.ArgumentParser:
         "directory",
         nargs="?",
         help=_("Target directory to compress. Omit to start the interactive walkthrough."),
+    )
+
+    # Not part of the advertised CLI surface yet; used by the interactive launcher.
+    parser.add_argument(
+        "--one-click",
+        action="store_true",
+        help=argparse.SUPPRESS,
+        dest="one_click",
     )
     parser.add_argument(
         "-v",
@@ -220,12 +229,14 @@ def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> t
     )
     print_entropy_dry_run(stats, min_savings, verbosity)
     log_directory_skips(stats, verbosity, min_savings)
-    monitor.print_summary()
+    monitor.stats.print_dry_run_metrics(min_percent=0.5)
     return stats, monitor, plan
 
 
 def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
     args = build_parser().parse_args(argv)
+    if not hasattr(args, 'one_click'):
+        setattr(args, 'one_click', False)
     if args.min_savings is None:
         args.min_savings = config.DEFAULT_MIN_SAVINGS_PERCENT
     else:
@@ -314,6 +325,26 @@ def main() -> None:
 
     _emit_verbosity_banner(args.verbose)
 
+    if getattr(args, 'one_click', False) and not args.directory:
+        if not is_admin():
+            logging.error(_("This script requires administrator privileges"))
+            prompt_exit()
+            return
+
+        physical_cores, logical_cores = get_cpu_info()
+        configure_lzx(
+            choice_enabled=not args.no_lzx,
+            force_lzx=args.force_lzx,
+            cpu_capable=config.is_cpu_capable_for_lzx(),
+            physical=physical_cores,
+            logical=logical_cores,
+        )
+
+        run_one_click_mode(verbosity=args.verbose, min_savings=args.min_savings)
+        print(_("\nOperation completed."))
+        prompt_exit()
+        return
+
     directory = _configure_runtime(args, interactive_launch)
     if directory is None:
         prompt_exit()
@@ -328,7 +359,12 @@ def main() -> None:
         
         if plan:
             print()
-            response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+            try:
+                response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+            except KeyboardInterrupt:
+                print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
+                sys.exit(130)
+
             if response in ('y', 'yes'):
                 print(_("\nStarting compression..."))
                 monitor.start_operation()

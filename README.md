@@ -1,5 +1,9 @@
 # Trash-Compactor
-  A utility for intelligent file compression on Windows 10/11 systems using the built-in NTFS compression algorithms and Windows' built-in "compact.exe" utility. Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) (another tool that is based on compact.exe and primarily designed for compressing Steam games), this utility automatically selects the optimal compression algorithm based on file size - this lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression and preventing excessive SSD wear, keeping things DRY.
+  A utility for intelligent file compression on Windows 10/11 systems using the built-in NTFS compression algorithms and Windows' built-in "compact.exe" utility. Compressing files at the filesystem level is quite different from your average .zip or .7z compression (which is strictly for archival purposes) and it's seamless - you won't see a difference, but the apps will shrink in size without deleting anything. 
+  
+  Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) (another tool that is based on compact.exe and primarily designed for compressing Steam games), this utility automatically selects the optimal compression algorithm based on file size - this lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression and preventing excessive SSD wear, keeping things DRY. 
+  
+Compressing large directories to gain extra storage space will be so free and without downsides that it'll be the closest thing to having "free real estate".
 
   ## Features
 
@@ -10,12 +14,20 @@
   - Multiple operation modes for different use cases
   - Skips poorly-compressed file formats (zip, media files, etc.)
   - Skips already-compressed files
-  - Detailed compression statistics and per-run throughput metrics
+  - Skips using LZX compression if the computer is identified as too slow to handle it without performance losses (taking care of users)
+  - Detailed compression and file throughput stats
+
+  ## Limitations
+
+  - It's only for storage devices with an NTFS file system, like your system drive and external flash drives and SSDs if they're formatted to use NTFS. If it's FAT32, exFAT or ReFS - it won't work for you.
+  - It's best to assume that it likely won't work on network drives even if they are formatted to NTFS (haven't tested it).
+  - Spinning hard drives might get fragmented, negatively impacting read performance.
 
   ## Requirements
 
   - Windows 10/11
-  - Administrator privileges
+  - Administrator privileges (but I'm looking for ways to drop this requirement)
+  - **Optional: Temporarily disabled antivirus** - it will dramatically speed up the performance (Don't worry about the so-called "viruses" - the source code is right here and you can compile the program yourself)
 
 ## Installation
 
@@ -37,7 +49,7 @@
     python main.py
     ```
 
-Note: For Option 2, ensure Git and Python 3.8+ are installed on your system.
+Note: For Option 2, ensure Git and Python 3.9 or higher are installed on your system.
 
 Optional: you can compile the app yourself as I did, using PyInstaller:
     ```powershell
@@ -51,7 +63,7 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
 ## Usage
 
 1. Run the program as Administrator.
-2. Enter the directory path you want to compress.
+2. Choose the mode - either the 1-click run mode to get most things done fast or the manual mode.
 3. The program will automatically:
     - Scan all files recursively
     - Skip poorly compressible files
@@ -70,9 +82,19 @@ Launching without arguments opens an interactive shell that lets you browse to t
 
 Trash-Compactor offers three distinct operation modes to handle different scenarios:
 
-#### Normal Mode (Default)
+#### 1-Click / Unattended Mode (Preferred)
+Press `1` upon starting to run this mode. Most users can just compress their directories once and forget about it. Designed to be extremely simple to use for a casual user, a system administrator, refurbisher, or the so-called family tech support.
+This mode will automatically compress the following directories:
+- `Program Files`
+- `Program Files (x86)` (including your Steam folder)
+- `AppData`
+- `Downloads`
+- `Windows` (using Windows' built-in CompactOS feature to compress system binaries safely)
+
+Expect at least 15GB to be saved on stock Windows installations.
+
+#### Normal Mode
 For first-time compression of directories with optimal performance.
-Most users can just compress once and forget about it.
 Be aware that temporarily disabling the anti-virus or whitelisting this program is going to greatly improve the compression speed.
 ```powershell
 .\trash-compactor.exe C:\path\to\compress
@@ -93,8 +115,8 @@ HDDs read data sequentially and they can't handle the extreme I/O that the progr
 
 ### Additional Options
 
-- `-v, --verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
-- `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 15). Directories predicted to save less are skipped automatically
+- `-v`, or `--verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
+- `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically
 
 ## Development
 
@@ -103,16 +125,12 @@ To contribute to this project:
 1. Create a new branch for your feature.
 2. Submit a pull request.
 
+### Like this project? 
+Put a "star" if you find this project helpful or cool. I don't know what they do, apart for giving some small bragging rights, but maybe it might get introduced to more people, which will be great, as the collective storage savings will contribute to less e-waste - especially if an SSD is soldered onto the laptop's motherboard and is not replaceable, turning the laptop into a paperweight if it fails prematurely - which it surely will.
+
 ## To-Do
 
-### Short-term Goals
-- Let users start compression after a dry run without having to relaunch the program
-
 ### Long-term Goals
-- Create a 1-click/unattended mode of operation:
-  - Automatically discover large folders (replacing WizTree and having to manually scour through folders)
-  - Avoid compressing specific folders, such as ones mentioned in short-term goals
-  - Make life easier for The Greatest Technicians That Have Ever Lived
 - Research advanced compression methods:
   - Evaluate alternative NTFS compression APIs, like [UPX](https://github.com/upx/upx)
   - Consider filesystem-agnostic approaches (moving compressed files in/out of the source drive unpacks them)

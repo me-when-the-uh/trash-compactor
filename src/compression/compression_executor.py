@@ -21,20 +21,21 @@ def _hidden_startupinfo() -> subprocess.STARTUPINFO:
     return startupinfo
 
 
-def _run_compact(command: str, *, capture: bool = False) -> subprocess.CompletedProcess:
+def _run_compact(args: Sequence[str], *, capture: bool = False) -> subprocess.CompletedProcess:
     return subprocess.run(
-        command,
+        args,
         stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
         stderr=subprocess.PIPE if capture else subprocess.DEVNULL,
         startupinfo=_hidden_startupinfo(),
-        shell=True,
+        shell=False,
         text=capture,
     )
 
 
 def compress_file(file_path: Path, algorithm: str) -> bool:
     try:
-        command = fr'compact /c /a /exe:{algorithm} "{file_path.resolve()}"'
+        # compact /c /a /exe:{algorithm} "{file_path}"
+        command = ['compact', '/c', '/a', f'/exe:{algorithm}', str(file_path.resolve())]
         result = _run_compact(command)
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError) as exc:
@@ -44,7 +45,8 @@ def compress_file(file_path: Path, algorithm: str) -> bool:
 
 def legacy_compress_file(file_path: Path) -> bool:
     try:
-        command = fr'compact /c "{Path(file_path).resolve()}"'
+        # compact /c "{file_path}"
+        command = ['compact', '/c', str(file_path.resolve())]
         result = _run_compact(command, capture=True)
         logging.debug("Command: %s", command)
         logging.debug("Output: %s", result.stdout)
@@ -90,8 +92,10 @@ def execute_compression_plan(
             yield current
 
     def _compact_batch(algo: str, paths: Sequence[Path]) -> subprocess.CompletedProcess:
-        quoted = " ".join(f'"{path.resolve()}"' for path in paths)
-        return _run_compact(f'compact /c /a /exe:{algo} {quoted}')
+        # compact /c /a /exe:{algo} path1 path2 ...
+        args = ['compact', '/c', '/a', f'/exe:{algo}']
+        args.extend(str(path.resolve()) for path in paths)
+        return _run_compact(args)
 
     def _record_error(message: str) -> None:
         with stats_lock:

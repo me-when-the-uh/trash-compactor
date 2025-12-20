@@ -1,5 +1,7 @@
+import heapq
 import logging
 import math
+import os
 import random
 import zlib
 from collections import Counter, deque
@@ -108,39 +110,60 @@ def _reservoir_sample_files(
     if max_files <= 0:
         return [], False
 
+    # Use a min-heap to keep the k items with the largest keys
+    # Heap elements: (key, path)
+    reservoir: list[tuple[float, Path]] = []
+    
     pending = deque([root])
-    reservoir: list[Path] = []
-    total_seen = 0
     root_files_skipped = False
 
     while pending:
         current = pending.popleft()
         try:
-            entries = list(current.iterdir())
+            with os.scandir(current) as it:
+                entries = list(it)
         except OSError as exc:
             logging.debug("Unable to inspect %s for entropy: %s", current, exc)
             continue
 
         for entry in entries:
-            if entry.is_dir():
+            if entry.is_dir(follow_symlinks=False):
                 if include_subdirectories:
-                    pending.append(entry)
+                    pending.append(Path(entry.path))
+                continue
+            
+            if not entry.is_file(follow_symlinks=False):
                 continue
 
             if skip_root_files and current == root:
                 root_files_skipped = True
                 continue
 
-            total_seen += 1
-            if len(reservoir) < max_files:
-                reservoir.append(entry)
+            try:
+                file_size = entry.stat().st_size
+            except OSError:
                 continue
 
-            replacement = random.randrange(total_seen)
-            if replacement < max_files:
-                reservoir[replacement] = entry
+            if file_size <= 0:
+                continue
 
-    return reservoir, root_files_skipped
+            # Weighted reservoir sampling (Efraimidis-Spirakis)
+            # Key = u^(1/w) -> log(Key) = log(u) / w
+            # the intent is to keep items with largest keys.
+            # u is random in (0, 1]
+            u = random.random()
+            while u == 0:  # Avoid log(0)
+                u = random.random()
+            
+            key = math.log(u) / file_size
+            file_path = Path(entry.path)
+
+            if len(reservoir) < max_files:
+                heapq.heappush(reservoir, (key, file_path))
+            elif key > reservoir[0][0]:
+                heapq.heapreplace(reservoir, (key, file_path))
+
+    return [path for _, path in reservoir], root_files_skipped
 
 
 def _sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int]:

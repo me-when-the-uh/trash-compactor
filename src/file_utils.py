@@ -2,6 +2,7 @@ import bisect
 import ctypes
 import logging
 import os
+import stat
 import subprocess
 from dataclasses import dataclass
 from ctypes import wintypes
@@ -135,13 +136,13 @@ def _hidden_startupinfo() -> subprocess.STARTUPINFO:
 
 def check_compression_with_compact(file_path: Path) -> bool:
     try:
-        command = f'compact /a "{file_path}"'
+        command = ['compact', '/a', str(file_path)]
         result = subprocess.run(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             startupinfo=_hidden_startupinfo(),
-            shell=True,
+            shell=False,
             text=True,
         )
         if result.returncode != 0:
@@ -154,7 +155,9 @@ def check_compression_with_compact(file_path: Path) -> bool:
 
 def is_file_compressed(file_path: Path, thorough_check: bool = False) -> tuple[bool, int]:
     try:
-        actual_size = file_path.stat().st_size
+        stat_info = file_path.stat()
+        actual_size = stat_info.st_size
+        attributes = stat_info.st_file_attributes
     except OSError as exc:
         logging.error("Failed to get actual file size for %s: %s", file_path, exc)
         return False, 0
@@ -166,6 +169,9 @@ def is_file_compressed(file_path: Path, thorough_check: bool = False) -> tuple[b
         return False, actual_size
 
     if compressed_size < actual_size:
+        return True, compressed_size
+
+    if attributes & stat.FILE_ATTRIBUTE_COMPRESSED:
         return True, compressed_size
 
     if thorough_check and compressed_size == actual_size:

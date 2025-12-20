@@ -367,12 +367,13 @@ def _plan_compression(
         timer.update(processed, display)
     
     entropy_started = False
-    def _entropy_callback_wrapper(path: Path, processed: int) -> None:
+    def _entropy_callback_wrapper(path: Path, processed: int, total: int) -> None:
         nonlocal entropy_started
         if not timer:
             return
         if not entropy_started:
-            timer.set_label(_("Analysing directory entropy"))
+            timer.set_label(_("Entropy analysis"))
+            timer.set_total(total)
             entropy_started = True
         
         display = timer.format_path(str(path), str(base_dir))

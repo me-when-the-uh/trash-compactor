@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from itertools import cycle
 from pathlib import Path
 from typing import List, Optional
+import shutil
 
 from .i18n import _
 
@@ -103,7 +104,13 @@ class ProgressTimer:
             parts.append(progress)
         if self._message:
             parts.append(self._message)
-        return " ".join(parts)
+        line = " ".join(parts)
+        cols = shutil.get_terminal_size((120, 20)).columns
+        # Prevent line wrapping: on Windows a wrapped spinner line breaks \r-based redraw.
+        if cols > 8 and len(line) >= cols:
+            keep = max(1, cols - 4)
+            line = line[:keep] + "..."
+        return line
 
     def _write(self, content: str) -> None:
         if content == self._last_output:
@@ -269,72 +276,70 @@ def _format_summary_size(value: int) -> str:
     return f"{value / (1024 * 1024):.1f}MB"
 
 
-def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, verbosity: int = 0) -> None:
-    logging.info(_("\nEntropy Dry Run Summary"))
-    logging.info("-----------------------")
-
-    samples = sorted(stats.entropy_samples, key=lambda record: record.estimated_savings, reverse=True)
-    if not samples:
-        threshold_bytes = stats.entropy_report_threshold_bytes
-        if threshold_bytes:
-            logging.info(
-                _("No directories exceeded the reporting threshold of %.1f MB."),
-                threshold_bytes / (1024 * 1024),
-            )
-        else:
-            logging.info(_("No eligible directories were analysed."))
+def log_estimated_savings(
+    original_bytes: int,
+    compressed_lzx_bytes: int,
+    compressed_xpress_bytes: int,
+    *,
+    active_large_algorithm: str = "LZX",
+) -> None:
+    original = max(0, int(original_bytes))
+    lzx = max(0, int(compressed_lzx_bytes))
+    xpress = max(0, int(compressed_xpress_bytes))
+    if original <= 0:
         return
 
-    logging.info(_("Minimum savings threshold: %.1f%%"), min_savings_percent)
-    analysed = stats.entropy_directories_sampled or len(samples)
-    logging.info(
-        _("Analysed %s directories (%s below threshold)."),
-        analysed,
-        stats.entropy_directories_below_threshold,
+    active = (active_large_algorithm or "").upper()
+
+    def _log_line(comp_bytes: int, label: str) -> None:
+        savings = max(0, original - comp_bytes)
+        ratio = round((savings / original) * 100) if original > 0 else 0
+        logging.info(
+            "\t%s -> %s (%d%% %s)",
+            _format_summary_size(original),
+            _format_summary_size(comp_bytes),
+            ratio,
+            label,
+        )
+
+    logging.info(_("\nEstimated savings:"))
+    if active == "LZX":
+        _log_line(lzx, _("with LZX"))
+    else:
+        _log_line(xpress, _("with XPRESS"))
+
+
+def print_dry_run_summary(
+    *,
+    min_savings_percent: float,
+    projected_original_bytes: int,
+    projected_compressed_lzx_bytes: int,
+    projected_compressed_xpress_bytes: int,
+    title: Optional[str] = None,
+) -> None:
+    logging.info("")
+    logging.info(title or _("Dry Run Summary"))
+    logging.info("-----------------------")
+    logging.info(_("Minimum savings threshold: %.1f%%"), float(min_savings_percent))
+
+    from .config import COMPRESSION_ALGORITHMS
+
+    log_estimated_savings(
+        projected_original_bytes,
+        projected_compressed_lzx_bytes,
+        projected_compressed_xpress_bytes,
+        active_large_algorithm=COMPRESSION_ALGORITHMS.get('large', 'LZX'),
     )
-    
-    if verbosity >= 1:
-        threshold_bytes = stats.entropy_report_threshold_bytes
-        if threshold_bytes:
-            logging.info(
-                _("Reporting directories with total size >= %.1f MB."),
-                threshold_bytes / (1024 * 1024),
-            )
-        logging.info(_("Directories ordered by projected savings:"))
 
-        for index, record in enumerate(samples, start=1):
-            status_note = _(" [below threshold]") if record.estimated_savings < min_savings_percent else ""
-            logging.info(
-                " %2d. %s (~%.1f%% savings, entropy %.2f, %s files, %s sampled, %s total)%s",
-                index,
-                record.relative_path,
-                record.estimated_savings,
-                record.average_entropy,
-                record.sampled_files,
-                _format_sample_bytes(record.sampled_bytes),
-                _format_sample_bytes(record.total_bytes),
-                status_note,
-            )
 
-    if stats.entropy_projected_original_bytes:
-        original = stats.entropy_projected_original_bytes
-        base_compressed = stats.entropy_projected_compressed_bytes
-        alt_compressed = stats.entropy_projected_compressed_bytes_conservative
-
-        def _log_savings_line(comp_bytes: int, label: str) -> None:
-            savings = max(0, original - comp_bytes)
-            ratio = round((savings / original) * 100) if original > 0 else 0
-            logging.info(
-                "\t%s -> %s (%d%% %s)",
-                _format_summary_size(original),
-                _format_summary_size(comp_bytes),
-                ratio,
-                label,
-            )
-
-        logging.info(_("\nEstimated savings:"))
-        _log_savings_line(base_compressed, _("with LZX"))
-        _log_savings_line(alt_compressed, _("w/o LZX"))
+def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, verbosity: int = 0) -> None:
+    # Kept for API compatibility; this is the dry-run summary output.
+    print_dry_run_summary(
+        min_savings_percent=min_savings_percent,
+        projected_original_bytes=stats.entropy_projected_original_bytes,
+        projected_compressed_lzx_bytes=stats.entropy_projected_compressed_bytes,
+        projected_compressed_xpress_bytes=stats.entropy_projected_compressed_bytes_conservative,
+    )
 
 
 def print_compression_summary(stats: CompressionStats) -> None:

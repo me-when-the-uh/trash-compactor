@@ -215,6 +215,7 @@ _MUTUALLY_EXCLUSIVE: tuple[tuple[str, str], ...] = (
 @dataclass
 class LaunchState:
     directory: str = ""
+    one_click: bool = False
     verbose: int = 0
     no_lzx: bool = False
     force_lzx: bool = False
@@ -469,9 +470,15 @@ def _run_interactive_session(state: LaunchState) -> None:
         print(
             _("Enter a directory path (optionally add flags like '-vx'), or use [S]tart to proceed, [C]hoose directory, and [F]lag help for tips.")
         )
+        print(_("Press '1' then Enter to compress necessary directories in one click."))
 
         command = _read_interactive_command() or 's'
         lowered = command.lower()
+
+        if lowered == '1':
+            state.one_click = True
+            state.directory = ""
+            return
 
         if lowered in _START_COMMANDS:
             if _can_start(state):
@@ -493,6 +500,7 @@ def _run_interactive_session(state: LaunchState) -> None:
 
 def _apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
     args.directory = state.directory
+    setattr(args, 'one_click', getattr(state, 'one_click', False))
     args.verbose = state.verbose
     args.no_lzx = state.no_lzx
     args.force_lzx = state.force_lzx
@@ -507,6 +515,7 @@ def _apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
 def interactive_configure(args: Namespace) -> Namespace:
     state = LaunchState(
         directory=sanitize_path(args.directory) if args.directory else "",
+        one_click=getattr(args, 'one_click', False),
         verbose=args.verbose,
         no_lzx=args.no_lzx,
         force_lzx=args.force_lzx,
@@ -517,13 +526,19 @@ def interactive_configure(args: Namespace) -> Namespace:
         min_savings=config.clamp_savings_percent(getattr(args, 'min_savings', config.DEFAULT_MIN_SAVINGS_PERCENT)),
     )
 
-    print(Fore.YELLOW + _("\nInteractive launch detected. Configure your run before starting.") + Style.RESET_ALL)
-    _print_flag_reference()
-
     # Run benchmark to gauge system performance
     if not benchmark.run_benchmark():
         state.no_lzx = True
         print(Fore.YELLOW + _("\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.") + Style.RESET_ALL)
+
+    print(Fore.YELLOW + _("\nInteractive launch detected. Configure your run before starting.") + Style.RESET_ALL)
+    quick = read_user_input(_("Press '1' for 1-click unattended mode, or Enter for custom setup: ")).strip().lower()
+    if quick == '1':
+        state.one_click = True
+        state.directory = ""
+        return _apply_state_to_args(args, state)
+
+    _print_flag_reference()
 
     _run_interactive_session(state)
     return _apply_state_to_args(args, state)
