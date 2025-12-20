@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.0] - 2025-12-20
+### Added
+- 1-click run mode to get things done fast 
+- A simple benchmark to test whether the computer is too slow to use LZX compression
+
+### Changed
+- Refactored dry-run mode to remove WET code and improve performance by 40%
+- Refactored launch logic to remove WET code and have a centralised menu
+- Set zlib level to 2 to improve savings estimation accuracy with a tiny 3% entropy analysis performance penalty
+
+### Fixed
+- Bugs that were occuring with the old approach to the CLI interface because of two different menus
+- Buggy progress reporting
+- Estimated savings' accuracy
+
+## [v0.5.0-beta2] - 2025-11-26
+
+## [v0.5.0-beta] - 2025-11-25
+
+
 ## [v0.4.5] - 2025-11-24
 ### Added
 - Simple directory browser for choosing which directory to compress with Windows Explorer for better compatibility with Windows' varying flavours of CLI terminals

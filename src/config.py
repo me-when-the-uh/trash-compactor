@@ -87,6 +87,9 @@ def _default_excluded_directories() -> Tuple[str, ...]:
 MIN_LOGICAL_CORES_FOR_LZX: Final[int] = 5
 MIN_PHYSICAL_CORES_FOR_LZX: Final[int] = 3
 
+BENCHMARK_DURATION_LIMIT: Final[float] = 0.25
+BENCHMARK_WORKLOAD_ITERATIONS: Final[int] = 120_000
+
 DEFAULT_EXCLUDE_DIRECTORIES: Final[Tuple[str, ...]] = _default_excluded_directories()
 
 

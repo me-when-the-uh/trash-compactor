@@ -2,6 +2,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Optional
+import shutil
 
 from .i18n import _
 
@@ -45,25 +46,61 @@ class TimingStats:
         logging.info("")
         logging.info(_("Performance summary"))
         logging.info(_("  elapsed total : %.3fs"), self.total_time)
-        logging.info(_("  scan duration : %.3fs (%s)"), self.file_scan_time, self._percent(self.file_scan_time))
-        if self.entropy_analysis_time > 0:
+
+        min_pct = 0.5
+        if self._should_show_span(self.file_scan_time, min_pct):
+            logging.info(_("  scan duration : %.3fs (%s)"), self.file_scan_time, self._percent(self.file_scan_time))
+        if self._should_show_span(self.entropy_analysis_time, min_pct):
             logging.info(_("  entropy check : %.3fs (%s)"), self.entropy_analysis_time, self._percent(self.entropy_analysis_time))
-        logging.info(_("  work duration : %.3fs (%s)"), self.work_duration, self._percent(self.work_duration))
-        logging.info(_("  files handled : %d"), self.total_files)
-        logging.info(_("    compressed  : %d"), self.files_compressed)
-        logging.info(_("    skipped     : %d"), self.files_skipped)
+        if self._should_show_span(self.work_duration, min_pct):
+            logging.info(_("  work duration : %.3fs (%s)"), self.work_duration, self._percent(self.work_duration))
+
+        if self.total_files:
+            logging.info(_("  files handled : %d"), self.total_files)
+
+        if self.files_compressed:
+            logging.info(_("    compressed  : %d"), self.files_compressed)
+        if self.files_skipped:
+            logging.info(_("    skipped     : %d"), self.files_skipped)
         if self.files_analyzed_for_entropy > 0:
             logging.info(_("    analyzed for entropy: %d"), self.files_analyzed_for_entropy)
-        logging.info(_("  avg per file  : %.4fs"), self.avg_time_per_file)
+
+        if self.total_files:
+            logging.info(_("  avg per file  : %.4fs"), self.avg_time_per_file)
         if self.files_compressed:
             logging.info(_("  avg compress  : %.4fs"), self.avg_compression_time)
-        logging.info(_("  scan throughput    : %.2f files/s"), self.scan_throughput)
-        if self.entropy_analysis_time > 0:
+
+        if self.total_files and self._should_show_span(self.file_scan_time, min_pct):
+            logging.info(_("  scan throughput    : %.2f files/s"), self.scan_throughput)
+        if self.files_analyzed_for_entropy and self._should_show_span(self.entropy_analysis_time, min_pct):
             logging.info(_("  entropy throughput : %.2f files/s"), self.entropy_throughput)
-        logging.info(_("  work throughput    : %.2f files/s"), self.work_throughput)
+        if self.files_compressed and self._should_show_span(self.work_duration, min_pct):
+            logging.info(_("  work throughput    : %.2f files/s"), self.work_throughput)
+
+    def print_dry_run_metrics(self, *, min_percent: float = 0.5) -> None:
+        logging.info("")
+        logging.info(_("  elapsed total : %.3fs"), self.total_time)
+        if self._should_show_span(self.file_scan_time, min_percent):
+            logging.info(_("  scan duration : %.3fs (%s)"), self.file_scan_time, self._percent(self.file_scan_time))
+        if self._should_show_span(self.entropy_analysis_time, min_percent):
+            logging.info(_("  entropy check : %.3fs (%s)"), self.entropy_analysis_time, self._percent(self.entropy_analysis_time))
+
+        logging.info(_("  files handled : %d"), self.total_files)
+        if self.files_analyzed_for_entropy > 0:
+            logging.info(_("    analyzed for entropy: %d"), self.files_analyzed_for_entropy)
+
+        if self._should_show_span(self.file_scan_time, min_percent):
+            logging.info(_("  scan throughput    : %.2f files/s"), self.scan_throughput)
+        if self._should_show_span(self.entropy_analysis_time, min_percent):
+            logging.info(_("  entropy throughput : %.2f files/s"), self.entropy_throughput)
 
     def _percent(self, span: float) -> str:
         return f"{(span / self.total_time) * 100:.1f}%" if self.total_time else "0.0%"
+
+    def _should_show_span(self, span: float, min_percent: float) -> bool:
+        if span <= 0 or self.total_time <= 0:
+            return False
+        return (span / self.total_time) * 100.0 >= float(min_percent)
 
 
 class Timer:

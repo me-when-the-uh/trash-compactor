@@ -12,18 +12,23 @@ from src import (
     compress_directory_legacy,
     config,
     entropy_dry_run,
+    execute_compression_plan_wrapper,
     get_cpu_info,
     print_compression_summary,
     print_entropy_dry_run,
     set_worker_cap,
 )
-from src.console import display_banner, prompt_exit
-from src.launch import acquire_directory, interactive_configure
-from src.runtime import confirm_hdd_usage, configure_lzx, describe_protected_path, is_admin
+from src.console import display_banner, prompt_exit, read_user_input
+from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
+from src.file_utils import describe_protected_path, is_admin
 from src.skip_logic import log_directory_skips
 from src.i18n import _, load_translations
+from src.stats import CompressionStats
+from src.timer import PerformanceMonitor
+from src.one_click import run_one_click_mode
+from pathlib import Path
 
-VERSION = "0.4.5"
+VERSION = "0.5.0"
 BUILD_DATE = "who cares"
 
 
@@ -100,6 +105,14 @@ def build_parser() -> argparse.ArgumentParser:
         "directory",
         nargs="?",
         help=_("Target directory to compress. Omit to start the interactive walkthrough."),
+    )
+
+    # Not part of the advertised CLI surface yet; used by the interactive launcher.
+    parser.add_argument(
+        "--one-click",
+        action="store_true",
+        help=argparse.SUPPRESS,
+        dest="one_click",
     )
     parser.add_argument(
         "-v",
@@ -207,25 +220,29 @@ def run_compression(directory: str, verbosity: int, thorough: bool, min_savings:
     monitor.print_summary()
 
 
-def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> None:
+def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
     logging.info(_("Starting entropy dry run for directory: %s"), directory)
-    stats, monitor = entropy_dry_run(
+    stats, monitor, plan = entropy_dry_run(
         directory,
         verbosity=verbosity,
         min_savings_percent=min_savings,
     )
     print_entropy_dry_run(stats, min_savings, verbosity)
     log_directory_skips(stats, verbosity, min_savings)
-    monitor.print_summary()
+    monitor.stats.print_dry_run_metrics(min_percent=0.5)
+    return stats, monitor, plan
 
 
 def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
     args = build_parser().parse_args(argv)
+    if not hasattr(args, 'one_click'):
+        setattr(args, 'one_click', False)
     if args.min_savings is None:
         args.min_savings = config.DEFAULT_MIN_SAVINGS_PERCENT
     else:
         args.min_savings = config.clamp_savings_percent(args.min_savings)
-    interactive_launch = len(argv) == 0
+    
+    interactive_launch = not args.directory
     if interactive_launch:
         args = interactive_configure(args)
         args.min_savings = config.clamp_savings_percent(args.min_savings)
@@ -308,17 +325,61 @@ def main() -> None:
 
     _emit_verbosity_banner(args.verbose)
 
+    if getattr(args, 'one_click', False) and not args.directory:
+        if not is_admin():
+            logging.error(_("This script requires administrator privileges"))
+            prompt_exit()
+            return
+
+        physical_cores, logical_cores = get_cpu_info()
+        configure_lzx(
+            choice_enabled=not args.no_lzx,
+            force_lzx=args.force_lzx,
+            cpu_capable=config.is_cpu_capable_for_lzx(),
+            physical=physical_cores,
+            logical=logical_cores,
+        )
+
+        run_one_click_mode(verbosity=args.verbose, min_savings=args.min_savings)
+        print(_("\nOperation completed."))
+        prompt_exit()
+        return
+
     directory = _configure_runtime(args, interactive_launch)
     if directory is None:
         prompt_exit()
         return
 
     if getattr(args, "dry_run", False):
-        run_entropy_dry_run(
+        stats, monitor, plan = run_entropy_dry_run(
             directory,
             verbosity=args.verbose,
             min_savings=args.min_savings,
         )
+        
+        if plan:
+            print()
+            try:
+                response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+            except KeyboardInterrupt:
+                print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
+                sys.exit(130)
+
+            if response in ('y', 'yes'):
+                print(_("\nStarting compression..."))
+                monitor.start_operation()
+                stats, monitor = execute_compression_plan_wrapper(
+                    stats,
+                    monitor,
+                    plan,
+                    verbosity_level=args.verbose,
+                    interactive_output=True,
+                    min_savings_percent=args.min_savings
+                )
+                print_compression_summary(stats)
+                monitor.print_summary()
+            else:
+                print(_("Compression cancelled."))
     elif args.brand_files:
         run_branding(directory, thorough=args.thorough)
     else:
