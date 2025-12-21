@@ -1,7 +1,7 @@
 # Trash-Compactor
   A utility for intelligent file compression on Windows 10/11 systems using the built-in NTFS compression algorithms and Windows' built-in "compact.exe" utility. Compressing files at the filesystem level is quite different from your average .zip or .7z compression (which is strictly for archival purposes) and it's seamless - you won't see a difference, but the apps will shrink in size without deleting anything. 
   
-  Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) (another tool that is based on compact.exe and primarily designed for compressing Steam games), this utility automatically selects the optimal compression algorithm based on file size - this lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression and preventing excessive SSD wear, keeping things DRY. 
+  Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) and [Compactor](https://github.com/Freaky/Compactor) (tools based on compact.exe and primarily designed for compressing Steam games), this program automatically scans through the files, evaluating their compressibility with a complex but fast algorithm, and picking the optimal compression algorithm based on file size - this lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression, maximising overall system performance in comparison with the aforementioned tools, and preventing excessive SSD wear, keeping things DRY. 
   
 Compressing large directories to gain extra storage space will be so free and without downsides that it'll be the closest thing to having "free real estate".
 
