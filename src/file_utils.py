@@ -187,9 +187,10 @@ def should_compress_file(
     thorough_check: bool = False,
     *,
     file_size: Optional[int] = None,
+    ignore_extensions: bool = False,
 ) -> CompressionDecision:
     suffix = file_path.suffix.lower()
-    if suffix in SKIP_EXTENSIONS:
+    if not ignore_extensions and suffix in SKIP_EXTENSIONS:
         return CompressionDecision.deny(_("Skipped due to extension {suffix}").format(suffix=suffix))
 
     try:

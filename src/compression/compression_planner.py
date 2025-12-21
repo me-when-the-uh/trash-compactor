@@ -6,12 +6,13 @@ from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
 from ..i18n import _
-from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy
+from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy, SKIP_EXTENSIONS
 from ..file_utils import CompressionDecision, should_compress_file
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory, sample_directory_entropy
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
+from .entropy import sample_file_entropy
 
 
 def iter_files(
@@ -93,24 +94,24 @@ class _ScanPayload:
     error: Optional[str] = None
 
 
-def _scan_single(index: int, entry: os.DirEntry, thorough_check: bool) -> _ScanPayload:
+def _scan_single(index: int, entry: os.DirEntry, thorough_check: bool, debug_scan_all: bool = False) -> _ScanPayload:
     file_path = Path(entry.path)
     try:
         file_size = entry.stat().st_size
     except OSError as exc:
         return _ScanPayload(index, file_path, 0, None, _("Error processing {file_path}: {exc}").format(file_path=file_path, exc=exc))
 
-    decision = should_compress_file(file_path, thorough_check, file_size=file_size)
+    decision = should_compress_file(file_path, thorough_check, file_size=file_size, ignore_extensions=debug_scan_all)
     return _ScanPayload(index, file_path, file_size, decision)
 
 
-def _iter_scanned_files(files: Iterable[os.DirEntry], thorough_check: bool) -> Iterator[_ScanPayload]:
+def _iter_scanned_files(files: Iterable[os.DirEntry], thorough_check: bool, debug_scan_all: bool = False) -> Iterator[_ScanPayload]:
     # Scanning is metadata-heavy and extremely fast with os.DirEntry.
     # Using threads introduces GIL contention and overhead that outweighs the
     # benefits of parallelism for such lightweight tasks.
     # Single-threaded execution is forced for the scanning phase to maximize throughput.
     for index, entry in enumerate(files):
-        yield _scan_single(index, entry, thorough_check)
+        yield _scan_single(index, entry, thorough_check, debug_scan_all)
 
 
 def plan_compression(
@@ -126,11 +127,12 @@ def plan_compression(
     file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
     apply_entropy_filter: bool = True,
     entropy_progress_callback: Optional[Callable[[Path, int, int], None]] = None,
+    debug_scan_all: bool = False,
 ) -> list[tuple[Path, int, str]]:
     ordered_candidates: list[tuple[int, Path, int, str]] = []
     with monitor.time_file_scan():
         processed = 0
-        for payload in _iter_scanned_files(files, thorough_check):
+        for payload in _iter_scanned_files(files, thorough_check, debug_scan_all):
             processed += 1
             file_path = payload.path
             decision = payload.decision
@@ -156,6 +158,16 @@ def plan_compression(
             stats.total_original_size += file_size
 
             if decision.should_compress:
+                if debug_scan_all and file_path.suffix.lower() in SKIP_EXTENSIONS:
+                    # This file would normally be skipped, but we are forcing a scan.
+                    # Check entropy to see if it's worth it.
+                    entropy_sum, sampled_bytes = sample_file_entropy(file_path, byte_budget=65536)
+                    if sampled_bytes > 0:
+                        average_entropy = entropy_sum / sampled_bytes
+                        savings = savings_from_entropy(average_entropy)
+                        if savings >= min_savings_percent:
+                            print(f"\n[DEBUG] File {file_path.name} (normally skipped) has potential savings: {savings:.1f}%")
+
                 algorithm = COMPRESSION_ALGORITHMS[get_size_category(file_size)]
                 ordered_candidates.append((payload.index, file_path, file_size, algorithm))
                 if progress_callback:

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.1] - 2025-12-21
+### Added
+- Hidden `--debug-scan-all` flag to scan all files which helped fix the entropy sampling algorithm
+
+### Changed
+- Entropy sampling algorithm is now a lot more accurate 
+
 ## [v0.5.0] - 2025-12-20
 ### Added
 - 1-click run mode to get things done fast 

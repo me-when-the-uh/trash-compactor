@@ -27,7 +27,7 @@ TARGET_WINDOW_SIZE = 16 * 1024
 
 def sample_directory_entropy(
     path: Path,
-    max_files: int = 50,
+    max_files: int = 45,
     chunk_size: int = 65536,
     max_bytes: int = 4 * 1024 * 1024,
     *,
@@ -70,7 +70,7 @@ def sample_directory_entropy(
         if per_file_budget <= 0:
             break
 
-        file_entropy, file_bytes = _sample_file_entropy(
+        file_entropy, file_bytes = sample_file_entropy(
             file_path,
             byte_budget=per_file_budget,
         )
@@ -166,7 +166,7 @@ def _reservoir_sample_files(
     return [path for _, path in reservoir], root_files_skipped
 
 
-def _sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int]:
+def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int]:
     if byte_budget <= 0:
         return 0.0, 0
 
@@ -223,38 +223,48 @@ def _derive_window_size(byte_budget: int) -> int:
     return max(1, window)
 
 
-def _plan_sample_windows(file_size: int, window_size: int) -> Sequence[tuple[int, int]]:
+def _plan_sample_windows(file_size: int, window_size: int) -> list[tuple[int, int]]:
     if file_size <= 0 or window_size <= 0:
         return []
 
     if file_size <= window_size:
         return [(0, file_size)]
 
-    windows: list[tuple[int, int]] = []
-    head = (0, window_size)
-    windows.append(head)
+    # Calculate offsets for file scanning: 10%, 45%, 80%
+    p10 = int(file_size * 0.10)
+    p45 = int(file_size * 0.45)
+    p80 = int(file_size * 0.80)
 
-    if file_size <= 2 * window_size:
-        tail_offset = max(0, file_size - window_size)
-        windows.append((tail_offset, window_size))
-    else:
-        mid_offset = max(0, (file_size // 2) - window_size // 2)
-        tail_offset = max(0, file_size - window_size)
-        windows.extend([(mid_offset, window_size), (tail_offset, window_size)])
+    w1_start = p10
+    w2_start = max(0, p45 - (window_size // 2))
+    w3_start = max(0, p80 - window_size)
 
-    deduped: list[tuple[int, int]] = []
-    seen: set[tuple[int, int]] = set()
-    for offset, length in windows[:MAX_SAMPLE_WINDOWS]:
-        clamped_offset = max(0, min(offset, file_size - length))
-        clamped_length = min(length, file_size - clamped_offset)
-        if clamped_length <= 0:
-            continue
-        key = (clamped_offset, clamped_length)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(key)
-    return deduped
+    raw_windows = []
+    for start in (w1_start, w2_start, w3_start):
+        start = min(start, file_size)
+        end = min(start + window_size, file_size)
+        if end > start:
+            raw_windows.append((start, end))
+
+    if not raw_windows:
+        return []
+
+    # Merge overlaps
+    raw_windows.sort()
+    merged = []
+    current_start, current_end = raw_windows[0]
+
+    for next_start, next_end in raw_windows[1:]:
+        if next_start <= current_end:
+            # Overlap or adjacent, extend current
+            current_end = max(current_end, next_end)
+        else:
+            merged.append((current_start, current_end - current_start))
+            current_start, current_end = next_start, next_end
+    
+    merged.append((current_start, current_end - current_start))
+    
+    return merged
 
 
 def _compression_probe_entropy(sample: bytes) -> float:
