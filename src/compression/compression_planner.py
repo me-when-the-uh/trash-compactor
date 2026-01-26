@@ -15,6 +15,20 @@ from ..workers import entropy_worker_count
 from .entropy import sample_file_entropy
 
 
+def _format_size(num_bytes: int) -> str:
+    try:
+        n = int(num_bytes)
+    except Exception:
+        return f"{num_bytes} B"
+    if n < 1024:
+        return f"{n} B"
+    for unit in ("KB", "MB", "GB", "TB"):
+        n /= 1024.0
+        if n < 1024.0:
+            return f"{n:.1f} {unit}"
+    return f"{n:.1f} PB"
+
+
 def iter_files(
     root: Path,
     stats: CompressionStats,
@@ -159,14 +173,16 @@ def plan_compression(
 
             if decision.should_compress:
                 if debug_scan_all and file_path.suffix.lower() in SKIP_EXTENSIONS:
-                    # This file would normally be skipped, but we are forcing a scan.
-                    # Check entropy to see if it's worth it.
                     entropy_sum, sampled_bytes = sample_file_entropy(file_path, byte_budget=65536)
                     if sampled_bytes > 0:
                         average_entropy = entropy_sum / sampled_bytes
                         savings = savings_from_entropy(average_entropy)
                         if savings >= min_savings_percent:
-                            print(f"\n[DEBUG] File {file_path.name} (normally skipped) has potential savings: {savings:.1f}%")
+                            projected_size = int(file_size * (1 - savings / 100))
+                            print(
+                                f"\n[DEBUG] File {file_path.name} has potential savings: {savings:.1f}% "
+                                f"({_format_size(file_size)} -> {_format_size(projected_size)})"
+                            )
 
                 algorithm = COMPRESSION_ALGORITHMS[get_size_category(file_size)]
                 ordered_candidates.append((payload.index, file_path, file_size, algorithm))

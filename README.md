@@ -116,7 +116,7 @@ HDDs read data sequentially and they can't handle the extreme I/O that the progr
 ### Additional Options
 
 - `-v`, or `--verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
-- `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically
+- `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 18%). Directories predicted to save less space are skipped automatically
 
 ## Development
 
@@ -130,6 +130,10 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 
 ## To-Do
 
+### Short-term Goals
+- Fix bugs:
+  - Add support for non-latin characters in the path to directory that is being chosen from the "Choose Directory" menu
+
 ### Long-term Goals
 - Research advanced compression methods:
   - Evaluate alternative NTFS compression APIs, like [UPX](https://github.com/upx/upx)
@@ -138,9 +142,7 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
   - Research possibilities for custom compression algorithms
   - Investigate integration with other Windows compression features
 - Quality of Life features:
-  - Saving user configuration with an optional `.ini` file
   - Add resume capability for interrupted operations
-- Localization support depending on system language
 - Security and Reliability:
   - Implement proper error handling for network paths
   - Add verification of filesystem compatibility
