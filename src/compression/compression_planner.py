@@ -1,6 +1,6 @@
 import logging
 import os
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
@@ -108,31 +108,30 @@ class _ScanPayload:
     error: Optional[str] = None
 
 
-def _scan_single(index: int, entry: os.DirEntry, thorough_check: bool, debug_scan_all: bool = False) -> _ScanPayload:
+def _scan_single(index: int, entry: os.DirEntry, debug_scan_all: bool = False) -> _ScanPayload:
     file_path = Path(entry.path)
     try:
         file_size = entry.stat().st_size
     except OSError as exc:
         return _ScanPayload(index, file_path, 0, None, _("Error processing {file_path}: {exc}").format(file_path=file_path, exc=exc))
 
-    decision = should_compress_file(file_path, thorough_check, file_size=file_size, ignore_extensions=debug_scan_all)
+    decision = should_compress_file(file_path, file_size=file_size, ignore_extensions=debug_scan_all)
     return _ScanPayload(index, file_path, file_size, decision)
 
 
-def _iter_scanned_files(files: Iterable[os.DirEntry], thorough_check: bool, debug_scan_all: bool = False) -> Iterator[_ScanPayload]:
+def _iter_scanned_files(files: Iterable[os.DirEntry], debug_scan_all: bool = False) -> Iterator[_ScanPayload]:
     # Scanning is metadata-heavy and extremely fast with os.DirEntry.
-    # Using threads introduces GIL contention and overhead that outweighs the
-    # benefits of parallelism for such lightweight tasks.
-    # Single-threaded execution is forced for the scanning phase to maximize throughput.
+    # Using ThreadPoolExecutor instead of ProcessPoolExecutor 
+    # introduces GIL contention and overhead, hindering performance.
+    # Each worker runs on 1 thread, if N physical cores are available, N-1 workers are spawned.
     for index, entry in enumerate(files):
-        yield _scan_single(index, entry, thorough_check, debug_scan_all)
+        yield _scan_single(index, entry, debug_scan_all)
 
 
 def plan_compression(
     files: Iterable[os.DirEntry],
     stats: CompressionStats,
     monitor: PerformanceMonitor,
-    thorough_check: bool,
     *,
     base_dir: Path,
     min_savings_percent: float,
@@ -146,7 +145,7 @@ def plan_compression(
     ordered_candidates: list[tuple[int, Path, int, str]] = []
     with monitor.time_file_scan():
         processed = 0
-        for payload in _iter_scanned_files(files, thorough_check, debug_scan_all):
+        for payload in _iter_scanned_files(files, debug_scan_all):
             processed += 1
             file_path = payload.path
             decision = payload.decision
@@ -173,7 +172,7 @@ def plan_compression(
 
             if decision.should_compress:
                 if debug_scan_all and file_path.suffix.lower() in SKIP_EXTENSIONS:
-                    entropy_sum, sampled_bytes = sample_file_entropy(file_path, byte_budget=65536)
+                    entropy_sum, sampled_bytes, _ = sample_file_entropy(file_path, byte_budget=65536)
                     if sampled_bytes > 0:
                         average_entropy = entropy_sum / sampled_bytes
                         savings = savings_from_entropy(average_entropy)
@@ -250,7 +249,7 @@ def _filter_high_entropy_directories(
 
     root_skip_record: Optional[DirectorySkipRecord] = None
     if any(path.parent == base_dir for path, _, _ in candidates):
-        average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(
+        average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(
             base_dir,
             include_subdirectories=False,
         )
@@ -277,10 +276,12 @@ def _filter_high_entropy_directories(
                 estimated_savings=estimated_savings,
                 sampled_files=sampled_files,
                 sampled_bytes=sampled_bytes,
+                lz4_certain_files=lz4_certain_files,
                 total_bytes=0,
             )
             stats.entropy_samples.append(root_sample)
             stats.entropy_directories_sampled += 1
+            stats.lz4_certain_incompressible_files += lz4_certain_files
             if estimated_savings < min_savings_percent:
                 stats.entropy_directories_below_threshold += 1
 
@@ -320,6 +321,7 @@ def _filter_high_entropy_directories(
     for record in sample_records:
         stats.entropy_samples.append(record)
         stats.entropy_directories_sampled += 1
+        stats.lz4_certain_incompressible_files += record.lz4_certain_files
         if record.estimated_savings < min_savings_percent:
             stats.entropy_directories_below_threshold += 1
 
@@ -441,7 +443,7 @@ def evaluate_directories_parallel(
                 sample_results.append(sample_record)
         return skip_results, sample_results
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+    with ProcessPoolExecutor(max_workers=worker_count) as executor:
         future_map = {
             executor.submit(
                 evaluate_entropy_directory,
@@ -456,14 +458,17 @@ def evaluate_directories_parallel(
         for future in as_completed(future_map):
             directory = future_map[future]
             _on_complete(directory)
+
             try:
                 skip_record, sample_record = future.result()
-                if skip_record:
-                    skip_results[directory] = skip_record
-                if sample_record:
-                    sample_results.append(sample_record)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Entropy sampling failed for %s: %s", directory, exc, exc_info=True)
+                continue
+
+            if skip_record:
+                skip_results[directory] = skip_record
+            if sample_record:
+                sample_results.append(sample_record)
 
     return skip_results, sample_results
 

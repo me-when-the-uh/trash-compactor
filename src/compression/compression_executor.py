@@ -1,7 +1,7 @@
 import logging
 import subprocess
 import threading
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence
 
@@ -13,6 +13,7 @@ from ..timer import PerformanceMonitor
 
 _BATCH_SIZE = 100
 _MAX_COMMAND_CHARS = 4000
+_COMPACT_TIMEOUT_SECONDS = 300
 
 
 def _hidden_startupinfo() -> subprocess.STARTUPINFO:
@@ -29,6 +30,7 @@ def _run_compact(args: Sequence[str], *, capture: bool = False) -> subprocess.Co
         startupinfo=_hidden_startupinfo(),
         shell=False,
         text=capture,
+        timeout=_COMPACT_TIMEOUT_SECONDS,
     )
 
 
@@ -40,19 +42,6 @@ def compress_file(file_path: Path, algorithm: str) -> bool:
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError) as exc:
         logging.error("Error compressing %s: %s", file_path, exc)
-        return False
-
-
-def legacy_compress_file(file_path: Path) -> bool:
-    try:
-        # compact /c "{file_path}"
-        command = ['compact', '/c', str(file_path.resolve())]
-        result = _run_compact(command, capture=True)
-        logging.debug("Command: %s", command)
-        logging.debug("Output: %s", result.stdout)
-        return result.returncode == 0
-    except (OSError, subprocess.SubprocessError) as exc:
-        logging.error("Error branding %s: %s", file_path, exc)
         return False
 
 
@@ -143,7 +132,7 @@ def execute_compression_plan(
 
     def _finalize_success(path: Path, fallback_size: int, algo: str, context: str) -> None:
         try:
-            verified, compressed_size = is_file_compressed(path, thorough_check=False)
+            verified, compressed_size = is_file_compressed(path)
         except OSError as exc:
             _record_error(_("Error verifying {path}: {exc}").format(path=path, exc=exc))
             logging.error("Error verifying %s after %s compression: %s", path, context, exc)
@@ -152,8 +141,7 @@ def execute_compression_plan(
             _record_success(path, compressed_size, algo, verified)
 
     def _compress_single(path: Path, file_size: int, algo: str) -> None:
-        with monitor.time_compression():
-            success = compress_file(path, algo)
+        success = compress_file(path, algo)
 
         if not success:
             _record_failure(path, file_size, algo)
@@ -189,8 +177,7 @@ def execute_compression_plan(
                 batch = futures[future]
 
                 try:
-                    with monitor.time_compression():
-                        result = future.result()
+                    result = future.result()
                 except Exception as exc:
                     logging.error(
                         "Batch compression exception (%s files, algo=%s): %s. Retrying individually.",

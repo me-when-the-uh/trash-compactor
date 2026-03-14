@@ -1,13 +1,38 @@
 import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 from .i18n import _
 from .config import savings_from_entropy
 from .compression.entropy import sample_directory_entropy
+from .compression.cache import IncompressibleCache
 from .file_utils import DirectoryDecision, should_skip_directory
 from .stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 
+
+_cache: Optional[IncompressibleCache] = None
+
+def get_incompressible_cache() -> IncompressibleCache:
+    global _cache
+    if _cache is None:
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            cache_path = Path(appdata) / "TrashCompactor" / "incompressible.db"
+        else:
+            cache_path = Path.home() / ".cache" / "TrashCompactor" / "incompressible.db"
+        _cache = IncompressibleCache(cache_path)
+    return _cache
+
+
+def commit_incompressible_cache() -> None:
+    cache = get_incompressible_cache()
+    cache.commit()
+
+
+def discard_staged_incompressible_cache() -> None:
+    cache = get_incompressible_cache()
+    cache.discard_staged()
 
 def _relative_to_base(path: Path, base: Path) -> str:
     try:
@@ -25,7 +50,7 @@ def evaluate_entropy_directory(
     if directory == base_dir:
         return None, None
 
-    average_entropy, sampled_files, sampled_bytes = sample_directory_entropy(directory)
+    average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(directory)
     if average_entropy is None or sampled_files == 0 or sampled_bytes < 1024:
         return None, None
 
@@ -47,6 +72,7 @@ def evaluate_entropy_directory(
         estimated_savings=estimated_savings,
         sampled_files=sampled_files,
         sampled_bytes=sampled_bytes,
+        lz4_certain_files=lz4_certain_files,
         total_bytes=0,  # Will be filled later if needed
     )
 
@@ -98,18 +124,33 @@ def maybe_skip_directory(
     if not collect_entropy:
         return DirectoryDecision.allow_path()
 
+    cache = get_incompressible_cache()
+    if cache.contains(directory):
+        reason = _("Cached: High entropy directory")
+        skip_record = DirectorySkipRecord(
+            path=str(directory),
+            relative_path=_relative_to_base(directory, base_dir),
+            reason=reason,
+            category='high_entropy',
+            average_entropy=8.0,
+            estimated_savings=0.0,
+            sampled_files=0,
+            sampled_bytes=0,
+        )
+        append_directory_skip_record(stats, skip_record)
+        return DirectoryDecision.deny(reason)
+
     skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
     
     if sample_record:
         stats.entropy_samples.append(sample_record)
         stats.entropy_directories_sampled += 1
+        stats.lz4_certain_incompressible_files += sample_record.lz4_certain_files
         if sample_record.estimated_savings < min_savings_percent:
             stats.entropy_directories_below_threshold += 1
 
     if skip_record:
-        append_directory_skip_record(stats, skip_record)
-        return DirectoryDecision.deny(skip_record.reason)
-
+        cache.add(directory)
     return DirectoryDecision.allow_path()
 
 

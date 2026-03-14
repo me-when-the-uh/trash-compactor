@@ -116,3 +116,9 @@ COMPRESSION_ALGORITHMS: Final[dict[str, str]] = {
     'medium': 'XPRESS16K',
     'large': 'LZX',
 }
+DRY_RUN_CONSERVATIVE_FACTORS: Final[dict[str, float]] = {
+    'XPRESS4K': 1.03,
+    'XPRESS8K': 1.045,
+    'XPRESS16K': 1.055,
+    'LZX': 1.075,
+}

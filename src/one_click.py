@@ -44,6 +44,11 @@ def resolve_targets() -> OneClickTargets:
     home = Path(user_profile) if user_profile else Path.home()
     candidates.append(home / "AppData")
     candidates.append(home / "Downloads")
+    candidates.append(home / "Documents")
+
+    prog_data = os.environ.get("ProgramData")
+    if prog_data:
+        candidates.append(Path(prog_data))
 
     # Deduplicate while preserving order, and only keep paths that exist
     seen: set[str] = set()
@@ -63,11 +68,15 @@ def _spawn_compactos_window() -> None:
     if os.name != "nt":
         return
 
+    import tempfile
+    comp_log = Path(tempfile.gettempdir()) / "compactos_result.txt"
+    os.environ["COMPACTOS_LOG"] = str(comp_log)
+
     # Keep a separate window open so the user can see CompactOS output
     ps = (
-        "Start-Process -FilePath 'powershell.exe' "
-        "-ArgumentList @('-NoExit','-Command','compact.exe /compactos:always') "
-        "-WindowStyle Normal"
+        f"Start-Process -FilePath 'powershell.exe' "
+        f"-ArgumentList @('-Command','compact.exe /compactos:always | Tee-Object -FilePath \"{comp_log}\"; Write-Host \"\"; Write-Host -ForegroundColor Green \"Compression finished. This window will close in 5 minutes...\"; Start-Sleep -Seconds 300') "
+        f"-WindowStyle Normal"
     )
 
     try:
@@ -82,9 +91,10 @@ def _spawn_compactos_window() -> None:
             ]
         )
     except OSError:
-        # Fallback to cmd.exe if PowerShell isn't available
+        # Fallback to cmd if PowerShell isn't available
         try:
-            subprocess.Popen(["cmd.exe", "/c", "start", "cmd.exe", "/k", "compact.exe /compactos:always"])
+            cmd = f'compact.exe /compactos:always > "{comp_log}" & type "{comp_log}" & echo. & echo Compression finished. This window will close in 5 minutes... & timeout /t 300'
+            subprocess.Popen(["cmd.exe", "/c", "start", "cmd.exe", "/c", cmd])
         except OSError:
             return
 
@@ -157,7 +167,34 @@ def countdown_to_compress(seconds: int = 300) -> bool:
         time.sleep(0.1)
 
 
+# def _check_battery() -> bool:
+#     if os.name != "nt":
+#         return True
+#     import ctypes
+#     class SYSTEM_POWER_STATUS(ctypes.Structure):
+#         _fields_ = [
+#             ("ACLineStatus", ctypes.c_byte),
+#             ("BatteryFlag", ctypes.c_byte),
+#             ("BatteryLifePercent", ctypes.c_byte),
+#             ("SystemStatusFlag", ctypes.c_byte),
+#             ("BatteryLifeTime", ctypes.c_ulong),
+#             ("BatteryFullLifeTime", ctypes.c_ulong),
+#         ]
+#     status = SYSTEM_POWER_STATUS()
+#     if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+#         # 1 usually means AC power, 0 is battery, 255 is unknown
+#         return status.ACLineStatus != 0
+#     return True
+
+
 def run_one_click_mode(*, verbosity: int, min_savings: float) -> None:
+    # if not _check_battery():
+    #     print(Fore.YELLOW + _("Warning: Analyzing and compressing on battery power can rapidly drain it.") + Style.RESET_ALL)
+    #     if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
+    #         answer = input(_("Proceed anyway? [y/N]: ")).strip().lower()
+    #         if answer not in {"y", "yes"}:
+    #             return
+
     targets = resolve_targets()
 
     _clear_screen()
@@ -269,5 +306,16 @@ def run_one_click_mode(*, verbosity: int, min_savings: float) -> None:
     if any_compression:
         print_compression_summary(total_comp_stats)
         total_comp_timing.print_summary()
+
+    comp_log = os.environ.get("COMPACTOS_LOG")
+    if comp_log and Path(comp_log).exists():
+        try:
+            content = Path(comp_log).read_text(encoding="utf-8", errors="ignore")
+            for line in content.splitlines():
+                if "bytes of data" in line.lower() or "ratio" in line.lower() or "compression" in line.lower():
+                    print(Fore.GREEN + f"CompactOS: {line.strip()}" + Style.RESET_ALL)
+            Path(comp_log).unlink(missing_ok=True)
+        except Exception:
+            pass
 
     print(Fore.CYAN + _( "\n1-click mode finished." ) + Style.RESET_ALL)

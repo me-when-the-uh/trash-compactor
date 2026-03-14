@@ -152,6 +152,7 @@ class EntropySampleRecord:
     sampled_files: int
     sampled_bytes: int
     total_bytes: int
+    lz4_certain_files: int = 0
 
 
 @dataclass
@@ -184,6 +185,7 @@ class CompressionStats:
     entropy_projected_original_bytes: int = 0
     entropy_projected_compressed_bytes: int = 0
     entropy_projected_compressed_bytes_conservative: int = 0
+    lz4_certain_incompressible_files: int = 0
 
     def set_base_dir(self, base_dir: Path) -> None:
         self.base_dir = base_dir
@@ -250,14 +252,6 @@ class CompressionStats:
         if 'high entropy' in lowered or 'savings' in lowered:
             return 'high_entropy'
         return 'generic'
-
-
-@dataclass
-class LegacyCompressionStats:
-    total_files: int = 0
-    branded_files: int = 0
-    still_unmarked: int = 0
-    errors: List[str] = field(default_factory=list)
 
 
 def _format_sample_bytes(value: int) -> str:
