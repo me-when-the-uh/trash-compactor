@@ -19,21 +19,21 @@ def _apply_worker_cap(default: int) -> int:
     return max(1, min(default, limit))
 
 
+def _physical_core_baseline_workers() -> int:
+    physical, logical = get_cpu_info()
+    cores = physical or logical or 1
+    if cores <= 2:
+        return 1
+    return max(1, cores - 1)
+
+
 def entropy_worker_count() -> int:
-    physical, _ = get_cpu_info()
-    if not physical or physical <= 1:
-        return _apply_worker_cap(1)
-    default = physical - 1
+    default = _physical_core_baseline_workers()
     return _apply_worker_cap(default)
 
 
 def xp_worker_count() -> int:
-    _, logical = get_cpu_info()
-    threads = logical
-    if not threads:
-        return _apply_worker_cap(1)
-
-    default = max(1, threads - 1)
+    default = _physical_core_baseline_workers()
     return _apply_worker_cap(default)
 
 

@@ -1,5 +1,6 @@
 import argparse
 import logging
+import multiprocessing
 import sys
 from datetime import datetime
 from textwrap import dedent
@@ -9,7 +10,6 @@ from colorama import Fore, Style, init
 
 from src import (
     compress_directory,
-    compress_directory_legacy,
     config,
     entropy_dry_run,
     execute_compression_plan_wrapper,
@@ -18,17 +18,17 @@ from src import (
     print_entropy_dry_run,
     set_worker_cap,
 )
-from src.console import display_banner, prompt_exit, read_user_input
+from src.console import EscapeExit, display_banner, prompt_exit, read_user_input
 from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
 from src.file_utils import describe_protected_path, is_admin
-from src.skip_logic import log_directory_skips
+from src.skip_logic import discard_staged_incompressible_cache, log_directory_skips
 from src.i18n import _, load_translations
 from src.stats import CompressionStats
 from src.timer import PerformanceMonitor
 from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 BUILD_DATE = "who cares"
 
 
@@ -83,8 +83,6 @@ def build_parser() -> argparse.ArgumentParser:
         Examples:
           trash-compactor.exe                         Launch interactive configuration
           trash-compactor.exe C:\\Games               Compress immediately using defaults
-          trash-compactor.exe -t -v C:\\Projects      Thorough mode with verbose reporting
-          trash-compactor.exe -b C:\\Archive          Branding pass after initial compression
 
         Verbosity levels:
           -v    Summarise cache exclusions and entropy sampling
@@ -163,19 +161,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
 
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument(
-        "-b",
-        "--brand-files",
-        action="store_true",
-        help=_("Branding mode. Runs compact.exe for Windows to mark files as compressed, if some files are reported as not"),
-    )
-    mode_group.add_argument(
-        "-t",
-        "--thorough",
-        action="store_true",
-        help=_("Thorough mode. Performs slower but has more accurate compression state checks for scheduled runs"),
-    )
     return parser
 
 
@@ -183,10 +168,6 @@ def announce_mode(args: argparse.Namespace) -> None:
     notices: list[str] = []
     if getattr(args, "dry_run", False):
         notices.append(_("Dry run: analyse entropy without compressing files."))
-    if args.brand_files:
-        notices.append(_("Branding mode: ensure Windows records compressed attributes after the initial pass."))
-    elif args.thorough:
-        notices.append(_("Thorough mode: perform deeper compression status checks suited for scheduled runs."))
     if getattr(args, "single_worker", False):
         notices.append(_("Single-worker mode: queue batches sequentially to minimise disk head contention."))
 
@@ -198,27 +179,11 @@ def announce_mode(args: argparse.Namespace) -> None:
         print(Fore.YELLOW + line + Style.RESET_ALL)
 
 
-def run_branding(directory: str, thorough: bool) -> None:
-    print(Fore.CYAN + _("\nStarting file branding process...") + Style.RESET_ALL)
-    legacy_stats = compress_directory_legacy(directory, thorough_check=thorough)
-
-    print(Fore.CYAN + _("\nFile Branding Summary:") + Style.RESET_ALL)
-    print(_("Total files processed: {total}").format(total=legacy_stats.total_files))
-    print(_("Files branded as compressed: {branded}").format(branded=legacy_stats.branded_files))
-    if legacy_stats.branded_files:
-        percentage = (legacy_stats.branded_files / legacy_stats.total_files) * 100 if legacy_stats.total_files else 0
-        print(_("Percentage of files branded: {percentage:.2f}%").format(percentage=percentage))
-    if legacy_stats.still_unmarked:
-        print(Fore.YELLOW + _("Warning: {count} files are still not properly marked as compressed.").format(count=legacy_stats.still_unmarked))
-        print(_("These files may be repeatedly processed in future runs."))
-
-
-def run_compression(directory: str, verbosity: int, thorough: bool, min_savings: float, debug_scan_all: bool = False) -> None:
+def run_compression(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> None:
     logging.info(_("Starting compression of directory: %s"), directory)
     stats, monitor = compress_directory(
         directory,
         verbosity=verbosity,
-        thorough_check=thorough,
         min_savings_percent=min_savings,
         debug_scan_all=debug_scan_all,
     )
@@ -259,9 +224,6 @@ def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
 def _validate_modes(args: argparse.Namespace) -> bool:
     if args.no_lzx and args.force_lzx:
         print(Fore.RED + _("Error: Cannot disable and force LZX compression at the same time.") + Style.RESET_ALL)
-        return False
-    if getattr(args, "dry_run", False) and args.brand_files:
-        print(Fore.RED + _("Error: Cannot combine dry-run mode with branding.") + Style.RESET_ALL)
         return False
     return True
 
@@ -370,7 +332,12 @@ def main() -> None:
                 print()
                 try:
                     response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+                except EscapeExit:
+                    discard_staged_incompressible_cache()
+                    print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
+                    return
                 except KeyboardInterrupt:
+                    discard_staged_incompressible_cache()
                     print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
                     sys.exit(130)
 
@@ -388,14 +355,12 @@ def main() -> None:
                     print_compression_summary(stats)
                     monitor.print_summary()
                 else:
+                    discard_staged_incompressible_cache()
                     print(_("Compression cancelled."))
-        elif args.brand_files:
-            run_branding(directory, thorough=args.thorough)
         else:
             run_compression(
                 directory,
                 verbosity=args.verbose,
-                thorough=args.thorough,
                 min_savings=args.min_savings,
                 debug_scan_all=getattr(args, "debug_scan_all", False),
             )
@@ -408,4 +373,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    from multiprocessing.spawn import freeze_support as spawn_freeze_support
+
+    spawn_freeze_support()
+    multiprocessing.freeze_support()
     main()

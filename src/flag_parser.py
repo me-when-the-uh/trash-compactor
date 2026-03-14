@@ -22,8 +22,6 @@ FLAG_METADATA: dict[str, tuple[str, str]] = {
 SHORT_FLAG_KEYS: dict[str, str] = {
     'x': 'no_lzx',
     'f': 'force_lzx',
-    't': 'thorough',
-    'b': 'brand_files',
     's': 'single_worker',
 }
 
@@ -33,14 +31,11 @@ LONG_FLAG_KEYS: dict[str, str] = {
     'quiet': 'verbose_off',
     'no-lzx': 'no_lzx',
     'force-lzx': 'force_lzx',
-    'thorough': 'thorough',
-    'brand-files': 'brand_files',
     'single-worker': 'single_worker',
     'min-savings': 'min_savings',
 }
 
 _MUTUALLY_EXCLUSIVE: tuple[tuple[str, str], ...] = (
-    ('thorough', 'brand_files'),
     ('no_lzx', 'force_lzx'),
 )
 
@@ -50,8 +45,6 @@ class LaunchState:
     verbose: int = 0
     no_lzx: bool = False
     force_lzx: bool = False
-    thorough: bool = False
-    brand_files: bool = False
     single_worker: bool = False
     min_savings: float = DEFAULT_MIN_SAVINGS_PERCENT
 
@@ -250,8 +243,6 @@ def apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
     args.verbose = state.verbose
     args.no_lzx = state.no_lzx
     args.force_lzx = state.force_lzx
-    args.thorough = state.thorough
-    args.brand_files = state.brand_files
     args.single_worker = state.single_worker
     from .config import clamp_savings_percent
     args.min_savings = clamp_savings_percent(state.min_savings)

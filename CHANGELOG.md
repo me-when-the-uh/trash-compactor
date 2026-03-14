@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.2] - 2026-03-14
+### Added
+- Persistent incompressible-directory cache (`incompressible.db`) backed by `xxhash64` path hashes to skip known high-entropy directories across runs
+- LZ4 pre-check in entropy sampling to fast-path certainly incompressible data before zlib probing
+- Added more one-click target directories (`Documents` and `ProgramData`) and result-log parsing after CompactOS execution
+
+### Changed
+- Removed legacy `--thorough`, `--brand-files` modes
+- Entropy directory evaluation now uses process-based parallelism, making entropy scanning run even faster
+- Added a timeout to avoid indefinite stalls on problematic paths
+- Dry-run conservative projection now uses per-algorithm factors
+- Updated locales
+
+### Fixed
+- (potentially) Improved performance with an active antivirus
+- Entropy worker failures are now logged with diagnostics instead of being silently ignored
+- Worker allocation edge-cases
+
 ## [v0.5.1] - 2025-12-21
 ### Added
 - Hidden `--debug-scan-all` flag to scan all files which helped fix the entropy sampling algorithm

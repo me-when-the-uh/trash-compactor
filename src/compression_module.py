@@ -2,22 +2,24 @@ import os
 import sys
 import threading
 import time
-from collections import defaultdict, deque
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
 from colorama import Fore, Style
 
-from .compression.compression_executor import execute_compression_plan, legacy_compress_file
+from .compression.compression_executor import execute_compression_plan
 from .compression.compression_planner import iter_files, plan_compression
-from .compression.entropy import sample_directory_entropy
-from .config import DEFAULT_MIN_SAVINGS_PERCENT, clamp_savings_percent, savings_from_entropy
+from .config import (
+    DEFAULT_MIN_SAVINGS_PERCENT,
+    DRY_RUN_CONSERVATIVE_FACTORS,
+    clamp_savings_percent,
+    savings_from_entropy,
+)
 from .i18n import _
-from .skip_logic import log_directory_skips, maybe_skip_directory
-from .stats import CompressionStats, EntropySampleRecord, LegacyCompressionStats, ProgressTimer
+from .skip_logic import commit_incompressible_cache, log_directory_skips, maybe_skip_directory
+from .stats import CompressionStats, EntropySampleRecord, ProgressTimer
 from .timer import PerformanceMonitor
-from .workers import entropy_worker_count, lzx_worker_count, set_worker_cap, xp_worker_count
+from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
 
 
 REPORTABLE_DIRECTORY_MIN_BYTES = 5 * 1024 * 1024
@@ -45,7 +47,6 @@ def _setup_context(
 def create_compression_plan(
     directory_path: str,
     verbosity: int = 0,
-    thorough_check: bool = False,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
     debug_scan_all: bool = False,
 ) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]], Path, float, int]:
@@ -55,9 +56,6 @@ def create_compression_plan(
         directory_path, min_savings_percent, verbosity
     )
     interactive_output = verbosity_level == 0
-
-    if thorough_check:
-        logging.info(_("Using thorough checking mode - this will be slower but more accurate for previously compressed files"))
 
     all_files = list(iter_files(base_dir, stats, verbosity_level, min_savings_percent, collect_entropy=False))
     total_files = len(all_files)
@@ -77,7 +75,6 @@ def create_compression_plan(
             all_files,
             stats,
             monitor,
-            thorough_check,
             timer,
             verbosity_level,
             base_dir=base_dir,
@@ -92,6 +89,10 @@ def create_compression_plan(
                         skipped=stats.skipped_files, total=total_files
                     )
                 )
+                if stats.lz4_certain_incompressible_files > 0:
+                    final_skip_message += _(
+                        "{certain} files are certainly poorly compressible\n"
+                    ).format(certain=stats.lz4_certain_incompressible_files)
             else:
                 final_skip_message = _("\nNo files discovered for compression.\n")
             timer.stop(final_message=final_skip_message)
@@ -103,13 +104,12 @@ def create_compression_plan(
 def compress_directory(
     directory_path: str,
     verbosity: int = 0,
-    thorough_check: bool = False,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
     debug_scan_all: bool = False,
 ) -> tuple[CompressionStats, PerformanceMonitor]:
     
     stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
-        directory_path, verbosity, thorough_check, min_savings_percent, debug_scan_all
+        directory_path, verbosity, min_savings_percent, debug_scan_all
     )
     interactive_output = verbosity_level == 0
 
@@ -275,78 +275,14 @@ def execute_compression_plan_wrapper(
     monitor.stats.files_compressed = stats.compressed_files
     monitor.stats.files_skipped = stats.skipped_files
     monitor.end_operation()
+    commit_incompressible_cache()
     return stats, monitor
-
-
-def compress_directory_legacy(directory_path: str, thorough_check: bool = False) -> LegacyCompressionStats:
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    stats = LegacyCompressionStats()
-    base_dir = Path(directory_path).resolve()
-
-    print(f"\nChecking files in {directory_path} for proper compression branding...")
-    if thorough_check:
-        print("Using thorough checking mode - this will be slower but more accurate")
-
-    from .config import get_cpu_info
-    from .workers import _apply_worker_cap
-
-    physical_cores, _ = get_cpu_info()
-    default_workers = max(physical_cores or 1, 1)
-    worker_count = _apply_worker_cap(default_workers)
-    if worker_count == default_workers:
-        print(f"Using {worker_count} parallel workers to maximize performance\n")
-    else:
-        noun = "worker" if worker_count == 1 else "workers"
-        print(f"Using {worker_count} {noun} due to storage throttling hints\n")
-
-    targets = _collect_branding_targets(base_dir, stats, thorough_check)
-    if not targets:
-        print("No files need branding - all eligible files are already marked as compressed.")
-        return stats
-
-    print(f"Found {len(targets)} files that need branding...")
-    base_dir_str = str(base_dir)
-
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_to_file = {executor.submit(legacy_compress_file, path): path for path in targets}
-        total = len(targets)
-
-        for completed, future in enumerate(as_completed(future_to_file), start=1):
-            file_path = future_to_file[future]
-            relative_path = os.path.relpath(str(file_path), base_dir_str)
-
-            if completed % 10 == 0 or completed == total:
-                print(f"Progress: {completed}/{total} files processed ({completed / total * 100:.1f}%)")
-
-            try:
-                result = future.result()
-                if result:
-                    from .file_utils import is_file_compressed
-                    is_compressed, _ = is_file_compressed(file_path, thorough_check=False)
-                    if is_compressed:
-                        stats.branded_files += 1
-                    else:
-                        stats.still_unmarked += 1
-                        print(f"WARNING: File still not recognized as compressed: {relative_path}")
-                else:
-                    print(f"ERROR: Failed branding file: {relative_path}")
-            except (OSError, ValueError) as exc:
-                stats.errors.append(f"Exception for {file_path}: {exc}")
-                print(f"ERROR: Exception {exc} while branding file: {relative_path}")
-
-    print(f"\nBranding complete. Successfully branded {stats.branded_files} files.")
-    if stats.still_unmarked:
-        print(f"Warning: {stats.still_unmarked} files could not be properly marked as compressed.")
-
-    return stats
 
 
 def _plan_compression(
     files: list[Path],
     stats: CompressionStats,
     monitor: PerformanceMonitor,
-    thorough_check: bool,
     timer: Optional[ProgressTimer],
     verbosity: int,
     *,
@@ -387,7 +323,6 @@ def _plan_compression(
         files,
         stats,
         monitor,
-        thorough_check,
         base_dir=base_dir,
         min_savings_percent=min_savings_percent,
         verbosity=verbosity,
@@ -395,53 +330,6 @@ def _plan_compression(
         entropy_progress_callback=_entropy_callback_wrapper,
         debug_scan_all=debug_scan_all,
     )
-
-
-def _relative_path(path: Path, base_dir: Path) -> str:
-    try:
-        return str(path.relative_to(base_dir))
-    except ValueError:
-        try:
-            return str(path.resolve().relative_to(base_dir))
-        except Exception:
-            return str(path)
-
-
-def _sample_directories_parallel(
-    directories: list[Path],
-    callback: Optional[Callable[[Path, tuple[Optional[float], int, int]], None]] = None,
-) -> dict[Path, tuple[Optional[float], int, int]]:
-    if not directories:
-        return {}
-
-    worker_count = entropy_worker_count()
-    if worker_count <= 1 or len(directories) == 1:
-        results = {}
-        for directory in directories:
-            result = sample_directory_entropy(directory)
-            results[directory] = result
-            if callback:
-                callback(directory, result)
-        return results
-
-    results = {}
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {
-            executor.submit(sample_directory_entropy, directory): directory
-            for directory in directories
-        }
-
-        for future in as_completed(future_map):
-            directory = future_map[future]
-            try:
-                result = future.result()
-            except Exception:
-                result = (None, 0, 0)
-            results[directory] = result
-            if callback:
-                callback(directory, result)
-
-    return results
 
 
 def entropy_dry_run(
@@ -453,7 +341,10 @@ def entropy_dry_run(
 ) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
     
     stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
-        directory_path, verbosity, thorough_check=False, min_savings_percent=min_savings_percent, debug_scan_all=debug_scan_all
+        directory_path,
+        verbosity,
+        min_savings_percent=min_savings_percent,
+        debug_scan_all=debug_scan_all,
     )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
 
@@ -472,7 +363,8 @@ def entropy_dry_run(
             savings_factor = max(0.0, record.estimated_savings / 100.0)
             compressed_size = size * (1.0 - savings_factor)
             projected_compressed_lzx += compressed_size
-            projected_compressed_xpress += compressed_size * 1.062
+            conservative_factor = DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.06)
+            projected_compressed_xpress += compressed_size * conservative_factor
         else:
             # Fallback if no entropy record found (e.g. sampling failed or skipped)
             projected_compressed_lzx += size
@@ -484,32 +376,3 @@ def entropy_dry_run(
     
     monitor.end_operation()
     return stats, monitor, plan
-
-
-def _collect_branding_targets(
-    base_dir: Path,
-    stats: LegacyCompressionStats,
-    thorough_check: bool,
-) -> list[Path]:
-    from .config import MIN_COMPRESSIBLE_SIZE, SKIP_EXTENSIONS
-    from .file_utils import is_file_compressed
-
-    targets = []
-    for root, _, files in os.walk(base_dir):
-        for name in files:
-            file_path = Path(root) / name
-            stats.total_files += 1
-
-            if file_path.suffix.lower() in SKIP_EXTENSIONS:
-                continue
-
-            try:
-                if file_path.stat().st_size < MIN_COMPRESSIBLE_SIZE:
-                    continue
-
-                is_compressed, _ = is_file_compressed(file_path, thorough_check)
-                if not is_compressed:
-                    targets.append(file_path)
-            except (OSError, ValueError) as exc:
-                stats.errors.append(f"Error checking file {file_path}: {exc}")
-    return targets

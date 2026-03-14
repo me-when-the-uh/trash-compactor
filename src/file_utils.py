@@ -128,32 +128,7 @@ def describe_protected_path(directory: str) -> Optional[str]:
     return get_protection_reason(directory)
 
 
-def _hidden_startupinfo() -> subprocess.STARTUPINFO:
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    return startupinfo
-
-
-def check_compression_with_compact(file_path: Path) -> bool:
-    try:
-        command = ['compact', '/a', str(file_path)]
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            startupinfo=_hidden_startupinfo(),
-            shell=False,
-            text=True,
-        )
-        if result.returncode != 0:
-            return False
-        return "0 are not" in result.stdout
-    except (OSError, subprocess.SubprocessError) as exc:
-        logging.error("Failed to check compression with compact: %s", exc)
-        return False
-
-
-def is_file_compressed(file_path: Path, thorough_check: bool = False) -> tuple[bool, int]:
+def is_file_compressed(file_path: Path) -> tuple[bool, int]:
     try:
         stat_info = file_path.stat()
         actual_size = stat_info.st_size
@@ -174,17 +149,11 @@ def is_file_compressed(file_path: Path, thorough_check: bool = False) -> tuple[b
     if attributes & stat.FILE_ATTRIBUTE_COMPRESSED:
         return True, compressed_size
 
-    if thorough_check and compressed_size == actual_size:
-        if check_compression_with_compact(file_path):
-            logging.debug("File %s detected as compressed by compact command", file_path)
-            return True, compressed_size
-
     return False, compressed_size
 
 
 def should_compress_file(
     file_path: Path,
-    thorough_check: bool = False,
     *,
     file_size: Optional[int] = None,
     ignore_extensions: bool = False,
@@ -202,7 +171,7 @@ def should_compress_file(
     if resolved_size < MIN_COMPRESSIBLE_SIZE:
         return CompressionDecision.deny(_("File too small ({size} bytes)").format(size=resolved_size), resolved_size)
 
-    is_compressed, compressed_size = is_file_compressed(file_path, thorough_check)
+    is_compressed, compressed_size = is_file_compressed(file_path)
     if is_compressed:
         return CompressionDecision.deny(_("File is already compressed"), compressed_size)
 

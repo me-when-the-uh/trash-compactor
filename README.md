@@ -75,7 +75,7 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
 Launching without arguments opens an interactive shell that lets you browse to the target directory, toggle flags, and adjust the minimum savings threshold before starting.
 
 - Enter a path directly, optionally followed by flags (for example: `D:\Games -vx`).
-- Use `--min-savings=<percent>` to change the skip threshold on the fly, or rely on the default 15% savings.
+- Use `--min-savings=<percent>` to change the skip threshold on the fly, or rely on the default 18% savings.
 - Press `s` or hit enter on an empty line to begin once the directory and flags look good.
 
 ### Operation Modes
@@ -108,7 +108,7 @@ To check how well a directory will compress without writing anything to the driv
 
 #### Disabling (-x) or Forcing (-f) LZX Compression
 LZX compression is turned **on** for large files by default.
-LZX compression is resource-intensive and files will take some time to compress, though it does result in better compression of both compressible binaries and the files that XPRESS16K doesn't compress as well. But if you have a computer that was build or made before AD 2021, or if battery life is absolutely critical for you (a big problem on Intel Coffee Lake laptops), you may want to disable it
+LZX compression is resource-intensive and files will take some time to compress, though it does result in better compression of both compressible binaries and the files that XPRESS16K doesn't compress as well. But if you have a computer that was build or made before AD 2021, or if battery life is absolutely critical for you (a big problem on Intel Coffee Lake laptops), you may want to disable it.
 
 #### Running with a single worker (-s) for HDDs
 HDDs read data sequentially and they can't handle the extreme I/O that the program will hammer the drive with, so to avoid excessive fragmentation, one should use this flag to reduce fragmentation somewhat. 
@@ -117,6 +117,17 @@ HDDs read data sequentially and they can't handle the extreme I/O that the progr
 
 - `-v`, or `--verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
 - `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 18%). Directories predicted to save less space are skipped automatically
+
+### Incompressible Cache Database
+
+Trash-compactor stores high-entropy directory decisions in an on-disk cache to avoid re-sampling the same low-value directories on future runs.
+
+- Windows path: `%APPDATA%\TrashCompactor\incompressible.db`
+- Fallback path, if `%APPDATA%` is not set: `~/.cache/TrashCompactor/incompressible.db`
+- Append-only text file, one hash per line
+- `xxhash64` hash function over absolute directory path strings
+
+The cache is loaded into memory at startup. New high-entropy entries are staged during analysis and written to disk only after a compression run completes.
 
 ## Development
 

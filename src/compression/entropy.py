@@ -4,25 +4,14 @@ import math
 import os
 import random
 import zlib
+import lz4.block
 from collections import Counter, deque
 from pathlib import Path
 from typing import Optional, Sequence
 
-
-def shannon_entropy(sample: bytes) -> float:
-    if not sample:
-        return 0.0
-    total = len(sample)
-    frequencies = Counter(sample)
-    entropy = 0.0
-    for count in frequencies.values():
-        probability = count / total
-        entropy -= probability * math.log2(probability)
-    return entropy
-
-
 MAX_SAMPLE_WINDOWS = 3
 TARGET_WINDOW_SIZE = 16 * 1024
+_LZ4_INCOMPRESSIBLE_THRESHOLD = 0.95
 
 
 def sample_directory_entropy(
@@ -33,9 +22,9 @@ def sample_directory_entropy(
     *,
     skip_root_files: bool = False,
     include_subdirectories: bool = True,
-) -> tuple[Optional[float], int, int]:
+) -> tuple[Optional[float], int, int, int]:
     if max_files <= 0 or max_bytes <= 0:
-        return None, 0, 0
+        return None, 0, 0, 0
 
     files, root_files_skipped = _reservoir_sample_files(
         path,
@@ -59,6 +48,7 @@ def sample_directory_entropy(
     sampled_files = 0
     sampled_bytes = 0
     weighted_entropy = 0.0
+    lz4_certain_incompressible_files = 0
     total_budget = max_bytes
 
     for file_path in files:
@@ -70,7 +60,7 @@ def sample_directory_entropy(
         if per_file_budget <= 0:
             break
 
-        file_entropy, file_bytes = sample_file_entropy(
+        file_entropy, file_bytes, lz4_certain = sample_file_entropy(
             file_path,
             byte_budget=per_file_budget,
         )
@@ -80,6 +70,8 @@ def sample_directory_entropy(
         sampled_files += 1
         sampled_bytes += file_bytes
         weighted_entropy += file_entropy
+        if lz4_certain:
+            lz4_certain_incompressible_files += 1
 
         if sampled_bytes >= total_budget:
             break
@@ -94,10 +86,10 @@ def sample_directory_entropy(
                 skip_root_files=False,
                 include_subdirectories=include_subdirectories,
             )
-        return None, sampled_files, sampled_bytes
+        return None, sampled_files, sampled_bytes, lz4_certain_incompressible_files
 
     average_entropy = weighted_entropy / sampled_bytes
-    return average_entropy, sampled_files, sampled_bytes
+    return average_entropy, sampled_files, sampled_bytes, lz4_certain_incompressible_files
 
 
 def _reservoir_sample_files(
@@ -166,26 +158,28 @@ def _reservoir_sample_files(
     return [path for _, path in reservoir], root_files_skipped
 
 
-def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int]:
+def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int, bool]:
     if byte_budget <= 0:
-        return 0.0, 0
+        return 0.0, 0, False
 
     try:
         file_size = path.stat().st_size
     except OSError as exc:
         logging.debug("Unable to stat %s for entropy sampling: %s", path, exc)
-        return 0.0, 0
+        return 0.0, 0, False
 
     if file_size == 0:
-        return 0.0, 0
+        return 0.0, 0, False
 
     window_size = _derive_window_size(byte_budget)
     windows = _plan_sample_windows(file_size, window_size)
     if not windows:
-        return 0.0, 0
+        return 0.0, 0, False
 
     weighted_entropy = 0.0
     sampled_bytes = 0
+    sampled_chunks = 0
+    lz4_shortcircuit_chunks = 0
 
     try:
         with path.open('rb') as stream:
@@ -203,15 +197,19 @@ def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int]:
                 if not data:
                     continue
 
-                entropy = _compression_probe_entropy(data)
+                entropy, lz4_shortcircuit = _compression_probe_entropy(data)
                 chunk_len = len(data)
                 weighted_entropy += entropy * chunk_len
                 sampled_bytes += chunk_len
+                sampled_chunks += 1
+                if lz4_shortcircuit:
+                    lz4_shortcircuit_chunks += 1
     except OSError as exc:
         logging.debug("Unable to sample %s for entropy: %s", path, exc)
-        return 0.0, 0
+        return 0.0, 0, False
 
-    return weighted_entropy, sampled_bytes
+    lz4_certain_incompressible = sampled_chunks > 0 and lz4_shortcircuit_chunks == sampled_chunks
+    return weighted_entropy, sampled_bytes, lz4_certain_incompressible
 
 
 def _derive_window_size(byte_budget: int) -> int:
@@ -267,16 +265,28 @@ def _plan_sample_windows(file_size: int, window_size: int) -> list[tuple[int, in
     return merged
 
 
-def _compression_probe_entropy(sample: bytes) -> float:
+def _compression_probe_entropy(sample: bytes) -> tuple[float, bool]:
     if not sample:
-        return 0.0
+        return 0.0, False
+
+    # LZ4 is ~5-10x faster than zlib.
+    # if LZ4 can't compress the sample meaningfully, zlib won't either,
+    # so both algorithms agree on incompressible data w/ entropy ≈ 8.0
+    try:
+        lz4_len = len(lz4.block.compress(sample, store_size=False))
+        if lz4_len / len(sample) >= _LZ4_INCOMPRESSIBLE_THRESHOLD:
+            return 8.0, True
+    except Exception:
+        pass  # Fall through to zlib
+
+    # zlib (DEFLATE = LZ77 + Huffman) matches NTFS compression algorithms,
+    # giving accurate ratio estimates for LZX/XPRESS
     try:
         compressed = zlib.compress(sample, level=2)
-    except Exception as exc:  # pragma: no cover - extremely rare
-        logging.debug("Falling back to Shannon entropy for probe failure: %s", exc)
-        return shannon_entropy(sample)
+    except Exception as exc:
+        logging.debug("Probe failure: %s", exc)
+        return 8.0, False
 
     compressed_length = len(compressed) or 1
     ratio = compressed_length / len(sample)
-    estimated_entropy = ratio * 8.0
-    return max(0.0, min(8.0, estimated_entropy))
+    return max(0.0, min(8.0, ratio * 8.0)), False
