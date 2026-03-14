@@ -47,6 +47,7 @@ def create_compression_plan(
     verbosity: int = 0,
     thorough_check: bool = False,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
+    debug_scan_all: bool = False,
 ) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]], Path, float, int]:
     import logging
 
@@ -81,6 +82,7 @@ def create_compression_plan(
             verbosity_level,
             base_dir=base_dir,
             min_savings_percent=min_savings_percent,
+            debug_scan_all=debug_scan_all,
         )
     finally:
         if timer:
@@ -103,10 +105,11 @@ def compress_directory(
     verbosity: int = 0,
     thorough_check: bool = False,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
+    debug_scan_all: bool = False,
 ) -> tuple[CompressionStats, PerformanceMonitor]:
     
     stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
-        directory_path, verbosity, thorough_check, min_savings_percent
+        directory_path, verbosity, thorough_check, min_savings_percent, debug_scan_all
     )
     interactive_output = verbosity_level == 0
 
@@ -349,6 +352,7 @@ def _plan_compression(
     *,
     base_dir: Path,
     min_savings_percent: float,
+    debug_scan_all: bool = False,
 ) -> list[tuple[Path, int, str]]:
     if not files:
         return []
@@ -389,6 +393,7 @@ def _plan_compression(
         verbosity=verbosity,
         progress_callback=_on_progress,
         entropy_progress_callback=_entropy_callback_wrapper,
+        debug_scan_all=debug_scan_all,
     )
 
 
@@ -444,10 +449,11 @@ def entropy_dry_run(
     *,
     verbosity: int = 0,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
+    debug_scan_all: bool = False,
 ) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
     
     stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
-        directory_path, verbosity, thorough_check=False, min_savings_percent=min_savings_percent
+        directory_path, verbosity, thorough_check=False, min_savings_percent=min_savings_percent, debug_scan_all=debug_scan_all
     )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
 

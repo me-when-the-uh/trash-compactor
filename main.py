@@ -28,7 +28,7 @@ from src.timer import PerformanceMonitor
 from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 BUILD_DATE = "who cares"
 
 
@@ -157,6 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--language",
         help=_("Force a specific language (e.g., 'en', 'ru')"),
     )
+    parser.add_argument(
+        "--debug-scan-all",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument(
@@ -208,24 +213,26 @@ def run_branding(directory: str, thorough: bool) -> None:
         print(_("These files may be repeatedly processed in future runs."))
 
 
-def run_compression(directory: str, verbosity: int, thorough: bool, min_savings: float) -> None:
+def run_compression(directory: str, verbosity: int, thorough: bool, min_savings: float, debug_scan_all: bool = False) -> None:
     logging.info(_("Starting compression of directory: %s"), directory)
     stats, monitor = compress_directory(
         directory,
         verbosity=verbosity,
         thorough_check=thorough,
         min_savings_percent=min_savings,
+        debug_scan_all=debug_scan_all,
     )
     print_compression_summary(stats)
     monitor.print_summary()
 
 
-def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
+def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
     logging.info(_("Starting entropy dry run for directory: %s"), directory)
     stats, monitor, plan = entropy_dry_run(
         directory,
         verbosity=verbosity,
         min_savings_percent=min_savings,
+        debug_scan_all=debug_scan_all,
     )
     print_entropy_dry_run(stats, min_savings, verbosity)
     log_directory_skips(stats, verbosity, min_savings)
@@ -350,45 +357,51 @@ def main() -> None:
         prompt_exit()
         return
 
-    if getattr(args, "dry_run", False):
-        stats, monitor, plan = run_entropy_dry_run(
-            directory,
-            verbosity=args.verbose,
-            min_savings=args.min_savings,
-        )
-        
-        if plan:
-            print()
-            try:
-                response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
-            except KeyboardInterrupt:
-                print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-                sys.exit(130)
+    try:
+        if getattr(args, "dry_run", False):
+            stats, monitor, plan = run_entropy_dry_run(
+                directory,
+                verbosity=args.verbose,
+                min_savings=args.min_savings,
+                debug_scan_all=getattr(args, "debug_scan_all", False),
+            )
 
-            if response in ('y', 'yes'):
-                print(_("\nStarting compression..."))
-                monitor.start_operation()
-                stats, monitor = execute_compression_plan_wrapper(
-                    stats,
-                    monitor,
-                    plan,
-                    verbosity_level=args.verbose,
-                    interactive_output=True,
-                    min_savings_percent=args.min_savings
-                )
-                print_compression_summary(stats)
-                monitor.print_summary()
-            else:
-                print(_("Compression cancelled."))
-    elif args.brand_files:
-        run_branding(directory, thorough=args.thorough)
-    else:
-        run_compression(
-            directory,
-            verbosity=args.verbose,
-            thorough=args.thorough,
-            min_savings=args.min_savings,
-        )
+            if plan:
+                print()
+                try:
+                    response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+                except KeyboardInterrupt:
+                    print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
+                    sys.exit(130)
+
+                if response in ('y', 'yes'):
+                    print(_("\nStarting compression..."))
+                    monitor.start_operation()
+                    stats, monitor = execute_compression_plan_wrapper(
+                        stats,
+                        monitor,
+                        plan,
+                        verbosity_level=args.verbose,
+                        interactive_output=True,
+                        min_savings_percent=args.min_savings
+                    )
+                    print_compression_summary(stats)
+                    monitor.print_summary()
+                else:
+                    print(_("Compression cancelled."))
+        elif args.brand_files:
+            run_branding(directory, thorough=args.thorough)
+        else:
+            run_compression(
+                directory,
+                verbosity=args.verbose,
+                thorough=args.thorough,
+                min_savings=args.min_savings,
+                debug_scan_all=getattr(args, "debug_scan_all", False),
+            )
+    except KeyboardInterrupt:
+        print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
+        sys.exit(130)
 
     print(_("\nOperation completed."))
     prompt_exit()
