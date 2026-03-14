@@ -27,7 +27,7 @@ Compressing large directories to gain extra storage space will be so free and wi
 
   - Windows 10/11
   - Administrator privileges (but I'm looking for ways to drop this requirement)
-  - **Optional: Temporarily disabled antivirus** - it will dramatically speed up the performance (Don't worry about the so-called "viruses" - the source code is right here and you can compile the program yourself)
+  - **Optional: Temporarily disabled antivirus** - it will dramatically speed up the performance (Don't worry about the so-called "viruses" - the source code is right here and you can compile the program yourself). Or exclude the `trash-compactor.exe` file from real-time scans.
 
 ## Installation
 
@@ -137,7 +137,7 @@ To contribute to this project:
 2. Submit a pull request.
 
 ### Like this project? 
-Put a "star" if you find this project helpful or cool. I don't know what they do, apart for giving some small bragging rights, but maybe it might get introduced to more people, which will be great, as the collective storage savings will contribute to less e-waste - especially if an SSD is soldered onto the laptop's motherboard and is not replaceable, turning the laptop into a paperweight if it fails prematurely - which it surely will.
+Put a "star" if you find this project helpful or cool. I don't know what they do, apart from giving some small bragging rights, but maybe it might get introduced to more people, which will be great, as the collective storage savings will contribute to less e-waste - especially if an SSD is soldered onto the laptop's motherboard and is not replaceable, turning the laptop into a paperweight if it fails prematurely - which it surely will.
 
 ## To-Do
 
