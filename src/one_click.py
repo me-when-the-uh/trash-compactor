@@ -187,7 +187,7 @@ def countdown_to_compress(seconds: int = 300) -> bool:
 #     return True
 
 
-def run_one_click_mode(*, verbosity: int, min_savings: float) -> None:
+def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: bool = False) -> None:
     # if not _check_battery():
     #     print(Fore.YELLOW + _("Warning: Analyzing and compressing on battery power can rapidly drain it.") + Style.RESET_ALL)
     #     if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
@@ -208,8 +208,20 @@ def run_one_click_mode(*, verbosity: int, min_savings: float) -> None:
         print(f"  - {directory}")
 
     print()
-    print(Fore.YELLOW + _("Starting Windows CompactOS in a separate window...") + Style.RESET_ALL)
-    _spawn_compactos_window()
+    if allow_compactos:
+        print(Fore.YELLOW + _("Starting Windows compression in a separate window...") + Style.RESET_ALL)
+        _spawn_compactos_window()
+    else:
+        print(
+            Fore.YELLOW
+            + _("Skipping Windows compression: administrator privileges are required to run 'compact.exe /compactos:always'.")
+            + Style.RESET_ALL
+        )
+        print(
+            Fore.YELLOW
+            + _("1-click mode will compress accessible user directories.")
+            + Style.RESET_ALL
+        )
 
     per_dir: list[tuple[Path, CompressionStats, list[tuple[Path, int, str]]]] = []
 

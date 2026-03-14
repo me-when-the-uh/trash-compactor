@@ -8,7 +8,7 @@ from typing import Callable, Iterable, Iterator, Optional
 from ..i18n import _
 from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy, SKIP_EXTENSIONS
 from ..file_utils import CompressionDecision, should_compress_file
-from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, maybe_skip_directory, sample_directory_entropy
+from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, get_incompressible_cache, maybe_skip_directory, sample_directory_entropy
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
@@ -306,8 +306,39 @@ def _filter_high_entropy_directories(
                     )
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
+
+    cache = get_incompressible_cache()
+    sorted_directories = sorted(directories, key=lambda item: (len(item.parts), str(item).casefold()))
+    for directory in sorted_directories:
+        if directory == base_dir:
+            continue
+        if _has_skipped_ancestor(directory, base_dir, skipped_directories):
+            continue
+        if not cache.contains(directory):
+            continue
+
+        from ..skip_logic import _relative_to_base
+        record = DirectorySkipRecord(
+            path=str(directory),
+            relative_path=_relative_to_base(directory, base_dir),
+            reason=_("Cached: High entropy directory"),
+            category='high_entropy',
+            average_entropy=8.0,
+            estimated_savings=0.0,
+            sampled_files=0,
+            sampled_bytes=0,
+        )
+        append_directory_skip_record(stats, record)
+        skipped_directories[directory] = record
+
+    directories_to_evaluate = [
+        directory
+        for directory in directories
+        if directory != base_dir and not _has_skipped_ancestor(directory, base_dir, skipped_directories)
+    ]
+
     entropy_records, sample_records = evaluate_directories_parallel(
-        (directory for directory in directories if directory != base_dir),
+        directories_to_evaluate,
         base_dir,
         min_savings_percent,
         verbosity,
@@ -325,7 +356,7 @@ def _filter_high_entropy_directories(
         if record.estimated_savings < min_savings_percent:
             stats.entropy_directories_below_threshold += 1
 
-    for directory in sorted(directories, key=lambda item: (len(item.parts), str(item).casefold())):
+    for directory in sorted_directories:
         if _has_skipped_ancestor(directory, base_dir, skipped_directories):
             continue
 
@@ -333,8 +364,9 @@ def _filter_high_entropy_directories(
         if record:
             append_directory_skip_record(stats, record)
             skipped_directories[directory] = record
+            cache.add(directory)
 
-    if not skipped_directories:
+    if not skipped_directories and root_skip_record is None:
         return candidates
 
     filtered: list[tuple[Path, int, str]] = []

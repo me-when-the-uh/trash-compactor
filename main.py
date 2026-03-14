@@ -243,9 +243,12 @@ def _emit_verbosity_banner(level: int) -> None:
 def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Optional[str]:
     set_worker_cap(1 if getattr(args, "single_worker", False) else None)
 
-    if not is_admin():
-        logging.error(_("This script requires administrator privileges"))
-        return None
+    if is_admin():
+        logging.info(_("Running with administrator privileges."))
+    else:
+        logging.warning(
+            _("Running without administrator privileges. Some protected files may be skipped.")
+        )
 
     physical_cores, logical_cores = get_cpu_info()
     announce_mode(args)
@@ -295,11 +298,6 @@ def main() -> None:
     _emit_verbosity_banner(args.verbose)
 
     if getattr(args, 'one_click', False) and not args.directory:
-        if not is_admin():
-            logging.error(_("This script requires administrator privileges"))
-            prompt_exit()
-            return
-
         physical_cores, logical_cores = get_cpu_info()
         configure_lzx(
             choice_enabled=not args.no_lzx,
@@ -309,7 +307,11 @@ def main() -> None:
             logical=logical_cores,
         )
 
-        run_one_click_mode(verbosity=args.verbose, min_savings=args.min_savings)
+        run_one_click_mode(
+            verbosity=args.verbose,
+            min_savings=args.min_savings,
+            allow_compactos=is_admin(),
+        )
         print(_("\nOperation completed."))
         prompt_exit()
         return

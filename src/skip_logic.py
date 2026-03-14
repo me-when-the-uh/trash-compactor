@@ -151,6 +151,9 @@ def maybe_skip_directory(
 
     if skip_record:
         cache.add(directory)
+        append_directory_skip_record(stats, skip_record)
+        return DirectoryDecision.deny(skip_record.reason)
+
     return DirectoryDecision.allow_path()
 
 

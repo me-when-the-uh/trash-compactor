@@ -26,7 +26,7 @@ Compressing large directories to gain extra storage space will be so free and wi
   ## Requirements
 
   - Windows 10/11
-  - Administrator privileges (but I'm looking for ways to drop this requirement)
+  - Optional: Administrator privileges are optional for normal compression runs, required for Windows CompactOS (`compact.exe /compactos:always`) in 1-click mode
   - **Optional: Temporarily disabled antivirus** - it will dramatically speed up the performance (Don't worry about the so-called "viruses" - the source code is right here and you can compile the program yourself). Or exclude the `trash-compactor.exe` file from real-time scans.
 
 ## Installation
@@ -38,7 +38,7 @@ Compressing large directories to gain extra storage space will be so free and wi
 
 ### Option 2: Running from Source
 
-1. Open PowerShell as Administrator
+1. Open PowerShell
 2. Clone and navigate to the repository:
     ```powershell
     git clone https://github.com/misha1350/trash-compactor.git
@@ -62,7 +62,8 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
 
 ## Usage
 
-1. Run the program as Administrator.
+1. Run the program.
+  - Use Administrator only if you want 1-click mode to launch Windows CompactOS.
 2. Choose the mode - either the 1-click run mode to get most things done fast or the manual mode.
 3. The program will automatically:
     - Scan all files recursively
@@ -89,9 +90,11 @@ This mode will automatically compress the following directories:
 - `Program Files (x86)` (including your Steam folder)
 - `AppData`
 - `Downloads`
-- `Windows` (using Windows' built-in CompactOS feature to compress system binaries safely)
+- `Windows` via CompactOS **only when running as Administrator**
 
 Expect at least 15GB to be saved on stock Windows installations.
+
+If launched without Administrator privileges, 1-click mode still performs regular compression on accessible files and directories, while CompactOS is skipped automatically.
 
 #### Normal Mode
 For first-time compression of directories with optimal performance.
