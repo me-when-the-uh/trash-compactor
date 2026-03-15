@@ -53,11 +53,13 @@ def _match_exclusion(normalized: str) -> tuple[bool, Optional[str]]:
 _SIZE_BREAKS, _SIZE_LABELS = zip(*SIZE_THRESHOLDS)
 from .drive_inspector import KERNEL32
 
+_FILE_ATTRIBUTE_COMPRESSED = getattr(stat, 'FILE_ATTRIBUTE_COMPRESSED', 0x800)
+
 _GET_COMPRESSED_FILE_SIZE = KERNEL32.GetCompressedFileSizeW
 _GET_COMPRESSED_FILE_SIZE.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
 _GET_COMPRESSED_FILE_SIZE.restype = wintypes.DWORD
 
-def get_ntfs_compressed_size(file_path: Path) -> int:
+def get_ntfs_compressed_size(file_path: str | Path) -> int:
     high = wintypes.DWORD()
     low = _GET_COMPRESSED_FILE_SIZE(str(file_path), ctypes.byref(high))
     if low == 0xFFFFFFFF:
@@ -128,14 +130,20 @@ def describe_protected_path(directory: str) -> Optional[str]:
     return get_protection_reason(directory)
 
 
-def is_file_compressed(file_path: Path) -> tuple[bool, int]:
-    try:
-        stat_info = file_path.stat()
-        actual_size = stat_info.st_size
-        attributes = stat_info.st_file_attributes
-    except OSError as exc:
-        logging.error("Failed to get actual file size for %s: %s", file_path, exc)
-        return False, 0
+def is_file_compressed(
+    file_path: str | Path, 
+    *,
+    actual_size: Optional[int] = None,
+    attributes: Optional[int] = None,
+) -> tuple[bool, int]:
+    if actual_size is None or attributes is None:
+        try:
+            stat_info = os.stat(file_path)
+            actual_size = stat_info.st_size
+            attributes = stat_info.st_file_attributes
+        except OSError as exc:
+            logging.error("Failed to get actual file size for %s: %s", file_path, exc)
+            return False, 0
 
     try:
         compressed_size = get_ntfs_compressed_size(file_path)
@@ -146,24 +154,30 @@ def is_file_compressed(file_path: Path) -> tuple[bool, int]:
     if compressed_size < actual_size:
         return True, compressed_size
 
-    if attributes & stat.FILE_ATTRIBUTE_COMPRESSED:
+    if attributes & _FILE_ATTRIBUTE_COMPRESSED:
         return True, compressed_size
 
     return False, compressed_size
 
 
 def should_compress_file(
-    file_path: Path,
+    file_path: str | Path,
     *,
     file_size: Optional[int] = None,
+    attributes: Optional[int] = None,
     ignore_extensions: bool = False,
+    check_already_compressed: bool = True,
 ) -> CompressionDecision:
-    suffix = file_path.suffix.lower()
+    if isinstance(file_path, str):
+        suffix = os.path.splitext(file_path)[1].lower()
+    else:
+        suffix = file_path.suffix.lower()
+
     if not ignore_extensions and suffix in SKIP_EXTENSIONS:
         return CompressionDecision.deny(_("Skipped due to extension {suffix}").format(suffix=suffix))
 
     try:
-        resolved_size = file_size if file_size is not None else file_path.stat().st_size
+        resolved_size = file_size if file_size is not None else os.stat(file_path).st_size
     except OSError as exc:
         logging.error("Failed to stat %s: %s", file_path, exc)
         return CompressionDecision.deny(_("Unable to read file size: {exc}").format(exc=exc))
@@ -171,9 +185,12 @@ def should_compress_file(
     if resolved_size < MIN_COMPRESSIBLE_SIZE:
         return CompressionDecision.deny(_("File too small ({size} bytes)").format(size=resolved_size), resolved_size)
 
-    is_compressed, compressed_size = is_file_compressed(file_path)
-    if is_compressed:
-        return CompressionDecision.deny(_("File is already compressed"), compressed_size)
+    if check_already_compressed:
+        is_compressed, compressed_size = is_file_compressed(
+            file_path, actual_size=resolved_size, attributes=attributes
+        )
+        if is_compressed:
+            return CompressionDecision.deny(_("File is already compressed"), compressed_size)
 
     return CompressionDecision.allow(resolved_size)
 

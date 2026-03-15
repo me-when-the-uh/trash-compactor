@@ -26,8 +26,7 @@ Compressing large directories to gain extra storage space will be so free and wi
   ## Requirements
 
   - Windows 10/11
-  - Optional: Administrator privileges are optional for normal compression runs, required for Windows CompactOS (`compact.exe /compactos:always`) in 1-click mode
-  - **Optional: Temporarily disabled antivirus** - it will dramatically speed up the performance (Don't worry about the so-called "viruses" - the source code is right here and you can compile the program yourself). Or exclude the `trash-compactor.exe` file from real-time scans.
+  - Optional: Administrator privileges are optional for normal compression runs. They are required for compressing Windows system binaries using CompactOS (`compact.exe /compactos:always`) in 1-click mode
 
 ## Installation
 
@@ -90,11 +89,13 @@ This mode will automatically compress the following directories:
 - `Program Files (x86)` (including your Steam folder)
 - `AppData`
 - `Downloads`
-- `Windows` via CompactOS **only when running as Administrator**
+- `Windows` via CompactOS **only when running as Administrator** (you will be prompted first)
 
 Expect at least 15GB to be saved on stock Windows installations.
 
 If launched without Administrator privileges, 1-click mode still performs regular compression on accessible files and directories, while CompactOS is skipped automatically.
+
+If launched with Administrator privileges, 1-click mode asks whether to start CompactOS before scanning begins. If you accept, CompactOS starts immediately in a separate window while the directory scan/analysis runs.
 
 #### Normal Mode
 For first-time compression of directories with optimal performance.

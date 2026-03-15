@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [v0.5.3] - 2026-03-15
+### Added
+- Prompting the user to compress Windows binaries instead of immediately compressing without asking
+
+### Changed and fixed
+- Redundant scanning calls and checks removed, improving scanning performance by 2% for regular runs and **50% for runs with Microsoft Defender's real-time protection enabled**
+- Locales' updated, now the design is very human
+
+
 ## [v0.5.2] - 2026-03-14
 ### Added
 - Persistent incompressible-directory cache (`incompressible.db`) backed by `xxhash64` path hashes to skip known high-entropy directories across runs

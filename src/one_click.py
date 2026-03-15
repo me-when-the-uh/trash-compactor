@@ -73,10 +73,11 @@ def _spawn_compactos_window() -> None:
     os.environ["COMPACTOS_LOG"] = str(comp_log)
 
     # Keep a separate window open so the user can see CompactOS output
-    ps = (
-        f"Start-Process -FilePath 'powershell.exe' "
-        f"-ArgumentList @('-Command','compact.exe /compactos:always | Tee-Object -FilePath \"{comp_log}\"; Write-Host \"\"; Write-Host -ForegroundColor Green \"Compression finished. This window will close in 5 minutes...\"; Start-Sleep -Seconds 300') "
-        f"-WindowStyle Normal"
+    ps_command = (
+        f"Write-Host -ForegroundColor Cyan 'Compressing OS binaries... This may take a while.'; "
+        f"compact.exe /compactos:always | Tee-Object -FilePath '{comp_log}'; "
+        f"Write-Host ''; Write-Host -ForegroundColor Green 'Compression finished. This window will close in 5 minutes...'; "
+        f"Start-Sleep -Seconds 300"
     )
 
     try:
@@ -87,13 +88,15 @@ def _spawn_compactos_window() -> None:
                 "-ExecutionPolicy",
                 "Bypass",
                 "-Command",
-                ps,
-            ]
+                ps_command,
+            ],
+            creationflags=subprocess.CREATE_NEW_CONSOLE
         )
     except OSError:
         # Fallback to cmd if PowerShell isn't available
         try:
-            cmd = f'compact.exe /compactos:always > "{comp_log}" & type "{comp_log}" & echo. & echo Compression finished. This window will close in 5 minutes... & timeout /t 300'
+            msg = "Compressing OS binaries... This may take a while."
+            cmd = f'echo {msg} & compact.exe /compactos:always > "{comp_log}" & type "{comp_log}" & echo. & echo Compression finished. This window will close in 5 minutes... & timeout /t 300'
             subprocess.Popen(["cmd.exe", "/c", "start", "cmd.exe", "/c", cmd])
         except OSError:
             return
@@ -113,6 +116,24 @@ def _attention_beep() -> None:
     except Exception:
         sys.stdout.write("\a")
         sys.stdout.flush()
+
+
+def _prompt_yes_no(prompt: str, *, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        try:
+            answer = input(f"{prompt} {suffix}: ").strip().lower()
+        except EOFError:
+            return default
+
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+
+        print(_("Please answer with Y or N."))
 
 
 def countdown_to_compress(seconds: int = 300) -> bool:
@@ -209,8 +230,19 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
 
     print()
     if allow_compactos:
-        print(Fore.YELLOW + _("Starting Windows compression in a separate window...") + Style.RESET_ALL)
-        _spawn_compactos_window()
+        should_compress_windows = _prompt_yes_no(
+            _("Compress Windows binaries now for extra memory savings?"),
+            default=False,
+        )
+        if should_compress_windows:
+            print(Fore.YELLOW + _("Starting Windows compression in a separate window...") + Style.RESET_ALL)
+            _spawn_compactos_window()
+        else:
+            print(
+                Fore.YELLOW
+                + _("Skipping Windows binaries compression by user choice.")
+                + Style.RESET_ALL
+            )
     else:
         print(
             Fore.YELLOW

@@ -1,4 +1,5 @@
 from contextvars import ContextVar
+import os
 from typing import Optional
 
 from .config import get_cpu_info
@@ -29,6 +30,18 @@ def _physical_core_baseline_workers() -> int:
 
 def entropy_worker_count() -> int:
     default = _physical_core_baseline_workers()
+    return _apply_worker_cap(default)
+
+
+def scan_worker_count() -> int:
+    default = _physical_core_baseline_workers()
+    env_value = os.getenv("TRASH_COMPACTOR_SCAN_WORKERS")
+    if env_value:
+        try:
+            requested = int(env_value)
+            default = max(1, requested)
+        except ValueError:
+            pass
     return _apply_worker_cap(default)
 
 

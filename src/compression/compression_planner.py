@@ -1,6 +1,7 @@
+import functools
 import logging
 import os
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
@@ -11,7 +12,7 @@ from ..file_utils import CompressionDecision, should_compress_file
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, get_incompressible_cache, maybe_skip_directory, sample_directory_entropy
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 from ..timer import PerformanceMonitor
-from ..workers import entropy_worker_count
+from ..workers import entropy_worker_count, scan_worker_count
 from .entropy import sample_file_entropy
 
 
@@ -101,31 +102,59 @@ def _traverse_skipped(root: Path, callback: Callable[[Path], None]) -> None:
 
 @dataclass(frozen=True)
 class _ScanPayload:
-    index: int
-    path: Path
+    path: str
     file_size: int
     decision: Optional[CompressionDecision]
     error: Optional[str] = None
 
 
-def _scan_single(index: int, entry: os.DirEntry, debug_scan_all: bool = False) -> _ScanPayload:
-    file_path = Path(entry.path)
+def _scan_single(
+    entry: os.DirEntry,
+    debug_scan_all: bool = False,
+    check_already_compressed: bool = True,
+) -> _ScanPayload:
+    file_path = entry.path
     try:
-        file_size = entry.stat().st_size
+        st = entry.stat()
+        file_size = st.st_size
+        attrs = getattr(st, 'st_file_attributes', 0)
     except OSError as exc:
-        return _ScanPayload(index, file_path, 0, None, _("Error processing {file_path}: {exc}").format(file_path=file_path, exc=exc))
+        return _ScanPayload(file_path, 0, None, _("Error processing {file_path}: {exc}").format(file_path=file_path, exc=exc))
 
-    decision = should_compress_file(file_path, file_size=file_size, ignore_extensions=debug_scan_all)
-    return _ScanPayload(index, file_path, file_size, decision)
+    decision = should_compress_file(
+        file_path,
+        file_size=file_size,
+        attributes=attrs,
+        ignore_extensions=debug_scan_all,
+        check_already_compressed=check_already_compressed,
+    )
+    return _ScanPayload(file_path, file_size, decision)
+
+
+def _scan_checks_compressed_state() -> bool:
+    value = os.getenv("TRASH_COMPACTOR_FAST_SCAN", "0").strip().lower()
+    return value not in {"1", "true", "yes", "on"}
 
 
 def _iter_scanned_files(files: Iterable[os.DirEntry], debug_scan_all: bool = False) -> Iterator[_ScanPayload]:
-    # Scanning is metadata-heavy and extremely fast with os.DirEntry.
-    # Using ThreadPoolExecutor instead of ProcessPoolExecutor 
-    # introduces GIL contention and overhead, hindering performance.
-    # Each worker runs on 1 thread, if N physical cores are available, N-1 workers are spawned.
-    for index, entry in enumerate(files):
-        yield _scan_single(index, entry, debug_scan_all)
+    workers = scan_worker_count()
+    check_already_compressed = _scan_checks_compressed_state()
+
+    mapper = functools.partial(
+        _scan_single, 
+        debug_scan_all=debug_scan_all,
+        check_already_compressed=check_already_compressed,
+    )
+
+    if workers <= 1:
+        for entry in files:
+            yield mapper(entry)
+        return
+
+    # chunking for eliminating per-task dispatch overhead in the ThreadPool
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for result in executor.map(mapper, files, chunksize=2000):
+            yield result
 
 
 def plan_compression(
@@ -142,12 +171,12 @@ def plan_compression(
     entropy_progress_callback: Optional[Callable[[Path, int, int], None]] = None,
     debug_scan_all: bool = False,
 ) -> list[tuple[Path, int, str]]:
-    ordered_candidates: list[tuple[int, Path, int, str]] = []
+    candidates: list[tuple[Path, int, str]] = []
     with monitor.time_file_scan():
         processed = 0
         for payload in _iter_scanned_files(files, debug_scan_all):
             processed += 1
-            file_path = payload.path
+            file_path = Path(payload.path)
             decision = payload.decision
 
             if decision is None:
@@ -184,7 +213,7 @@ def plan_compression(
                             )
 
                 algorithm = COMPRESSION_ALGORITHMS[get_size_category(file_size)]
-                ordered_candidates.append((payload.index, file_path, file_size, algorithm))
+                candidates.append((file_path, file_size, algorithm))
                 if progress_callback:
                     progress_callback(file_path, processed, True, None)
             else:
@@ -206,8 +235,6 @@ def plan_compression(
                 if progress_callback:
                     progress_callback(file_path, processed, False, reason)
 
-    ordered_candidates.sort(key=lambda item: item[0])
-    candidates = [(path, file_size, algorithm) for _, path, file_size, algorithm in ordered_candidates]
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():
             candidates = _filter_high_entropy_directories(
