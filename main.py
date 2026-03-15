@@ -28,7 +28,7 @@ from src.timer import PerformanceMonitor
 from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 BUILD_DATE = "who cares"
 
 

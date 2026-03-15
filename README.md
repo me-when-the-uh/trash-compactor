@@ -90,11 +90,13 @@ This mode will automatically compress the following directories:
 - `Program Files (x86)` (including your Steam folder)
 - `AppData`
 - `Downloads`
-- `Windows` via CompactOS **only when running as Administrator**
+- `Windows` via CompactOS **only when running as Administrator** (you will be prompted first)
 
 Expect at least 15GB to be saved on stock Windows installations.
 
 If launched without Administrator privileges, 1-click mode still performs regular compression on accessible files and directories, while CompactOS is skipped automatically.
+
+If launched with Administrator privileges, 1-click mode asks whether to start CompactOS before scanning begins. If you accept, CompactOS starts immediately in a separate window while the directory scan/analysis runs.
 
 #### Normal Mode
 For first-time compression of directories with optimal performance.

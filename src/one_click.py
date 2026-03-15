@@ -115,6 +115,24 @@ def _attention_beep() -> None:
         sys.stdout.flush()
 
 
+def _prompt_yes_no(prompt: str, *, default: bool = False) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        try:
+            answer = input(f"{prompt} {suffix}: ").strip().lower()
+        except EOFError:
+            return default
+
+        if not answer:
+            return default
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+
+        print(_("Please answer with Y or N."))
+
+
 def countdown_to_compress(seconds: int = 300) -> bool:
     """Return True to proceed, False to cancel."""
     seconds = max(0, int(seconds))
@@ -209,8 +227,19 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
 
     print()
     if allow_compactos:
-        print(Fore.YELLOW + _("Starting Windows compression in a separate window...") + Style.RESET_ALL)
-        _spawn_compactos_window()
+        should_compress_windows = _prompt_yes_no(
+            _("Compress Windows binaries now for extra memory savings?"),
+            default=False,
+        )
+        if should_compress_windows:
+            print(Fore.YELLOW + _("Starting Windows compression in a separate window...") + Style.RESET_ALL)
+            _spawn_compactos_window()
+        else:
+            print(
+                Fore.YELLOW
+                + _("Skipping Windows binaries compression by user choice.")
+                + Style.RESET_ALL
+            )
     else:
         print(
             Fore.YELLOW
