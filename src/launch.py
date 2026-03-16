@@ -22,12 +22,13 @@ from .i18n import _
 
 def pick_directory_dialog() -> Optional[str]:
     ps_script = """
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     Add-Type -AssemblyName System.Windows.Forms
     $f = New-Object System.Windows.Forms.FolderBrowserDialog
     $f.Description = 'Select directory to compress'
     $f.ShowNewFolderButton = $true
     if ($f.ShowDialog() -eq 'OK') {
-        Write-Host $f.SelectedPath
+        Write-Output $f.SelectedPath
     }
     """
     
@@ -38,9 +39,11 @@ def pick_directory_dialog() -> Optional[str]:
     
     try:
         result = subprocess.run(
-            cmd, 
-            capture_output=True, 
+            cmd,
+            capture_output=True,
             text=True, 
+            encoding='utf-8',
+            errors='replace',
             startupinfo=startupinfo
         )
         path = result.stdout.strip()

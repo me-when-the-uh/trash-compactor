@@ -1,13 +1,13 @@
 import functools
 import logging
 import os
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
 from ..i18n import _
-from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy, SKIP_EXTENSIONS
+from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy, SKIP_EXTENSIONS, ENTROPY_MAX_FILE_BUDGET
 from ..file_utils import CompressionDecision, should_compress_file
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, get_incompressible_cache, maybe_skip_directory, sample_directory_entropy
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
@@ -55,41 +55,33 @@ def iter_files(
     
     while stack:
         current_dir = stack.pop()
-        
+
         try:
             with os.scandir(current_dir) as it:
-                entries = list(it)
+                valid_dirs: list[Path] = []
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            candidate = Path(entry.path)
+                            decision = maybe_skip_directory(
+                                candidate,
+                                root,
+                                stats,
+                                collect_entropy,
+                                min_savings_percent,
+                                verbosity,
+                            )
+                            if decision.skip:
+                                if skipped_file_callback:
+                                    _traverse_skipped(candidate, skipped_file_callback)
+                                continue
+                            valid_dirs.append(candidate)
+                        elif entry.is_file(follow_symlinks=False):
+                            yield entry
+                    except OSError:
+                        continue
         except (OSError, PermissionError):
             continue
-
-        dirs = []
-        files = []
-        
-        for entry in entries:
-            if entry.is_dir(follow_symlinks=False):
-                dirs.append(entry)
-            elif entry.is_file(follow_symlinks=False):
-                files.append(entry)
-        
-        for entry in files:
-            yield entry
-
-        valid_dirs = []
-        for entry in dirs:
-            candidate = Path(entry.path)
-            decision = maybe_skip_directory(
-                candidate,
-                root,
-                stats,
-                collect_entropy,
-                min_savings_percent,
-                verbosity,
-            )
-            if decision.skip:
-                if skipped_file_callback:
-                    _traverse_skipped(candidate, skipped_file_callback)
-                continue
-            valid_dirs.append(candidate)
         stack.extend(reversed(valid_dirs))
 
 
@@ -201,7 +193,7 @@ def plan_compression(
 
             if decision.should_compress:
                 if debug_scan_all and file_path.suffix.lower() in SKIP_EXTENSIONS:
-                    entropy_sum, sampled_bytes, _ = sample_file_entropy(file_path, byte_budget=65536)
+                    entropy_sum, sampled_bytes, _ = sample_file_entropy(file_path, byte_budget=ENTROPY_MAX_FILE_BUDGET)
                     if sampled_bytes > 0:
                         average_entropy = entropy_sum / sampled_bytes
                         savings = savings_from_entropy(average_entropy)
@@ -429,13 +421,18 @@ def _has_skipped_ancestor(
     base_dir: Path,
     skipped: dict[Path, DirectorySkipRecord],
 ) -> bool:
-    for ancestor in _ancestors_including_base(directory, base_dir):
-        record = skipped.get(ancestor)
-        if record is None:
-            continue
-        if ancestor == base_dir and directory != base_dir:
-            continue
-        return True
+    current = directory
+    while True:
+        record = skipped.get(current)
+        if record is not None:
+            if current != base_dir or directory == base_dir:
+                return True
+        if current == base_dir:
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
     return False
 
 
@@ -444,28 +441,19 @@ def _locate_skip_record(
     base_dir: Path,
     skipped: dict[Path, DirectorySkipRecord],
 ) -> Optional[DirectorySkipRecord]:
-    for ancestor in _ancestors_including_base(directory, base_dir):
-        record = skipped.get(ancestor)
-        if record is None:
-            continue
-        if ancestor == base_dir and directory != base_dir:
-            continue
-        return record
-    return None
-
-
-def _ancestors_including_base(path: Path, base_dir: Path) -> list[Path]:
-    ancestors: list[Path] = []
-    current = path
+    current = directory
     while True:
-        ancestors.append(current)
+        record = skipped.get(current)
+        if record is not None:
+            if current != base_dir or directory == base_dir:
+                return record
         if current == base_dir:
             break
         parent = current.parent
         if parent == current:
             break
         current = parent
-    return ancestors
+    return None
 
 
 def evaluate_directories_parallel(
@@ -502,32 +490,50 @@ def evaluate_directories_parallel(
                 sample_results.append(sample_record)
         return skip_results, sample_results
 
+    in_flight_limit = max(worker_count * 4, worker_count + 1)
+
     with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        future_map = {
-            executor.submit(
+        pending: dict = {}
+        remaining = iter(directory_list)
+
+        def _submit_next() -> bool:
+            try:
+                directory = next(remaining)
+            except StopIteration:
+                return False
+            future = executor.submit(
                 evaluate_entropy_directory,
                 directory,
                 base_dir,
                 min_savings_percent,
                 verbosity,
-            ): directory
-            for directory in directory_list
-        }
+            )
+            pending[future] = directory
+            return True
 
-        for future in as_completed(future_map):
-            directory = future_map[future]
-            _on_complete(directory)
+        for _ in range(min(in_flight_limit, len(directory_list))):
+            if not _submit_next():
+                break
 
-            try:
-                skip_record, sample_record = future.result()
-            except Exception as exc:
-                logging.debug("Entropy sampling failed for %s: %s", directory, exc, exc_info=True)
-                continue
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                directory = pending.pop(future)
+                _on_complete(directory)
 
-            if skip_record:
-                skip_results[directory] = skip_record
-            if sample_record:
-                sample_results.append(sample_record)
+                try:
+                    skip_record, sample_record = future.result()
+                except Exception as exc:
+                    logging.debug("Entropy sampling failed for %s: %s", directory, exc, exc_info=True)
+                    continue
+
+                if skip_record:
+                    skip_results[directory] = skip_record
+                if sample_record:
+                    sample_results.append(sample_record)
+
+            while len(pending) < in_flight_limit and _submit_next():
+                pass
 
     return skip_results, sample_results
 

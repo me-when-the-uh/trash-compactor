@@ -147,7 +147,7 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 
 ### Short-term Goals
 - Fix bugs:
-  - Add support for non-latin characters in the path to directory that is being chosen from the "Choose Directory" menu
+  - There are no bugs in Trash-Compactor.
 
 ### Long-term Goals
 - Research advanced compression methods:

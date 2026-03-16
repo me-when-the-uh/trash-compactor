@@ -9,20 +9,30 @@ from collections import Counter, deque
 from pathlib import Path
 from typing import Optional, Sequence
 
-MAX_SAMPLE_WINDOWS = 3
-TARGET_WINDOW_SIZE = 16 * 1024
+from ..config import (
+    ENTROPY_BASE_SAMPLE_WINDOWS,
+    ENTROPY_DYNAMIC_WINDOWS_MAX,
+    ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE,
+    ENTROPY_DYNAMIC_WINDOWS_MIN,
+    ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE,
+    ENTROPY_MAX_FILE_BUDGET,
+    ENTROPY_TARGET_WINDOW_SIZE,
+)
+
 _LZ4_INCOMPRESSIBLE_THRESHOLD = 0.95
 
 
 def sample_directory_entropy(
     path: Path,
     max_files: int = 45,
-    chunk_size: int = 65536,
+    chunk_size: Optional[int] = None,
     max_bytes: int = 4 * 1024 * 1024,
     *,
     skip_root_files: bool = False,
     include_subdirectories: bool = True,
 ) -> tuple[Optional[float], int, int, int]:
+    if chunk_size is None:
+        chunk_size = ENTROPY_MAX_FILE_BUDGET
     if max_files <= 0 or max_bytes <= 0:
         return None, 0, 0, 0
 
@@ -113,49 +123,60 @@ def _reservoir_sample_files(
         current = pending.popleft()
         try:
             with os.scandir(current) as it:
-                entries = list(it)
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            if include_subdirectories:
+                                pending.append(Path(entry.path))
+                            continue
+
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+
+                        if skip_root_files and current == root:
+                            root_files_skipped = True
+                            continue
+
+                        try:
+                            file_size = entry.stat().st_size
+                        except OSError:
+                            continue
+
+                        if file_size <= 0:
+                            continue
+
+                        # Weighted reservoir sampling (Efraimidis-Spirakis)
+                        # Key = u^(1/w) -> log(Key) = log(u) / w
+                        # the intent is to keep items with largest keys.
+                        # u is random in (0, 1]
+                        u = random.random()
+                        while u == 0:
+                            u = random.random()
+
+                        key = math.log(u) / file_size
+                        file_path = Path(entry.path)
+
+                        if len(reservoir) < max_files:
+                            heapq.heappush(reservoir, (key, file_path))
+                        elif key > reservoir[0][0]:
+                            heapq.heapreplace(reservoir, (key, file_path))
+                    except OSError:
+                        continue
         except OSError as exc:
             logging.debug("Unable to inspect %s for entropy: %s", current, exc)
             continue
 
-        for entry in entries:
-            if entry.is_dir(follow_symlinks=False):
-                if include_subdirectories:
-                    pending.append(Path(entry.path))
-                continue
-            
-            if not entry.is_file(follow_symlinks=False):
-                continue
-
-            if skip_root_files and current == root:
-                root_files_skipped = True
-                continue
-
-            try:
-                file_size = entry.stat().st_size
-            except OSError:
-                continue
-
-            if file_size <= 0:
-                continue
-
-            # Weighted reservoir sampling (Efraimidis-Spirakis)
-            # Key = u^(1/w) -> log(Key) = log(u) / w
-            # the intent is to keep items with largest keys.
-            # u is random in (0, 1]
-            u = random.random()
-            while u == 0:  # Avoid log(0)
-                u = random.random()
-            
-            key = math.log(u) / file_size
-            file_path = Path(entry.path)
-
-            if len(reservoir) < max_files:
-                heapq.heappush(reservoir, (key, file_path))
-            elif key > reservoir[0][0]:
-                heapq.heapreplace(reservoir, (key, file_path))
-
     return [path for _, path in reservoir], root_files_skipped
+
+
+def get_sample_window_count(file_size: int) -> int:
+    if file_size <= ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE:
+        return ENTROPY_BASE_SAMPLE_WINDOWS
+    if file_size >= ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE:
+        return ENTROPY_DYNAMIC_WINDOWS_MAX
+    
+    ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE) / (ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE)
+    return int(ENTROPY_DYNAMIC_WINDOWS_MIN + ratio * (ENTROPY_DYNAMIC_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MIN))
 
 
 def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int, bool]:
@@ -171,8 +192,9 @@ def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int, bo
     if file_size == 0:
         return 0.0, 0, False
 
-    window_size = _derive_window_size(byte_budget)
-    windows = _plan_sample_windows(file_size, window_size)
+    num_windows = get_sample_window_count(file_size)
+    window_size = _derive_window_size(byte_budget, num_windows)
+    windows = _plan_sample_windows(file_size, window_size, num_windows)
     if not windows:
         return 0.0, 0, False
 
@@ -212,37 +234,46 @@ def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int, bo
     return weighted_entropy, sampled_bytes, lz4_certain_incompressible
 
 
-def _derive_window_size(byte_budget: int) -> int:
+def _derive_window_size(byte_budget: int, num_windows: int) -> int:
     if byte_budget <= 0:
         return 0
-    window = min(TARGET_WINDOW_SIZE, byte_budget)
-    if window * MAX_SAMPLE_WINDOWS > byte_budget and byte_budget >= MAX_SAMPLE_WINDOWS:
-        window = byte_budget // MAX_SAMPLE_WINDOWS
+    window = min(ENTROPY_TARGET_WINDOW_SIZE, byte_budget)
+    if window * num_windows > byte_budget and byte_budget >= num_windows:
+        window = byte_budget // num_windows
     return max(1, window)
 
 
-def _plan_sample_windows(file_size: int, window_size: int) -> list[tuple[int, int]]:
-    if file_size <= 0 or window_size <= 0:
+def _plan_sample_windows(file_size: int, window_size: int, num_windows: int) -> list[tuple[int, int]]:
+    if file_size <= 0 or window_size <= 0 or num_windows <= 0:
         return []
 
     if file_size <= window_size:
         return [(0, file_size)]
 
-    # Calculate offsets for file scanning: 10%, 45%, 80%
-    p10 = int(file_size * 0.10)
-    p45 = int(file_size * 0.45)
-    p80 = int(file_size * 0.80)
-
-    w1_start = p10
-    w2_start = max(0, p45 - (window_size // 2))
-    w3_start = max(0, p80 - window_size)
-
     raw_windows = []
-    for start in (w1_start, w2_start, w3_start):
-        start = min(start, file_size)
-        end = min(start + window_size, file_size)
-        if end > start:
-            raw_windows.append((start, end))
+
+    if num_windows == 3 and ENTROPY_BASE_SAMPLE_WINDOWS == 3:
+        p10 = int(file_size * 0.10)
+        p45 = int(file_size * 0.45)
+        p80 = int(file_size * 0.80)
+
+        w1_start = p10
+        w2_start = max(0, p45 - (window_size // 2))
+        w3_start = max(0, p80 - window_size)
+
+        for start in (w1_start, w2_start, w3_start):
+            start = min(start, file_size)
+            end = min(start + window_size, file_size)
+            if end > start:
+                raw_windows.append((start, end))
+    else:
+        max_start = max(0, file_size - window_size)
+        step = max_start / (num_windows - 1) if num_windows > 1 else 0.0
+        for i in range(num_windows):
+            start = int(i * step)
+            end = min(start + window_size, file_size)
+            if end > start:
+                raw_windows.append((start, end))
 
     if not raw_windows:
         return []

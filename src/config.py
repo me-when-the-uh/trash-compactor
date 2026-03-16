@@ -52,6 +52,15 @@ def savings_from_entropy(entropy: float) -> float:
 
 ENTROPY_SKIP_THRESHOLD: Final[float] = entropy_from_savings(DEFAULT_MIN_SAVINGS_PERCENT)
 
+ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: Final[int] = 8 * 1024 * 1024  # 8MB
+ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: Final[int] = 100 * 1024 * 1024 # 100MB
+ENTROPY_BASE_SAMPLE_WINDOWS: Final[int] = 3
+ENTROPY_DYNAMIC_WINDOWS_MIN: Final[int] = 4
+ENTROPY_DYNAMIC_WINDOWS_MAX: Final[int] = 20
+ENTROPY_TARGET_WINDOW_SIZE: Final[int] = 16 * 1024
+
+ENTROPY_MAX_FILE_BUDGET: Final[int] = ENTROPY_DYNAMIC_WINDOWS_MAX * ENTROPY_TARGET_WINDOW_SIZE
+
 MIN_COMPRESSIBLE_SIZE: Final[int] = 8 * 1024  # 8KB minimum
 SIZE_THRESHOLDS: Final[Tuple[Tuple[int, str], ...]] = (
     (64 * 1024, 'tiny'),
@@ -117,8 +126,8 @@ COMPRESSION_ALGORITHMS: Final[dict[str, str]] = {
     'large': 'LZX',
 }
 DRY_RUN_CONSERVATIVE_FACTORS: Final[dict[str, float]] = {
-    'XPRESS4K': 1.03,
-    'XPRESS8K': 1.045,
-    'XPRESS16K': 1.055,
-    'LZX': 1.075,
+    'XPRESS4K': 0.98,
+    'XPRESS8K': 1.02,
+    'XPRESS16K': 1.04,
+    'LZX': 1.068,
 }
