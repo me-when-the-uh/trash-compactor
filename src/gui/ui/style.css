@@ -118,6 +118,43 @@ textarea {
   min-height: 1.2em;
 }
 
+#Quick_Estimate {
+  border: 1px solid #262626;
+  border-radius: 6px;
+  padding: 10px;
+  margin: 8px 0 12px 0;
+  background: #323232;
+}
+
+#Quick_Estimate .estimate-main {
+  font-size: 1.25em;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+#Quick_Estimate .estimate-sub {
+  margin-top: 4px;
+  color: #d8d8d8;
+  font-size: 0.95em;
+}
+
+#Current_Disk_Line {
+  color: #e0e0e0;
+  font-weight: 500;
+}
+
+.estimate-tone-low {
+  color: #e6d57a;
+}
+
+.estimate-tone-good {
+  color: #7fdc9f;
+}
+
+.estimate-tone-great {
+  color: #8fc9ff;
+}
+
 #Activity_Progress {
   width: 95%;
 }

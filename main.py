@@ -27,7 +27,7 @@ from src.timer import PerformanceMonitor
 from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.6.0"
+VERSION = "0.6.0-beta"
 BUILD_DATE = "who cares"
 
 
@@ -104,7 +104,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=_("Target directory to compress. Omit to start the interactive walkthrough."),
     )
 
-    # Not part of the advertised CLI surface yet; used by the interactive launcher.
     parser.add_argument(
         "--one-click",
         action="store_true",
@@ -288,7 +287,6 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
 
 def main() -> None:
-    # Detect language override before anything else to ensure banner and help text are translated
     override_lang = _detect_language_override(sys.argv[1:])
     load_translations(override_lang)
     
@@ -306,10 +304,8 @@ def main() -> None:
     _emit_verbosity_banner(args.verbose)
 
     if interactive_launch:
-        # Launch GUI if available, otherwise fallback to CLI interactive
         try:
-            import webview  # type: ignore
-            # Import run_gui but don't finalize imports yet if it's missing
+            import webview  
             from src.gui.backend import run_gui
             run_gui()
             sys.exit(0)

@@ -142,18 +142,24 @@ Util.bytes_to_human = Util.bytes_to_human_bin;
 var Action = (function() {
 	"use strict";
 
+	function _dispatch_if_message(res) {
+		if (res && res.type) {
+			Response.dispatch(res);
+		}
+	}
+
 	return {
 		open_url: function(url) {
-			pywebview.api.open_url(url);
+			pywebview.api.open_url(url).then(_dispatch_if_message);
 		},
 
 		reset_config: function() {
-			pywebview.api.reset_config();
+			pywebview.api.reset_config().then(_dispatch_if_message);
 		},
 
 		save_config: function(config) {
 			config.type = 'SaveConfig';
-			pywebview.api.save_config(config);
+			pywebview.api.save_config(config).then(_dispatch_if_message);
 		},
 
 		choose_folder: function() {
@@ -167,27 +173,27 @@ var Action = (function() {
 		},
 
 		start_compression: function() {
-			pywebview.api.start_compression();
+			pywebview.api.start_compression().then(_dispatch_if_message);
 		},
 
 		pause: function() {
-			pywebview.api.pause_compression();
+			pywebview.api.pause_compression().then(_dispatch_if_message);
 		},
 
 		resume: function() {
-			pywebview.api.resume_compression();
+			pywebview.api.resume_compression().then(_dispatch_if_message);
 		},
 
 		analyse: function() {
-			pywebview.api.analyse_folder();
+			pywebview.api.analyse_folder().then(_dispatch_if_message);
 		},
 
 		stop: function() {
-			pywebview.api.stop_compression();
+			pywebview.api.stop_compression().then(_dispatch_if_message);
 		},
 
 		get_progress: function() {
-			pywebview.api.get_progress_update();
+			pywebview.api.get_progress_update().then(_dispatch_if_message);
 		}
 	};
 })();
@@ -212,7 +218,7 @@ var Response = (function() {
 					break;
 
 				case "Status":
-					Gui.set_status(msg.status, msg.pct);
+					Gui.queue_status(msg.status, msg.pct);
 					break;
 
 				case "Paused":
@@ -224,11 +230,11 @@ var Response = (function() {
 					break;
 
 				case "FolderSummary":
-					Gui.set_folder_summary(msg.info);
+					Gui.queue_folder_summary(msg.info);
 					break;
 
 				case "ProgressUpdate":
-					Gui.set_status(msg.status, msg.pct);
+					Gui.queue_status(msg.status, msg.pct);
 					break;
 
 				case "Warning":
@@ -242,6 +248,20 @@ var Response = (function() {
 // Anything poking the GUI lives here
 var Gui = (function() {
 	"use strict";
+
+	var status_queue = null;
+	var folder_summary_queue = null;
+
+	function _flush_queued_updates() {
+		if (status_queue) {
+			Gui.set_status(status_queue.status, status_queue.pct);
+			status_queue = null;
+		}
+		if (folder_summary_queue) {
+			Gui.set_folder_summary(folder_summary_queue);
+			folder_summary_queue = null;
+		}
+	}
 
 	return {
 		boot: function() {
@@ -264,6 +284,20 @@ var Gui = (function() {
 			$("#Button_Reset").on("click", function() {
 				Action.reset_config();
 			});
+
+			setInterval(_flush_queued_updates, 100);
+			Action.reset_config();
+		},
+
+		queue_status: function(status, pct) {
+			status_queue = {
+				status: status,
+				pct: pct
+			};
+		},
+
+		queue_folder_summary: function(data) {
+			folder_summary_queue = data;
 		},
 
 		page: function(page) {
@@ -353,6 +387,7 @@ var Gui = (function() {
 		},
 
 		stopped: function() {
+			_flush_queued_updates();
 			Gui.scanned();
 		},
 
@@ -381,11 +416,39 @@ var Gui = (function() {
 		},
 
 		set_folder_summary: function(data) {
+			var logicalSize = data.logical_size || 0;
+			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
+			var currentOnDisk = data.current_on_disk_size != null ? data.current_on_disk_size : logicalSize;
+			var physicalSize = data.physical_size || projectedOnDisk;
+			var savedBytes = Math.max(0, currentOnDisk - projectedOnDisk);
+			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
+			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 18);
+			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
+
 			$("#Size_Logical").text(Util.bytes_to_human(data.logical_size));
-			$("#Size_Physical").text(Util.bytes_to_human(data.physical_size));
+			$("#Size_Physical").text(Util.bytes_to_human(projectedOnDisk));
+			$("#Estimate_From").text(Util.bytes_to_human(logicalSize));
+			$("#Estimate_To").text(Util.bytes_to_human(projectedOnDisk));
+			$("#Estimate_Current_On_Disk").text(Util.bytes_to_human(currentOnDisk));
+			$("#Estimate_Recovery").text(Util.format_number(savedPct, 1) + "%");
+
+			var estimateTo = $("#Estimate_To");
+			var estimateRecovery = $("#Estimate_Recovery");
+			estimateTo.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
+			estimateRecovery.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
+			var toneClass = "estimate-tone-low";
+			if (savedPct < minSavingsPct || savingsRatio < 1.01) {
+				toneClass = "estimate-tone-low";
+			} else if (savingsRatio >= 2.0) {
+				toneClass = "estimate-tone-great";
+			} else {
+				toneClass = "estimate-tone-good";
+			}
+			estimateTo.addClass(toneClass);
+			estimateRecovery.addClass(toneClass);
 
 			if (data.logical_size > 0) {
-				var ratio = (data.physical_size / data.logical_size);
+				var ratio = (projectedOnDisk / data.logical_size);
 				$("#Compress_Ratio").text(Util.format_number(ratio, 2));
 			} else {
 				$("#Compress_Ratio").text("1.00");
@@ -413,20 +476,16 @@ var Gui = (function() {
 			}
 
 			if (is_analysis) {
-				$("#Saved_Text").text("can be saved");
 				$("#Space_Saved").text(Util.bytes_to_human(potentialSavings));
 			} else {
-				$("#Saved_Text").text("saved");
-				$("#Space_Saved").text(Util.bytes_to_human(Math.max(0, (data.logical_size || 0) - (data.physical_size || 0))));
+				$("#Space_Saved").text(Util.bytes_to_human(Math.max(0, (data.logical_size || 0) - projectedOnDisk)));
 			}
 
 			if (data.analysis_timing) {
 				var t = data.analysis_timing;
 				$("#Analysis_Timing").text(
-					"Analysis timings: discover " + Util.format_number(t.discovery_seconds || 0, 2) + "s @ " + Util.format_number(t.discovery_rate || 0, 0) + "/s"
-					+ " | scan " + Util.format_number(t.file_scan_seconds || 0, 2) + "s @ " + Util.format_number(t.file_scan_rate || 0, 0) + "/s"
-					+ " | entropy " + Util.format_number(t.entropy_seconds || 0, 2) + "s @ " + Util.format_number(t.entropy_rate || 0, 0) + "/s"
-					+ " | total " + Util.format_number(t.total_seconds || 0, 2) + "s"
+					"Scan " + Util.format_number(t.combined_scan_seconds || 0, 2) + "s @ " + Util.format_number(t.scan_rate || 0, 0) + " files/sec"
+					+ " | Entropy " + Util.format_number(t.entropy_seconds || 0, 2) + "s @ " + Util.format_number(t.entropy_rate || 0, 0) + " files/sec"
 				);
 			} else {
 				$("#Analysis_Timing").text("");

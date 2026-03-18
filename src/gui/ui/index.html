@@ -50,11 +50,16 @@
       </section>
 
       <section id="Analysis" style="display: none;">
+        <div id="Quick_Estimate">
+          <div class="estimate-main"><span id="Estimate_From">0 B</span> -> <span id="Estimate_To" class="estimate-tone-low">0 B</span></div>
+          <div class="estimate-sub" id="Current_Disk_Line"><strong>Currently on-disk:</strong> <span id="Estimate_Current_On_Disk">0 B</span></div>
+          <div class="estimate-sub"><span id="Estimate_Recovery" class="estimate-tone-low">0%</span> will be recovered</div>
+        </div>
         <div>
-            <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved">0 B</span> of <span id="Size_Logical">0 B</span> <span id="Saved_Text">can be saved</span> (<span id="Compress_Ratio">1.00</span>x, <span id="Size_Physical">0 B</span> on-disk)</div>
-          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size">0 B</span> in <span id="File_Count_Compressed">0</span> compressed</div>
-          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size">0 B</span> in <span id="File_Count_Compressible">0</span> compressible</div>
-          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size">0 B</span> in <span id="File_Count_Skipped">0</span> excluded</div>
+          <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved">0 B</span> can be compressed in total (<span id="Compress_Ratio">1.00</span>x, <span id="Size_Physical">0 B</span> projected)</div>
+          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size">0 B</span> already compressed (<span id="File_Count_Compressed">0</span> files)</div>
+          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size">0 B</span> are compressible (<span id="File_Count_Compressible">0</span> files)</div>
+          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size">0 B</span> excluded (<span id="File_Count_Skipped">0</span> files)</div>
         </div>
 
         <div id="File_Count_Breakdown">

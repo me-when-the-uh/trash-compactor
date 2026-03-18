@@ -1,6 +1,8 @@
 import logging
 import threading
 import time
+import io
+import contextlib
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
@@ -22,6 +24,7 @@ from .message_types import (
     ResetConfigRequest
 )
 from .webview_server import create_gui_app, GuiServer
+from ..i18n import _
 
 # Trash-compactor core imports
 from ..compression.compression_executor import execute_compression_plan
@@ -33,18 +36,28 @@ from ..config import DEFAULT_MIN_SAVINGS_PERCENT, DRY_RUN_CONSERVATIVE_FACTORS
 from ..skip_logic import commit_incompressible_cache
 
 
+UI_STATUS_INTERVAL_SECONDS = 0.10
+UI_SUMMARY_INTERVAL_SECONDS = 0.25
+SCAN_STOP_CHECK_EVERY_FILES = 64
+PLAN_PROGRESS_GRANULARITY = 32
+ENTROPY_PROGRESS_GRANULARITY = 8
+COMPRESSION_PROGRESS_GRANULARITY = 4
+
+
 class GuiBackend:
-    def __init__(self):
+    def __init__(self, benchmark_ok: Optional[bool] = None):
         self.server: Optional[GuiServer] = None
         self.worker_thread: Optional[threading.Thread] = None
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
+        self.benchmark_ok = benchmark_ok
         
         # State
         self.min_savings = DEFAULT_MIN_SAVINGS_PERCENT
         self.current_folder = ""
         self.decimal = False
-        self.no_lzx = False
+        self.default_no_lzx = benchmark_ok is False
+        self.no_lzx = self.default_no_lzx
         self.force_lzx = False
         self.single_worker = False
 
@@ -78,7 +91,7 @@ class GuiBackend:
         elif req_type == "ResetConfig":
             self.min_savings = DEFAULT_MIN_SAVINGS_PERCENT
             self.decimal = False
-            self.no_lzx = False
+            self.no_lzx = self.default_no_lzx
             self.force_lzx = False
             self.single_worker = False
             return ConfigResponse(
@@ -192,15 +205,13 @@ class GuiBackend:
         file_scan_seconds = max(0.0, monitor.stats.file_scan_time)
         entropy_seconds = max(0.0, monitor.stats.entropy_analysis_time)
         total_seconds = max(0.0, monitor.stats.total_time)
+        
+        combined_scan_seconds = discovery_seconds + file_scan_seconds
 
         return {
-            "discovery_seconds": discovery_seconds,
-            "file_scan_seconds": file_scan_seconds,
+            "combined_scan_seconds": combined_scan_seconds,
+            "scan_rate": (candidate_files / combined_scan_seconds) if combined_scan_seconds > 0 else 0.0,
             "entropy_seconds": entropy_seconds,
-            "total_seconds": total_seconds,
-            "candidate_files": candidate_files,
-            "discovery_rate": (candidate_files / discovery_seconds) if discovery_seconds > 0 else 0.0,
-            "file_scan_rate": (candidate_files / file_scan_seconds) if file_scan_seconds > 0 else 0.0,
             "entropy_rate": (monitor.stats.files_analyzed_for_entropy / entropy_seconds) if entropy_seconds > 0 else 0.0,
         }
 
@@ -212,30 +223,39 @@ class GuiBackend:
         is_analysis: bool = True,
         analysis_timing: Optional[dict] = None,
     ) -> dict:
-        current_physical_size = stats.total_compressed_size + total_compressible_size
-        projected_physical_size = (
-            stats.entropy_projected_compressed_bytes_conservative
-            if stats.entropy_projected_compressed_bytes_conservative > 0
-            else current_physical_size
-        )
-        physical_size = projected_physical_size if is_analysis else current_physical_size
+        already_compressed_files = max(0, stats.already_compressed_files)
+        already_compressed_logical_size = max(0, stats.already_compressed_logical_size)
+        already_compressed_physical_size = max(0, stats.already_compressed_physical_size)
 
-        potential_savings_bytes = 0
-        if is_analysis and stats.total_original_size > 0:
-            potential_savings_bytes = max(0, stats.total_original_size - physical_size)
+        excluded_count = max(0, stats.skipped_files - already_compressed_files)
+        excluded_logical_size = max(0, stats.total_skipped_size - already_compressed_logical_size)
 
-        projected_compressible_size = max(0, physical_size - stats.total_compressed_size)
+        current_on_disk_size = already_compressed_physical_size + excluded_logical_size + total_compressible_size
+
+        projected_compressible_size = total_compressible_size
+        if is_analysis and stats.entropy_projected_compressed_bytes_conservative > 0:
+            projected_compressible_size = max(
+                0,
+                stats.entropy_projected_compressed_bytes_conservative - stats.total_skipped_physical_size,
+            )
+
+        projected_on_disk_size = already_compressed_physical_size + excluded_logical_size + projected_compressible_size
+        physical_size = projected_on_disk_size if is_analysis else current_on_disk_size
+        potential_savings_bytes = max(0, current_on_disk_size - projected_on_disk_size)
 
         summary = {
             "logical_size": stats.total_original_size,
             "physical_size": physical_size,
+            "current_on_disk_size": current_on_disk_size,
+            "projected_on_disk_size": projected_on_disk_size,
             "is_analysis": is_analysis,
+            "min_savings_percent": self.min_savings,
             "potential_savings_bytes": potential_savings_bytes,
             "analysis_timing": analysis_timing,
             "compressed": {
-                "count": stats.compressed_files,
-                "logical_size": 0, # Not perfectly tracked
-                "physical_size": stats.total_compressed_size,
+                "count": already_compressed_files,
+                "logical_size": already_compressed_logical_size,
+                "physical_size": already_compressed_physical_size,
             },
             "compressible": {
                 "count": plan_count,
@@ -243,9 +263,9 @@ class GuiBackend:
                 "physical_size": projected_compressible_size if is_analysis else total_compressible_size,
             },
             "skipped": {
-                "count": stats.skipped_files,
-                "logical_size": stats.total_skipped_size,
-                "physical_size": stats.total_skipped_size,
+                "count": excluded_count,
+                "logical_size": excluded_logical_size,
+                "physical_size": excluded_logical_size,
             }
         }
         return summary
@@ -280,7 +300,13 @@ class GuiBackend:
         from ..launch import configure_lzx
         
         set_worker_cap(1 if self.single_worker else None)
-        configure_lzx(choice_enabled=not self.no_lzx, force_lzx=self.force_lzx, benchmark_ok=None)
+        configure_lzx(
+            choice_enabled=not self.no_lzx,
+            force_lzx=self.force_lzx,
+            benchmark_ok=self.benchmark_ok,
+            disabled_reason='benchmark' if self.default_no_lzx else None,
+            announce=False,
+        )
         
         base_dir = Path(self.current_folder).resolve()
         stats = CompressionStats()
@@ -300,11 +326,11 @@ class GuiBackend:
         for entry in iter_files(base_dir, stats, 0, self.min_savings, collect_entropy=False):
             all_files.append(entry)
 
-            if len(all_files) % 256 == 0:
+            if len(all_files) % SCAN_STOP_CHECK_EVERY_FILES == 0:
                 self._check_pause_stop()
 
             now = time.perf_counter()
-            if now - last_scan_update_time > 0.25:
+            if now - last_scan_update_time > UI_STATUS_INTERVAL_SECONDS:
                 last_scan_update_time = now
                 elapsed = max(0.001, now - scan_start_time)
                 rate = len(all_files) / elapsed
@@ -341,32 +367,31 @@ class GuiBackend:
                 plan_count += 1
                 total_compressible_size += size
 
-            if processed % 128 != 0 and processed != total_files:
+            if processed % PLAN_PROGRESS_GRANULARITY != 0 and processed != total_files:
                 return
             self._check_pause_stop()
             
             now = time.perf_counter()
-            # Update UI at most 4 times per second.
-            if now - last_update_time > 0.25 or processed == total_files:
+            if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total_files:
                 last_update_time = now
                 pct = (processed / total_files) * 60.0 # 0-60%
                 elapsed = max(0.001, now - analysis_start_time)
                 rate = processed / elapsed
                 self._send(ProgressUpdateResponse(f"Analyzing... {processed}/{total_files} ({rate:.0f} files/s)", pct))
 
-            if now - last_summary_update_time > 0.5 or processed == total_files:
+            if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total_files:
                 last_summary_update_time = now
                 self._send(FolderSummaryResponse(self._make_stats_summary(stats, plan_count, total_compressible_size)))
 
         # Just adapting the entropy wrapper
         def _entropy_progress(path: Path, processed: int, total: int):
             nonlocal last_update_time
-            if processed % 16 != 0 and processed != total:
+            if processed % ENTROPY_PROGRESS_GRANULARITY != 0 and processed != total:
                 return
 
             self._check_pause_stop()
             now = time.perf_counter()
-            if now - last_update_time > 0.25 or processed == total:
+            if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total:
                 last_update_time = now
                 # Don't update pct here, just the status text
                 self._send(ProgressUpdateResponse(f"Sampling entropy... {processed}/{total}"))
@@ -396,7 +421,7 @@ class GuiBackend:
             ProgressUpdateResponse(
                 "Analysis complete in "
                 f"{analysis_elapsed:.2f}s "
-                f"(discover {discovery_seconds:.2f}s, scan {monitor.stats.file_scan_time:.2f}s, entropy {monitor.stats.entropy_analysis_time:.2f}s)",
+                f"(scan {discovery_seconds + monitor.stats.file_scan_time:.2f}s, entropy {monitor.stats.entropy_analysis_time:.2f}s)",
                 100.0,
             )
         )
@@ -416,7 +441,13 @@ class GuiBackend:
         from ..launch import configure_lzx
         
         set_worker_cap(1 if self.single_worker else None)
-        configure_lzx(choice_enabled=not self.no_lzx, force_lzx=self.force_lzx, benchmark_ok=None)
+        configure_lzx(
+            choice_enabled=not self.no_lzx,
+            force_lzx=self.force_lzx,
+            benchmark_ok=self.benchmark_ok,
+            disabled_reason='benchmark' if self.default_no_lzx else None,
+            announce=False,
+        )
         
         if not hasattr(self, 'last_analysis_plan') or self.last_analysis_plan is None:
             self._send(WarningResponse("Warning", "Please analyze the folder before compressing."))
@@ -444,7 +475,7 @@ class GuiBackend:
             
         def _exec_progress(path: Path, algo: str):
             compressed_count[0] += 1
-            if compressed_count[0] % 10 != 0 and compressed_count[0] != total_to_compress:
+            if compressed_count[0] % COMPRESSION_PROGRESS_GRANULARITY != 0 and compressed_count[0] != total_to_compress:
                 return
 
             self._check_pause_stop()
@@ -480,12 +511,17 @@ class GuiBackend:
         self._send(FolderSummaryResponse(self._make_stats_summary(stats, 0, 0, is_analysis=False))) # Plan is depleted
 
 def run_gui():
-    # Pre-run benchmark before Webview loop consumes UI threads
     from ..benchmark import run_benchmark
-    run_benchmark()
 
-    backend = GuiBackend()
+    # Benchmark must run before spawning GUI to keep machine-to-machine results
+    # consistent. Suppress console output in GUI mode.
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        benchmark_ok = run_benchmark()
+
+    backend = GuiBackend(benchmark_ok=benchmark_ok)
     app = create_gui_app(backend.handle_request)
     backend.bind_server(app)
     app.start()
+    print(_("Exiting..."), flush=True)
 

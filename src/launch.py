@@ -57,18 +57,22 @@ def configure_lzx(
     force_lzx: bool,
     benchmark_ok: Optional[bool] = None,
     disabled_reason: Optional[str] = None,
+    announce: bool = True,
 ) -> bool:
     def _disable_with_benchmark_warning() -> None:
+        if not announce:
+            return
         print(Fore.YELLOW + _("LZX compression disabled because startup benchmark exceeded the safe limit."))
         print(_("Use -f flag to force LZX anyway."))
 
     if not choice_enabled:
-        if force_lzx:
+        if force_lzx and announce:
             logging.info(_("Ignoring -f because -x disables LZX explicitly"))
         if disabled_reason == 'benchmark':
             _disable_with_benchmark_warning()
         else:
-            print(Fore.YELLOW + _("-x: LZX compression disabled via command line flag."))
+            if announce:
+                print(Fore.YELLOW + _("-x: LZX compression disabled via command line flag."))
         config.COMPRESSION_ALGORITHMS['large'] = 'XPRESS16K'
         return False
 
@@ -77,9 +81,9 @@ def configure_lzx(
 
     if benchmark_ok or force_lzx:
         config.COMPRESSION_ALGORITHMS['large'] = 'LZX'
-        if force_lzx and not benchmark_ok:
+        if announce and force_lzx and not benchmark_ok:
             logging.info(_("Forcing LZX compression despite startup benchmark timeout."))
-        else:
+        elif announce:
             logging.info(_("Using LZX compression."))
         return True
 

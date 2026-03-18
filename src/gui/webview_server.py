@@ -27,6 +27,7 @@ from .message_types import (
     AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest, GetProgressUpdateRequest,
     ChooseFolderRequest, OpenUrlRequest
 )
+from ..i18n import _
 
 
 class GuiApi:
@@ -184,11 +185,6 @@ class GuiServer:
     def stop(self) -> None:
         """Stop the GUI server."""
         self.running = False
-        if self.window:
-            try:
-                self.window.expose()
-            except Exception:
-                pass
 
     def send_response(self, response: GuiResponse) -> None:
         """Send response to GUI (if window exists)."""
