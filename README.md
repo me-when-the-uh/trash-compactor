@@ -48,7 +48,7 @@ Compressing large directories to gain extra storage space will be so free and wi
     python main.py
     ```
 
-Note: For Option 2, ensure Git and Python 3.9 or higher are installed on your system.
+Note: For Option 2, ensure Git and Python 3.11 or 3.12 are installed on your system.
 
 Optional: you can compile the app yourself as I did, using PyInstaller:
     ```powershell
@@ -146,8 +146,18 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 ## To-Do
 
 ### Short-term Goals
-- Fix bugs:
-  - There are no bugs in Trash-Compactor.
+- Implement a single binary flow (KISS):
+  - Launch GUI when started without arguments
+  - Keep CLI behavior unchanged when arguments are provided
+  - Exit cleanly when the GUI window closes
+- GUI + CLI parity checklist for evaluation:
+  - Folder selection and start flow
+  - Progress updates and final summary
+  - Dry-run parity against CLI output
+  - Existing flags (`-d`, `-v`, `-m`, `-x`, `-f`, `-s`) mapped or surfaced in GUI controls
+- Build/release validation:
+  - Ensure PyInstaller bundles GUI assets from `src/gui/ui`
+  - Verify executable launch in both interactive (GUI) and argument-driven (CLI) modes
 
 ### Long-term Goals
 - Research advanced compression methods:
@@ -159,5 +169,7 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 - Quality of Life features:
   - Add resume capability for interrupted operations
 - Security and Reliability:
-  - Implement proper error handling for network paths
+  - Improve handling and messaging for network/NAS paths
   - Add verification of filesystem compatibility
+- Backburner / deferred:
+  - DirectStorage detection research (defer until a dedicated test matrix is available)

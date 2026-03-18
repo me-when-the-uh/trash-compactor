@@ -97,9 +97,6 @@ def _default_excluded_directories() -> Tuple[str, ...]:
         cleaned.append(os.path.normpath(entry))
     return tuple(cleaned)
 
-MIN_LOGICAL_CORES_FOR_LZX: Final[int] = 5
-MIN_PHYSICAL_CORES_FOR_LZX: Final[int] = 3
-
 BENCHMARK_DURATION_LIMIT: Final[float] = 0.25
 BENCHMARK_WORKLOAD_ITERATIONS: Final[int] = 120_000
 
@@ -110,13 +107,6 @@ def get_cpu_info() -> Tuple[int | None, int | None]:
     physical = psutil.cpu_count(logical=False)
     logical = psutil.cpu_count(logical=True)
     return physical, logical
-
-
-def is_cpu_capable_for_lzx() -> bool:
-    physical, logical = get_cpu_info()
-    if physical is None or logical is None:
-        return False
-    return physical >= MIN_PHYSICAL_CORES_FOR_LZX and logical >= MIN_LOGICAL_CORES_FOR_LZX
 
 
 COMPRESSION_ALGORITHMS: Final[dict[str, str]] = {

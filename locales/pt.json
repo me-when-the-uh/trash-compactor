@@ -59,19 +59,13 @@
     "\nOperation completed.": "\nOperação concluída.",
     "Ignoring -f because -x disables LZX explicitly": "Ignorando -f porque -x desativa LZX explicitamente",
     "-x: LZX compression disabled via command line flag.": "-x: Compressão LZX desativada via flag de linha de comando.",
-    "Forcing LZX compression despite CPU having only {physical} cores and {logical} threads": "Forçando compressão LZX apesar da CPU ter apenas {physical} núcleos e {logical} threads",
-    "Using LZX compression (CPU deemed capable - it has {physical} cores and {logical} threads)": "Usando compressão LZX (CPU considerada capaz - tem {physical} núcleos e {logical} threads)",
-    "\nNotice: Your CPU has {physical} cores and {logical} threads.": "\nAviso: Sua CPU tem {physical} núcleos e {logical} threads.",
-    "LZX compression requires at least {min_physical} cores and {min_logical} threads.": "A compressão LZX requer pelo menos {min_physical} núcleos e {min_logical} threads.",
     "LZX compression has been disabled for better system responsiveness.": "A compressão LZX foi desativada para melhor capacidade de resposta do sistema.",
     "Use -f flag to force LZX if you're feeling adventurous.": "Use -f para forçar LZX se souber o que está fazendo.",
-
     "Unable to resolve the target volume. Please verify the path.": "Não foi possível determinar o volume de destino. Verifique o caminho.",
     "Network shares are not supported targets for compression.": "Unidades de rede não são suportadas como destino de compressão.",
     "Please select a local NTFS volume instead.": "Selecione um volume NTFS local.",
     "Windows compression requires NTFS.": "A compactação do Windows requer NTFS.",
     "Detected filesystem: {filesystem}": "Sistema de arquivos detectado: {filesystem}",
-
     "Detected a traditional spinning hard drive for this path.": "Detectado um disco rígido tradicional (HDD) para este caminho.",
     "Sustained compression can thrash the disk heads, fragment files, and slow app/game launches.": "A compressão sustentada pode desgastar as cabeças do disco, fragmentar arquivos e tornar o lançamento de apps/jogos lento.",
     "\nRecommendation:": "\nRecomendação:",
@@ -176,12 +170,10 @@
     "Performance benchmark completed in {elapsed:.3f}s.": "Teste de desempenho concluído em {elapsed:.3f}s.",
     "Performance benchmark completed in {elapsed:.3f} seconds.": "Teste de desempenho concluído em {elapsed:.3f} s.",
     "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nAviso: a compressão LZX foi desativada para evitar inicializações lentas de aplicativos compactados.",
-    "\nNotice: LZX compression has been disabled by default on low-core CPUs (2 cores or fewer).": "\nAviso: a compressão LZX foi desativada por padrão em CPUs de poucos núcleos (2 núcleos ou menos).",
     "Do you want to proceed with compression? [y/N]: ": "Deseja prosseguir com a compressão? [y/N]: ",
     "\nCompression cancelled.": "\nCompressão cancelada.",
     "Compression cancelled.": "Compressão cancelada.",
     "Skipping {directory}: nothing scheduled for compression.": "Pulando {directory}: nada agendado para compressão.",
-    "\nStarting compression...": "Iniciando compressão..."
-    ,
+    "\nStarting compression...": "Iniciando compressão...",
     "\n1-click mode finished.": "\nModo 1-clique finalizado."
 }

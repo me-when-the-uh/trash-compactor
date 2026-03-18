@@ -10,5 +10,4 @@ from .stats import (
 	print_compression_summary,
 	print_entropy_dry_run,
 )
-from .config import get_cpu_info
 from .timer import PerformanceMonitor, TimingStats

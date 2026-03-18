@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Trash Compactor</title>
+    <style>/*__STYLE__*/</style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>/*__SCRIPT__*/</script>
+  </head>
+  <body>
+    <header>
+      <h1><span class="side">⇒</span>T<span class="sml">r<span class="sml">a<span class="sml">s</span>h</span></span> C<span class="sml">o<span class="sml">m<span class="sml">p<span class="sml">a</span>c</span>t</span>o</span>r <span class="side">⇐</span></h1>
+      <div class="push"></div>
+      <nav>
+        <ul>
+          <li><button id="Button_Page_Compress" class="active" onclick="Gui.page('Compress')">⌛ Compress</button></li>
+          <li><button id="Button_Page_Settings" onclick="Gui.page('Settings')">☸ Settings</button></li>
+          <li><button id="Button_Page_About" onclick="Gui.page('About')">⌕ About</button></li>
+        </ul>
+        <div style="text-align: right; margin: 4px">
+          <small style="color: grey;"><span class="version"></span> / <span class="compile-date"></span></small>
+        </div>
+      </nav>
+      <br>
+    </header>
+
+    <section class="page" id="Compress">
+      <section id="FolderChooser">
+        <div class="ctr">
+          <button id="Button_Folder" onclick="Action.choose_folder()">Choose a folder</button>
+        </div>
+      </section>
+
+      <section id="Activity" style="display: none;">
+        <div id="Activity_Text"></div>
+        <div id="Analysis_Timing"></div>
+        <div class="ctr">
+          <progress id="Activity_Progress"></progress>
+        </div>
+      </section>
+
+      <section id="Command" style="display: none;">
+        <div class="ctr">
+          <button id="Button_Pause" class="pause" onclick="Action.pause()">⏸️ Pause</button>
+          <button id="Button_Resume" class="resume" onclick="Action.resume()">▶️ Resume</button>
+          <button id="Button_Stop" class="stop" onclick="Action.stop()">⏹️ Stop</button>
+          <button id="Button_Analyse" class="analyse" onclick="Action.analyse()">🔍 Analyse</button>
+          <button id="Button_Compress" class="compress" onclick="Action.start_compression()">🗜 Compress</button>
+        </div>
+      </section>
+
+      <section id="Analysis" style="display: none;">
+        <div>
+            <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved">0 B</span> of <span id="Size_Logical">0 B</span> <span id="Saved_Text">can be saved</span> (<span id="Compress_Ratio">1.00</span>x, <span id="Size_Physical">0 B</span> on-disk)</div>
+          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size">0 B</span> in <span id="File_Count_Compressed">0</span> compressed</div>
+          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size">0 B</span> in <span id="File_Count_Compressible">0</span> compressible</div>
+          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size">0 B</span> in <span id="File_Count_Skipped">0</span> excluded</div>
+        </div>
+
+        <div id="File_Count_Breakdown">
+          <div id="Breakdown_Compressed"></div>
+          <div id="Breakdown_Compressible"></div>
+          <div id="Breakdown_Skipped"></div>
+          <div id="Breakdown_Saved"></div>
+        </div>
+      </section>
+    </section>
+
+    <section class="page" id="Settings" style="display: none;">
+      <label>Min Savings %
+        <input type="number" id="Min_Savings" name="min_savings" min="0" max="90" value="18">
+      </label>
+      <br><br>
+
+      <label>
+        <input type="checkbox" id="No_LZX" name="no_lzx"> Disable LZX Compression
+      </label>
+      <br>
+
+      <label>
+        <input type="checkbox" id="Force_LZX" name="force_lzx"> Force LZX Compression
+      </label>
+      <br>
+
+      <label>
+        <input type="checkbox" id="Single_Worker" name="single_worker"> Single Worker Mode
+      </label>
+      <br><br>
+
+      <label>Units
+        <select id="SI_Units" name="SI_Units">
+          <option value="I">Binary (MiB)</option>
+          <option value="D">Decimal (MB)</option>
+        </select>
+      </label>
+      <br>
+
+      <div class="ctr">
+        <button id="Button_Save" class="save">💾 Save</button>
+        <button id="Button_Reset" class="cancel">⏹️ Reset</button>
+      </div>
+    </section>
+
+    <section class="page" id="About" style="display: none;">
+      <h1>Trash Compactor GUI</h1>
+
+      <p><strong>Where we're going, we don't need backups!</strong></p>
+
+      <p>Report problems to: <a href="https://github.com/me-when-the-uh/trash-compactor">https://github.com/me-when-the-uh/trash-compactor</a>.</p>
+
+      <hr>
+
+      <p>An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.</p>
+
+      <p>For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
+
+      <p>Vibe-coded in Python with a webview-slopped GUI.</p>
+
+      <p>GUI adapted from <a href="https://github.com/Freaky/Compactor">Compactor</a></p>
+    </section>
+  </body>
+</html>

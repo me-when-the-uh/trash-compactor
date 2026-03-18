@@ -13,7 +13,6 @@ from src import (
     config,
     entropy_dry_run,
     execute_compression_plan_wrapper,
-    get_cpu_info,
     print_compression_summary,
     print_entropy_dry_run,
     set_worker_cap,
@@ -28,7 +27,7 @@ from src.timer import PerformanceMonitor
 from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.5.4"
+VERSION = "0.6.0"
 BUILD_DATE = "who cares"
 
 
@@ -207,18 +206,34 @@ def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debu
 
 def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
     args = build_parser().parse_args(argv)
-    if not hasattr(args, 'one_click'):
-        setattr(args, 'one_click', False)
-    if args.min_savings is None:
-        args.min_savings = config.DEFAULT_MIN_SAVINGS_PERCENT
-    else:
-        args.min_savings = config.clamp_savings_percent(args.min_savings)
-    
+    args.min_savings = (
+        config.DEFAULT_MIN_SAVINGS_PERCENT
+        if args.min_savings is None
+        else config.clamp_savings_percent(args.min_savings)
+    )
+
     interactive_launch = not args.directory
-    if interactive_launch:
-        args = interactive_configure(args)
-        args.min_savings = config.clamp_savings_percent(args.min_savings)
+
+    from src import benchmark
+    benchmark_ok: Optional[bool] = None
+    if not interactive_launch and not args.no_lzx:
+        benchmark_ok = benchmark.run_benchmark()
+        if not benchmark_ok and not args.force_lzx:
+            args.no_lzx = True
+            setattr(args, 'lzx_disabled_reason', 'benchmark')
+            print(Fore.YELLOW + _("\nNotice: LZX compression has been disabled to prevent slowdowns for compressed apps.\n(Your CPU is too slow)") + Style.RESET_ALL)
+    setattr(args, 'benchmark_ok', benchmark_ok)
+
     return args, interactive_launch
+
+
+def _apply_lzx_choice(args: argparse.Namespace) -> None:
+    configure_lzx(
+        choice_enabled=not args.no_lzx,
+        force_lzx=args.force_lzx,
+        benchmark_ok=getattr(args, 'benchmark_ok', None),
+        disabled_reason=getattr(args, 'lzx_disabled_reason', None),
+    )
 
 
 def _validate_modes(args: argparse.Namespace) -> bool:
@@ -250,16 +265,9 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
             _("Running without administrator privileges. Some protected files may be skipped.")
         )
 
-    physical_cores, logical_cores = get_cpu_info()
     announce_mode(args)
 
-    configure_lzx(
-        choice_enabled=not args.no_lzx,
-        force_lzx=args.force_lzx,
-        cpu_capable=config.is_cpu_capable_for_lzx(),
-        physical=physical_cores,
-        logical=logical_cores,
-    )
+    _apply_lzx_choice(args)
 
     directory, updated_args = acquire_directory(args, interactive_launch)
     args.directory = directory
@@ -297,15 +305,23 @@ def main() -> None:
 
     _emit_verbosity_banner(args.verbose)
 
+    if interactive_launch:
+        # Launch GUI if available, otherwise fallback to CLI interactive
+        try:
+            import webview  # type: ignore
+            # Import run_gui but don't finalize imports yet if it's missing
+            from src.gui.backend import run_gui
+            run_gui()
+            sys.exit(0)
+        except (ImportError, ModuleNotFoundError):
+            args = interactive_configure(args)
+            args.min_savings = config.clamp_savings_percent(args.min_savings)
+            if not args.directory:
+                prompt_exit()
+                return
+
     if getattr(args, 'one_click', False) and not args.directory:
-        physical_cores, logical_cores = get_cpu_info()
-        configure_lzx(
-            choice_enabled=not args.no_lzx,
-            force_lzx=args.force_lzx,
-            cpu_capable=config.is_cpu_capable_for_lzx(),
-            physical=physical_cores,
-            logical=logical_cores,
-        )
+        _apply_lzx_choice(args)
 
         run_one_click_mode(
             verbosity=args.verbose,

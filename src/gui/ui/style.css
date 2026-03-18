@@ -1,0 +1,216 @@
+body {
+  font-family: "Helvetica Neue", Helvetica, Arial, serif;
+  color: #eee;
+  background-color: rgb(61, 61, 61);
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  display: flex;
+  border-bottom: 1px solid black;
+  background-color: rgb(51, 51, 51);
+}
+
+header .push {
+  margin-left: auto;
+}
+
+progress, textarea, input {
+  margin: 6px;
+}
+
+h1 {
+  text-transform: uppercase;
+  font-family: Impact, Oswald, Tahoma, sans-serif;
+  font-weight: lighter;
+  margin: 1px;
+  padding: 4px;
+  background-color: #333;
+}
+
+h1 span.side {
+  font-size: larger;
+  font-weight: normal;
+  color: #666;
+}
+
+h1 span.sml {
+  font-size: smaller;
+}
+
+#Button_Folder span {
+  color: #888;
+  padding-left: 8px;
+  padding-right: 8px;
+}
+
+#Button_Folder {
+  width: 80%;
+}
+
+input, textarea, select {
+  border: 1px solid black;
+  padding: 4px;
+  margin: 4px;
+  font-size: larger;
+}
+
+a, a:visited {
+  color: #229af7;
+  text-decoration: none;
+}
+
+a:active, a:hover {
+  color: #44abf9;
+  text-decoration: underline;
+}
+
+section button.stop {
+  background-color: rgb(219, 40, 40);
+}
+
+section button.pause {
+  background-color: rgb(118, 118, 118);
+}
+
+section button.analyse {
+  background-color: rgb(118, 118, 118);
+}
+
+section button.compress {
+  background-color: rgb(33, 186, 69);
+}
+
+progress {
+  height: 20px;
+  width: 90%;
+}
+
+section {
+  margin: 16px;
+  display: block;
+}
+
+div.ctr {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+textarea {
+  width: 95%;
+  height: 200px;
+}
+
+#Activity_Text {
+  line-height: 1.2em;
+  height: 1.2em;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+#Analysis_Timing {
+  margin-top: 6px;
+  color: #cfcfcf;
+  font-size: 0.9em;
+  line-height: 1.2em;
+  min-height: 1.2em;
+}
+
+#Activity_Progress {
+  width: 95%;
+}
+
+#Analysis .saved .box, #Breakdown_Saved {
+  background-color: white;
+}
+
+#Analysis .compressed .box, #Breakdown_Compressed {
+  background-color: green;
+}
+
+#Analysis .compressible .box, #Breakdown_Compressible {
+  background-color: #0079d6;
+}
+
+#Analysis .excluded .box, #Breakdown_Skipped {
+  background-color: orange;
+}
+
+#Analysis .box {
+  border: 1px solid black;
+}
+
+#Analysis div div {
+  padding: 2px;
+}
+
+#File_Count_Breakdown {
+  display: flex;
+  width: 95%;
+  font-size: smaller;
+  border: 1px solid black;
+  border-radius: 2px;
+  margin: 8px auto;
+  overflow: hidden;
+}
+
+#File_Count_Breakdown div {
+  overflow: hidden;
+  height: 18px;
+}
+
+#Breakdown_Compressed, #Breakdown_Compressible, #Breakdown_Skipped {
+  width: 0;
+}
+
+#Breakdown_Saved {
+  flex: auto;
+}
+
+nav button {
+  display: inline-block;
+  background-color: transparent;
+  color: #fff;
+  padding: 6px;
+  border-width: 0;
+  cursor: pointer;
+}
+
+nav button.active {
+  background-color: #229af7;
+}
+
+section button {
+  color: #fff;
+  background-color: #0079d6;
+  border-color: transparent;
+  padding: 6px;
+  border-radius: 4px;
+  border-width: 1px;
+  margin: 4px;
+  cursor: pointer;
+}
+
+section button:hover, section button:active {
+  background-color: #2289e6;
+}
+
+ul {
+  list-style-type: none;
+  display: block;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+}
+
+li {
+  display: inline-block;
+}
+
+label {
+  display: block;
+  margin: 10px 0;
+  padding: 8px;
+}

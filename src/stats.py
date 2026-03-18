@@ -98,7 +98,14 @@ class ProgressTimer:
 
     def _render_line(self) -> str:
         elapsed = time.monotonic() - self._start_time
-        progress = f"({self.processed}/{self.total})" if self.total else ""
+        
+        rate_str = ""
+        if elapsed > 0 and self.processed > 0:
+            rate = self.processed / elapsed
+            rate_str = f" @ {rate:.0f}/s"
+            
+        progress = f"({self.processed}/{self.total}{rate_str})" if self.total else (f"({self.processed}{rate_str})" if self.processed else "")
+        
         parts = [f"[{elapsed:6.1f}s]", self._label]
         if progress:
             parts.append(progress)

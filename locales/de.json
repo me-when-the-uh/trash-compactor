@@ -59,19 +59,13 @@
     "\nOperation completed.": "\nVorgang abgeschlossen.",
     "Ignoring -f because -x disables LZX explicitly": "Ignoriere -f, da -x LZX explizit deaktiviert",
     "-x: LZX compression disabled via command line flag.": "-x: LZX-Komprimierung über Befehlszeilenflag deaktiviert.",
-    "Forcing LZX compression despite CPU having only {physical} cores and {logical} threads": "Erzwinge LZX-Komprimierung, obwohl die CPU nur {physical} Kerne und {logical} Threads hat",
-    "Using LZX compression (CPU deemed capable - it has {physical} cores and {logical} threads)": "Verwende LZX-Komprimierung (CPU als fähig erachtet - sie hat {physical} Kerne und {logical} Threads)",
-    "\nNotice: Your CPU has {physical} cores and {logical} threads.": "\nHinweis: Ihre CPU hat {physical} Kerne und {logical} Threads.",
-    "LZX compression requires at least {min_physical} cores and {min_logical} threads.": "LZX-Komprimierung erfordert mindestens {min_physical} Kerne und {min_logical} Threads.",
     "LZX compression has been disabled for better system responsiveness.": "LZX-Komprimierung wurde für eine bessere Systemreaktionsfähigkeit deaktiviert.",
     "Use -f flag to force LZX if you're feeling adventurous.": "Verwenden Sie -f, um LZX zu erzwingen, wenn Sie wissen, was Sie tun.",
-
     "Unable to resolve the target volume. Please verify the path.": "Das Ziellaufwerk konnte nicht ermittelt werden. Bitte prüfen Sie den Pfad.",
     "Network shares are not supported targets for compression.": "Netzlaufwerke werden als Ziel für die Komprimierung nicht unterstützt.",
     "Please select a local NTFS volume instead.": "Bitte wählen Sie stattdessen ein lokales NTFS-Laufwerk.",
     "Windows compression requires NTFS.": "Die Windows-Komprimierung erfordert NTFS.",
     "Detected filesystem: {filesystem}": "Erkanntes Dateisystem: {filesystem}",
-
     "Detected a traditional spinning hard drive for this path.": "Traditionelle Festplatte (HDD) für diesen Pfad erkannt.",
     "Sustained compression can thrash the disk heads, fragment files, and slow app/game launches.": "Anhaltende Komprimierung kann die Schreib-/Leseköpfe belasten, Dateien fragmentieren und App-/Spielstarts verlangsamen.",
     "\nRecommendation:": "\nEmpfehlung:",
@@ -176,12 +170,10 @@
     "Performance benchmark completed in {elapsed:.3f}s.": "Leistungstest abgeschlossen in {elapsed:.3f}s.",
     "Performance benchmark completed in {elapsed:.3f} seconds.": "Leistungstest abgeschlossen in {elapsed:.3f} s.",
     "\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications.": "\nHinweis: Die LZX-Komprimierung wurde deaktiviert, um lange Startzeiten komprimierter Anwendungen zu vermeiden.",
-    "\nNotice: LZX compression has been disabled by default on low-core CPUs (2 cores or fewer).": "\nHinweis: LZX-Komprimierung wurde auf CPUs mit wenigen Kernen (2 oder weniger) standardmäßig deaktiviert.",
     "Do you want to proceed with compression? [y/N]: ": "Möchten Sie mit der Komprimierung fortfahren? [y/N]: ",
     "\nCompression cancelled.": "\nKomprimierung abgebrochen.",
     "Compression cancelled.": "Komprimierung abgebrochen.",
     "Skipping {directory}: nothing scheduled for compression.": "Überspringe {directory}: nichts zur Komprimierung geplant.",
-    "\nStarting compression...": "Starte Komprimierung..."
-    ,
+    "\nStarting compression...": "Starte Komprimierung...",
     "\n1-click mode finished.": "\n1-Klick-Modus abgeschlossen."
 }
