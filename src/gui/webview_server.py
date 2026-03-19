@@ -9,8 +9,6 @@ import queue
 import json
 from pathlib import Path
 from typing import Optional, Callable, Any, Dict
-import tkinter as tk
-from tkinter import filedialog
 import webbrowser
 
 try:
@@ -25,6 +23,7 @@ from .message_types import (
     WarningResponse, SelectFolderRequest, StartCompressionRequest,
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
     AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest, GetProgressUpdateRequest,
+    GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
     ChooseFolderRequest, OpenUrlRequest
 )
 from ..i18n import _
@@ -40,6 +39,9 @@ class GuiApi:
     def choose_folder(self) -> Dict[str, Any]:
         """Show folder picker dialog."""
         try:
+            import tkinter as tk
+            from tkinter import filedialog
+
             root = tk.Tk()
             root.withdraw()
             folder = filedialog.askdirectory(title="Select folder to compress")
@@ -82,6 +84,16 @@ class GuiApi:
             return {"type": "Error", "message": "No folder selected"}
 
         req = AnalyseFolderRequest(path=self.current_folder)
+        return self.backend_handler(req)
+
+    def get_quick_compression_targets(self) -> Dict[str, Any]:
+        """Fetch the default quick-compression targets from the backend."""
+        req = GetQuickCompressionTargetsRequest()
+        return self.backend_handler(req)
+
+    def start_quick_compression(self) -> Dict[str, Any]:
+        """Start the one-click compression pipeline."""
+        req = StartQuickCompressionRequest()
         return self.backend_handler(req)
 
     def get_progress_update(self) -> Dict[str, Any]:

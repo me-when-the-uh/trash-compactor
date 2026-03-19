@@ -21,13 +21,27 @@
           <small style="color: grey;"><span class="version"></span> / <span class="compile-date"></span></small>
         </div>
       </nav>
-      <br>
     </header>
 
     <section class="page" id="Compress">
       <section id="FolderChooser">
-        <div class="ctr">
-          <button id="Button_Folder" onclick="Action.choose_folder()">Choose a folder</button>
+        <div class="ctr action-row">
+          <button id="Button_Quick" class="quick" onclick="Action.quick_compression()">Quick compression</button>
+          <span id="Quick_Action_Or">or</span>
+          <button id="Button_Folder" class="secondary" onclick="Action.choose_folder()">Choose a folder</button>
+        </div>
+      </section>
+
+      <section id="Quick_Mode" style="display: none;">
+        <div class="quick-mode-panel">
+          <div class="quick-mode-title">1-click mode</div>
+          <div class="quick-mode-note">This runs the analysis first and does not compress anything automatically.</div>
+          <div id="Quick_Mode_Message" class="quick-mode-message"></div>
+          <ul id="Quick_Mode_Targets" class="quick-mode-targets"></ul>
+          <div class="ctr">
+            <button id="Button_Quick_Start" class="quick" onclick="Action.start_quick_compression()">Start quick analysis</button>
+            <button id="Button_Quick_Cancel" class="cancel" onclick="Gui.hide_quick_mode()">Cancel</button>
+          </div>
         </div>
       </section>
 
@@ -51,15 +65,32 @@
 
       <section id="Analysis" style="display: none;">
         <div id="Quick_Estimate">
-          <div class="estimate-main"><span id="Estimate_From">0 B</span> -> <span id="Estimate_To" class="estimate-tone-low">0 B</span></div>
-          <div class="estimate-sub" id="Current_Disk_Line"><strong>Currently on-disk:</strong> <span id="Estimate_Current_On_Disk">0 B</span></div>
-          <div class="estimate-sub"><span id="Estimate_Recovery" class="estimate-tone-low">0%</span> will be recovered</div>
+          <div class="estimate-card total-card">
+            <div class="estimate-card-title">Total</div>
+            <div class="estimate-main"><span id="Estimate_From">0 B</span> -> <span id="Estimate_To" class="estimate-tone-low">0 B</span></div>
+            <div class="estimate-sub" id="Current_Disk_Line"><strong>Currently on-disk:</strong> <span id="Estimate_Current_On_Disk">0 B</span></div>
+            <div class="estimate-sub"><span id="Estimate_Recovery" class="estimate-tone-low">0%</span> <span id="Estimate_Recovery_Label">will be recovered</span></div>
+          </div>
+          <div class="estimate-card current-card">
+            <div class="estimate-card-title current-card-title" id="Current_Directory_Header">
+              <span id="Current_Directory_Header_Text">Current Directory</span>
+              <div id="Current_Directory_Nav" class="directory-nav" style="display: none;">
+                <button id="Directory_Prev" class="directory-nav-btn" onclick="Gui.previous_directory()">◀</button>
+                <span id="Directory_Position" class="directory-position"></span>
+                <button id="Directory_Next" class="directory-nav-btn" onclick="Gui.next_directory()">▶</button>
+              </div>
+            </div>
+            <div class="estimate-card-path" id="Current_Directory_Name">Waiting for analysis...</div>
+            <div class="estimate-main"><span id="Current_Estimate_From">0 B</span> -> <span id="Current_Estimate_To" class="estimate-tone-low">0 B</span></div>
+            <div class="estimate-sub" id="Current_Directory_Disk_Line"><strong>Currently on-disk:</strong> <span id="Current_Estimate_Current_On_Disk">0 B</span></div>
+            <div class="estimate-sub"><span id="Current_Estimate_Recovery" class="estimate-tone-low">0%</span> <span id="Current_Estimate_Recovery_Label">will be recovered</span></div>
+          </div>
         </div>
         <div>
-          <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved">0 B</span> can be compressed in total (<span id="Compress_Ratio">1.00</span>x, <span id="Size_Physical">0 B</span> projected)</div>
-          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size">0 B</span> already compressed (<span id="File_Count_Compressed">0</span> files)</div>
-          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size">0 B</span> are compressible (<span id="File_Count_Compressible">0</span> files)</div>
-          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size">0 B</span> excluded (<span id="File_Count_Skipped">0</span> files)</div>
+          <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved">0 B</span> <span id="Space_Saved_Label">can be compressed in total</span> (down to <span id="Size_Physical">0 B</span>)</div>
+          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size">0 B</span> <span id="Compressed_Size_Label">already compressed</span> (<span id="File_Count_Compressed">0</span> files)</div>
+          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size">0 B</span> <span id="Compressible_Size_Label">are compressible</span> (<span id="File_Count_Compressible">0</span> files)</div>
+          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size">0 B</span> <span id="Skipped_Size_Label">excluded</span> (<span id="File_Count_Skipped">0</span> files)</div>
         </div>
 
         <div id="File_Count_Breakdown">

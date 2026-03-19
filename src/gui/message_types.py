@@ -117,6 +117,22 @@ class AnalyseFolderRequest(GuiRequest):
 
 
 @dataclass
+class GetQuickCompressionTargetsRequest(GuiRequest):
+    type: str = "GetQuickCompressionTargets"
+
+    def __init__(self):
+        self.type = "GetQuickCompressionTargets"
+
+
+@dataclass
+class StartQuickCompressionRequest(GuiRequest):
+    type: str = "StartQuickCompression"
+
+    def __init__(self):
+        self.type = "StartQuickCompression"
+
+
+@dataclass
 class GetProgressUpdateRequest(GuiRequest):
     type: str = "GetProgressUpdate"
 
@@ -216,10 +232,26 @@ class StatusResponse(GuiResponse):
 class FolderSummaryResponse(GuiResponse):
     type: str = "FolderSummary"
     info: Dict[str, Any] = None
+    directory: str = ""
+    scope: str = ""
 
-    def __init__(self, info: Optional[Dict[str, Any]] = None):
+    def __init__(self, info: Optional[Dict[str, Any]] = None, directory: str = "", scope: str = ""):
         self.type = "FolderSummary"
         self.info = info or {}
+        self.directory = directory
+        self.scope = scope
+
+
+@dataclass
+class QuickCompressionTargetsResponse(GuiResponse):
+    type: str = "QuickCompressionTargets"
+    directories: list[str] = None
+    allow_compactos: bool = False
+
+    def __init__(self, directories: Optional[list[str]] = None, allow_compactos: bool = False):
+        self.type = "QuickCompressionTargets"
+        self.directories = directories or []
+        self.allow_compactos = allow_compactos
 
 
 @dataclass
@@ -276,6 +308,10 @@ def parse_request(data: str) -> Optional[GuiRequest]:
             return StopCompressionRequest()
         elif req_type == "AnalyseFolder":
             return AnalyseFolderRequest(path=obj.get("path", ""))
+        elif req_type == "GetQuickCompressionTargets":
+            return GetQuickCompressionTargetsRequest()
+        elif req_type == "StartQuickCompression":
+            return StartQuickCompressionRequest()
         elif req_type == "GetProgressUpdate":
             return GetProgressUpdateRequest()
         elif req_type == "SaveConfig":

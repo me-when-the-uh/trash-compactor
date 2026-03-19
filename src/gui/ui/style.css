@@ -8,6 +8,7 @@ body {
 
 header {
   display: flex;
+  align-items: flex-start;
   border-bottom: 1px solid black;
   background-color: rgb(51, 51, 51);
 }
@@ -17,15 +18,15 @@ header .push {
 }
 
 progress, textarea, input {
-  margin: 6px;
+  margin: 4px;
 }
 
 h1 {
   text-transform: uppercase;
   font-family: Impact, Oswald, Tahoma, sans-serif;
   font-weight: lighter;
-  margin: 1px;
-  padding: 4px;
+  margin: 0;
+  padding: 3px 4px;
   background-color: #333;
 }
 
@@ -45,8 +46,34 @@ h1 span.sml {
   padding-right: 8px;
 }
 
+#Quick_Action_Or {
+  color: #a6a6a6;
+  font-size: 1.05em;
+  font-weight: 700;
+  align-self: center;
+  margin: 0 2px;
+}
+
 #Button_Folder {
-  width: 80%;
+  flex: 0.9 1 260px;
+  background-color: #0f6fbe;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#Button_Folder.secondary {
+  background-color: #0079d6;
+}
+
+#Button_Quick {
+  flex: 1.2 1 340px;
+  background-color: rgb(33, 186, 69);
+}
+
+#Button_Quick:hover, #Button_Quick:active {
+  background-color: rgb(46, 204, 85);
 }
 
 input, textarea, select {
@@ -82,13 +109,21 @@ section button.compress {
   background-color: rgb(33, 186, 69);
 }
 
+section button.quick {
+  background-color: rgb(33, 186, 69);
+}
+
+section button.quick:hover, section button.quick:active {
+  background-color: rgb(46, 204, 85);
+}
+
 progress {
   height: 20px;
   width: 90%;
 }
 
 section {
-  margin: 16px;
+  margin: 8px 12px;
   display: block;
 }
 
@@ -96,6 +131,53 @@ div.ctr {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+#FolderChooser .action-row {
+  gap: 12px;
+  align-items: stretch;
+}
+
+#FolderChooser .action-row button {
+  min-height: 48px;
+  padding: 10px 18px;
+  font-size: 1.0em;
+}
+
+.quick-mode-panel {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #2f2f2f;
+  padding: 8px 10px;
+}
+
+.quick-mode-title {
+  font-size: 1.0em;
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+.quick-mode-message {
+  color: #d8d8d8;
+  margin-bottom: 6px;
+}
+
+.quick-mode-note {
+  color: #8fc9ff;
+}
+
+.quick-mode-targets {
+  display: block;
+  list-style-type: disc;
+  margin: 2px 0 8px 20px;
+  padding: 0;
+  color: #eee;
+}
+
+.quick-mode-targets li {
+  display: list-item;
+  margin: 2px 0;
+  word-break: break-all;
 }
 
 textarea {
@@ -111,31 +193,74 @@ textarea {
 }
 
 #Analysis_Timing {
-  margin-top: 6px;
+  margin-top: 4px;
   color: #cfcfcf;
-  font-size: 0.9em;
+  font-size: 0.85em;
   line-height: 1.2em;
   min-height: 1.2em;
 }
 
 #Quick_Estimate {
-  border: 1px solid #262626;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  gap: 6px;
+  border: 1px solid transparent;
   border-radius: 6px;
-  padding: 10px;
-  margin: 8px 0 12px 0;
+  padding: 6px 7px;
+  margin: 4px 0 8px 0;
   background: #323232;
 }
 
-#Quick_Estimate .estimate-main {
-  font-size: 1.25em;
-  font-weight: 600;
-  letter-spacing: 0.2px;
+.estimate-card {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
 }
 
-#Quick_Estimate .estimate-sub {
-  margin-top: 4px;
+.total-card {
+  background: transparent;
+}
+
+.current-card {
+  background: transparent;
+}
+
+.estimate-card-title {
+  font-size: 0.8em;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9fb6c9;
+  margin-bottom: 3px;
+}
+
+.current-card-title {
+  position: relative;
+  min-height: 22px;
+  padding-right: 102px;
+}
+
+.estimate-card-path {
+  font-size: 0.88em;
+  color: #dcdcdc;
+  margin-bottom: 8px;
+  word-break: break-all;
+}
+
+.estimate-main {
+  font-size: 1.12em;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin-top: auto;
+}
+
+.estimate-sub {
+  margin-top: 2px;
   color: #d8d8d8;
-  font-size: 0.95em;
+  font-size: 0.9em;
 }
 
 #Current_Disk_Line {
@@ -159,6 +284,40 @@ textarea {
   width: 95%;
 }
 
+.directory-nav {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 0;
+}
+
+.directory-nav-btn {
+  margin: 0;
+  padding: 2px 7px;
+  min-height: 22px;
+  font-size: 0.78em;
+  background-color: #55606a;
+}
+
+.directory-nav-btn:hover, .directory-nav-btn:active {
+  background-color: #66707a;
+}
+
+.directory-nav-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.directory-position {
+  color: #cfd6dc;
+  font-size: 0.75em;
+  white-space: nowrap;
+}
+
 #Analysis .saved .box, #Breakdown_Saved {
   background-color: white;
 }
@@ -179,17 +338,13 @@ textarea {
   border: 1px solid black;
 }
 
-#Analysis div div {
-  padding: 2px;
-}
-
 #File_Count_Breakdown {
   display: flex;
   width: 95%;
   font-size: smaller;
   border: 1px solid black;
   border-radius: 2px;
-  margin: 8px auto;
+  margin: 6px auto;
   overflow: hidden;
 }
 
@@ -210,7 +365,7 @@ nav button {
   display: inline-block;
   background-color: transparent;
   color: #fff;
-  padding: 6px;
+  padding: 5px 6px;
   border-width: 0;
   cursor: pointer;
 }
@@ -223,7 +378,7 @@ section button {
   color: #fff;
   background-color: #0079d6;
   border-color: transparent;
-  padding: 6px;
+  padding: 5px 6px;
   border-radius: 4px;
   border-width: 1px;
   margin: 4px;

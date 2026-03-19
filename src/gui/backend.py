@@ -1,8 +1,6 @@
 import logging
 import threading
 import time
-import io
-import contextlib
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
@@ -21,6 +19,7 @@ from .message_types import (
     ProgressUpdateResponse,
     WarningResponse,
     ConfigResponse,
+    QuickCompressionTargetsResponse,
     ResetConfigRequest
 )
 from .webview_server import create_gui_app, GuiServer
@@ -33,7 +32,9 @@ from ..stats import CompressionStats
 from ..timer import PerformanceMonitor
 from ..workers import lzx_worker_count, xp_worker_count
 from ..config import DEFAULT_MIN_SAVINGS_PERCENT, DRY_RUN_CONSERVATIVE_FACTORS
+from ..file_utils import is_admin
 from ..skip_logic import commit_incompressible_cache
+from ..one_click import resolve_targets
 
 
 UI_STATUS_INTERVAL_SECONDS = 0.10
@@ -126,6 +127,13 @@ class GuiBackend:
             self.current_folder = requested_path
             self.start_worker(self._run_analysis)
             return StateResponse("Scanning")
+
+        elif req_type == "GetQuickCompressionTargets":
+            return self._make_quick_targets_response()
+
+        elif req_type == "StartQuickCompression":
+            self.start_worker(self._run_quick_compression)
+            return StateResponse("Scanning")
             
         elif req_type == "PauseCompression":
             self.pause_event.set()
@@ -175,7 +183,51 @@ class GuiBackend:
     def _sync_stats(self, stats: CompressionStats, plan: list):
         plan_count = len(plan)
         total_compressible_size = sum(p[1] for p in plan)
-        self._send(FolderSummaryResponse(self._make_stats_summary(stats, plan_count, total_compressible_size)))
+        self._send(
+            FolderSummaryResponse(
+                self._make_stats_summary(stats, plan_count, total_compressible_size),
+                directory=str(self.current_folder),
+                scope="current",
+            )
+        )
+
+    def _make_quick_targets_response(self) -> QuickCompressionTargetsResponse:
+        targets = resolve_targets()
+        return QuickCompressionTargetsResponse(
+            directories=[str(directory) for directory in targets.directories],
+            allow_compactos=is_admin(),
+        )
+
+    def _accumulate_stats(self, target: CompressionStats, source: CompressionStats) -> None:
+        target.compressed_files += source.compressed_files
+        target.skipped_files += source.skipped_files
+        target.already_compressed_files += source.already_compressed_files
+        target.total_original_size += source.total_original_size
+        target.total_compressed_size += source.total_compressed_size
+        target.total_skipped_size += source.total_skipped_size
+        target.total_skipped_physical_size += source.total_skipped_physical_size
+        target.already_compressed_logical_size += source.already_compressed_logical_size
+        target.already_compressed_physical_size += source.already_compressed_physical_size
+        target.skip_extension_files += source.skip_extension_files
+        target.skip_low_savings_files += source.skip_low_savings_files
+        target.errors.extend(source.errors)
+        target.entropy_projected_original_bytes += source.entropy_projected_original_bytes or source.total_original_size
+        target.entropy_projected_compressed_bytes += source.entropy_projected_compressed_bytes or source.total_compressed_size
+        target.entropy_projected_compressed_bytes_conservative += source.entropy_projected_compressed_bytes_conservative or source.total_compressed_size
+
+    def _build_quick_total_timing(
+        self,
+        scan_seconds: float,
+        entropy_seconds: float,
+        candidate_files: int,
+        entropy_files: int,
+    ) -> dict:
+        return {
+            "combined_scan_seconds": max(0.0, scan_seconds),
+            "scan_rate": (candidate_files / scan_seconds) if scan_seconds > 0 else 0.0,
+            "entropy_seconds": max(0.0, entropy_seconds),
+            "entropy_rate": (entropy_files / entropy_seconds) if entropy_seconds > 0 else 0.0,
+        }
 
     def _apply_dry_run_projection(self, stats: CompressionStats, plan: list[tuple[Path, int, str]]) -> None:
         stats.entropy_projected_original_bytes = stats.total_original_size
@@ -230,18 +282,42 @@ class GuiBackend:
         excluded_count = max(0, stats.skipped_files - already_compressed_files)
         excluded_logical_size = max(0, stats.total_skipped_size - already_compressed_logical_size)
 
-        current_on_disk_size = already_compressed_physical_size + excluded_logical_size + total_compressible_size
+        if is_analysis:
+            current_on_disk_size = already_compressed_physical_size + excluded_logical_size + total_compressible_size
 
-        projected_compressible_size = total_compressible_size
-        if is_analysis and stats.entropy_projected_compressed_bytes_conservative > 0:
-            projected_compressible_size = max(
+            projected_compressible_size = total_compressible_size
+            if stats.entropy_projected_compressed_bytes_conservative > 0:
+                projected_compressible_size = max(
+                    0,
+                    stats.entropy_projected_compressed_bytes_conservative - stats.total_skipped_physical_size,
+                )
+
+            projected_on_disk_size = already_compressed_physical_size + excluded_logical_size + projected_compressible_size
+            physical_size = projected_on_disk_size
+            potential_savings_bytes = max(0, current_on_disk_size - projected_on_disk_size)
+            compressed_count = already_compressed_files
+            compressed_logical_size = already_compressed_logical_size
+            compressed_physical_size = already_compressed_physical_size
+            compressible_count = plan_count
+            compressible_logical_size = total_compressible_size
+            compressible_physical_size = projected_compressible_size
+        else:
+            current_on_disk_size = max(0, stats.total_compressed_size)
+            projected_on_disk_size = current_on_disk_size
+            physical_size = current_on_disk_size
+            potential_savings_bytes = max(0, stats.total_original_size - current_on_disk_size)
+            compressed_count = already_compressed_files
+            compressed_logical_size = already_compressed_logical_size
+            compressed_physical_size = already_compressed_physical_size
+            compressible_count = max(0, stats.compressed_files)
+            compressible_logical_size = max(
                 0,
-                stats.entropy_projected_compressed_bytes_conservative - stats.total_skipped_physical_size,
+                stats.total_original_size - already_compressed_logical_size - excluded_logical_size,
             )
-
-        projected_on_disk_size = already_compressed_physical_size + excluded_logical_size + projected_compressible_size
-        physical_size = projected_on_disk_size if is_analysis else current_on_disk_size
-        potential_savings_bytes = max(0, current_on_disk_size - projected_on_disk_size)
+            compressible_physical_size = max(
+                0,
+                current_on_disk_size - already_compressed_physical_size - excluded_logical_size,
+            )
 
         summary = {
             "logical_size": stats.total_original_size,
@@ -253,14 +329,14 @@ class GuiBackend:
             "potential_savings_bytes": potential_savings_bytes,
             "analysis_timing": analysis_timing,
             "compressed": {
-                "count": already_compressed_files,
-                "logical_size": already_compressed_logical_size,
-                "physical_size": already_compressed_physical_size,
+                "count": compressed_count,
+                "logical_size": compressed_logical_size,
+                "physical_size": compressed_physical_size,
             },
             "compressible": {
-                "count": plan_count,
-                "logical_size": total_compressible_size,
-                "physical_size": projected_compressible_size if is_analysis else total_compressible_size,
+                "count": compressible_count,
+                "logical_size": compressible_logical_size,
+                "physical_size": compressible_physical_size,
             },
             "skipped": {
                 "count": excluded_count,
@@ -347,7 +423,9 @@ class GuiBackend:
             self.last_analysis_timing = self._build_analysis_timing(discovery_seconds, 0, monitor)
             self._send(
                 FolderSummaryResponse(
-                    self._make_stats_summary(stats, 0, 0, analysis_timing=self.last_analysis_timing)
+                    self._make_stats_summary(stats, 0, 0, analysis_timing=self.last_analysis_timing),
+                    directory=str(base_dir),
+                    scope="current",
                 )
             )
             return
@@ -381,7 +459,13 @@ class GuiBackend:
 
             if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total_files:
                 last_summary_update_time = now
-                self._send(FolderSummaryResponse(self._make_stats_summary(stats, plan_count, total_compressible_size)))
+                self._send(
+                    FolderSummaryResponse(
+                        self._make_stats_summary(stats, plan_count, total_compressible_size),
+                        directory=str(base_dir),
+                        scope="current",
+                    )
+                )
 
         # Just adapting the entropy wrapper
         def _entropy_progress(path: Path, processed: int, total: int):
@@ -418,12 +502,7 @@ class GuiBackend:
 
         analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)
         self._send(
-            ProgressUpdateResponse(
-                "Analysis complete in "
-                f"{analysis_elapsed:.2f}s "
-                f"(scan {discovery_seconds + monitor.stats.file_scan_time:.2f}s, entropy {monitor.stats.entropy_analysis_time:.2f}s)",
-                100.0,
-            )
+            ProgressUpdateResponse("Analysis complete in "f"{analysis_elapsed:.2f}s ", 100.0,)
         )
         self._send(
             FolderSummaryResponse(
@@ -432,9 +511,22 @@ class GuiBackend:
                     len(plan),
                     sum(p[1] for p in plan),
                     analysis_timing=self.last_analysis_timing,
-                )
+                ),
+                directory=str(base_dir),
+                scope="current",
             )
         )
+
+    def _run_quick_compression(self):
+        try:
+            self._run_quick_compression_pipeline()
+            self._send(StateResponse("Stopped"))
+        except InterruptedError:
+            self._send(StateResponse("Stopped"))
+        except Exception as e:
+            logging.exception("Quick compression error")
+            self._send(WarningResponse("Error", str(e)))
+            self._send(StateResponse("Stopped"))
 
     def _run_compression_pipeline(self):
         from ..workers import set_worker_cap
@@ -487,7 +579,13 @@ class GuiBackend:
                 elapsed = max(0.001, now - exec_start_time)
                 rate = compressed_count[0] / elapsed
                 self._send(ProgressUpdateResponse(f"Compressing... {compressed_count[0]}/{total_to_compress} ({rate:.0f} files/s)", pct))
-                self._send(FolderSummaryResponse(self._make_stats_summary(stats, total_to_compress, total_compressible_size, is_analysis=False)))
+                self._send(
+                    FolderSummaryResponse(
+                        self._make_stats_summary(stats, total_to_compress, total_compressible_size, is_analysis=False),
+                        directory=str(self.current_folder),
+                        scope="current",
+                    )
+                )
 
         with monitor.time_compression():
             execute_compression_plan(
@@ -508,17 +606,88 @@ class GuiBackend:
         
         # Final summary
         self._send(ProgressUpdateResponse("Complete!", 100.0))
-        self._send(FolderSummaryResponse(self._make_stats_summary(stats, 0, 0, is_analysis=False))) # Plan is depleted
+        self._send(
+            FolderSummaryResponse(
+                self._make_stats_summary(stats, stats.compressed_files, total_compressible_size, is_analysis=False),
+                directory=str(self.current_folder),
+                scope="current",
+            )
+        ) # Plan is depleted
 
-def run_gui():
-    from ..benchmark import run_benchmark
+    def _run_quick_compression_pipeline(self):
+        from ..workers import set_worker_cap
+        from ..launch import configure_lzx
 
-    # Benchmark must run before spawning GUI to keep machine-to-machine results
-    # consistent. Suppress console output in GUI mode.
-    sink = io.StringIO()
-    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
-        benchmark_ok = run_benchmark()
+        set_worker_cap(1 if self.single_worker else None)
+        configure_lzx(
+            choice_enabled=not self.no_lzx,
+            force_lzx=self.force_lzx,
+            benchmark_ok=self.benchmark_ok,
+            disabled_reason='benchmark' if self.default_no_lzx else None,
+            announce=False,
+        )
 
+        targets = list(resolve_targets().directories)
+        if not targets:
+            self._send(WarningResponse("Warning", "No default quick-compression targets were found on this system."))
+            return
+
+        total_stats = CompressionStats()
+        total_stats.min_savings_percent = self.min_savings
+        total_plan_count = 0
+        total_compressible_size = 0
+        total_scan_seconds = 0.0
+        total_entropy_seconds = 0.0
+        total_candidate_files = 0
+        total_entropy_files = 0
+
+        for index, directory in enumerate(targets, start=1):
+            self._check_pause_stop()
+            self.current_folder = str(directory)
+            self._send(StatusResponse(f"Quick analysis: scanning {directory} ({index}/{len(targets)})", 0.0))
+            self._run_analysis_pipeline()
+
+            current_stats = self.last_analysis_stats
+            current_plan = self.last_analysis_plan or []
+            current_monitor = self.last_analysis_monitor
+            current_timing = self.last_analysis_timing or {}
+
+            if current_stats is None or current_monitor is None:
+                continue
+
+            self._accumulate_stats(total_stats, current_stats)
+            total_plan_count += len(current_plan)
+            total_compressible_size += sum(item[1] for item in current_plan)
+            total_scan_seconds += float(current_timing.get("combined_scan_seconds", 0.0) or 0.0)
+            total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
+            total_candidate_files += len(current_plan)
+            total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
+
+            total_summary = self._make_stats_summary(
+                total_stats,
+                total_plan_count,
+                total_compressible_size,
+                analysis_timing=self._build_quick_total_timing(
+                    total_scan_seconds,
+                    total_entropy_seconds,
+                    total_candidate_files,
+                    total_entropy_files,
+                ),
+            )
+            if current_stats is not None:
+                current_summary = self._make_stats_summary(
+                    current_stats,
+                    len(current_plan),
+                    sum(item[1] for item in current_plan),
+                    analysis_timing=current_timing,
+                )
+                self._send(FolderSummaryResponse(current_summary, directory=str(directory), scope="directory"))
+            self._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
+
+        self._send(ProgressUpdateResponse("Quick analysis complete", 100.0))
+        self._send(StateResponse("Stopped"))
+
+def run_gui(benchmark_ok: Optional[bool] = None):
     backend = GuiBackend(benchmark_ok=benchmark_ok)
     app = create_gui_app(backend.handle_request)
     backend.bind_server(app)
