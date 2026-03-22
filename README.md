@@ -8,6 +8,7 @@ Compressing large directories to gain extra storage space will be so free and wi
   ## Features
 
   - Automated compression using Windows NTFS compression
+  - Simple and intuitive user interface
   - Smart algorithm selection based on file size
   - Entropy analysis to evaluate compression potential and choose to compress only the files that will make sense to compress
   - Configurable minimum savings threshold (`--min-savings`) with interactive controls
@@ -52,18 +53,18 @@ Note: For Option 2, ensure Git and Python 3.11 or 3.12 are installed on your sys
 
 Optional: you can compile the app yourself as I did, using PyInstaller:
     ```powershell
-    python -m PyInstaller trash-compactor.spec
+    python -m PyInstaller --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next main.py
     ```
     or, since we're interested in squeezing programs into small packages, you can install a build of [UPX](https://github.com/upx/upx) to build an app with compressed binaries:
     ```powershell
-    python -m PyInstaller trash-compactor.spec --upx-dir 'c:\path\to\upx-win64'
+    python -m PyInstaller --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next --upx-dir 'c:\path\to\upx-win64' main.py 
     ```
 
 ## Usage
 
 1. Run the program.
   - Use Administrator only if you want 1-click mode to launch Windows CompactOS.
-2. Choose the mode - either the 1-click run mode to get most things done fast or the manual mode.
+2. Choose the mode - either the 1-click run mode to get most things done fast or choose the directory.
 3. The program will automatically:
     - Scan all files recursively
     - Skip poorly compressible files
@@ -72,18 +73,22 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
 
 ### Interactive configuration
 
-Launching without arguments opens an interactive shell that lets you browse to the target directory, toggle flags, and adjust the minimum savings threshold before starting.
+Launching without arguments opens a GUI window that lets you browse to the target directory, toggle flags, and adjust the minimum savings threshold before starting.
 
-- Enter a path directly, optionally followed by flags (for example: `D:\Games -vx`).
-- Use `--min-savings=<percent>` to change the skip threshold on the fly, or rely on the default 18% savings.
-- Press `s` or hit enter on an empty line to begin once the directory and flags look good.
+- Choose the directories you wish to compress or click on "Quick Compression".
+- Tweak settings such as Minimum Savings % to change the skip threshold, disable LZX compression so as to only dynamically use XPRESS4K/8K/16K algorithms, or use a single worker if you have a spinning hard drive.
+- Press "Analyse" to see what can be compressed.
+  1. Yellow projected values mean that while some files may be compressed, you'll save less than the Minimum Savings % on average.
+  2. Green projected values indicate that you'll save 1.01x-1.99x of the Minimum Savings % on average.
+  3. Blue projected values indicate that you'll save more than double of the Minimum Savings % on average. Go for it!
+- If it looks good to you, press "Compress" to compress the files in the directory.
 
-### Operation Modes
+### Scripting Operation Modes
 
 Trash-Compactor offers three distinct operation modes to handle different scenarios:
 
 #### 1-Click / Unattended Mode (Preferred)
-Press `1` upon starting to run this mode. Most users can just compress their directories once and forget about it. Designed to be extremely simple to use for a casual user, a system administrator, refurbisher, or the so-called family tech support.
+Pressing or passing `1` upon starting will run this mode. Most users can just compress their directories once and forget about it. Designed to be extremely simple to use for a casual user, a system administrator, refurbisher, or the so-called family tech support.
 This mode will automatically compress the following directories:
 - `Program Files`
 - `Program Files (x86)` (including your Steam folder)
@@ -117,7 +122,7 @@ LZX compression is resource-intensive and files will take some time to compress,
 #### Running with a single worker (-s) for HDDs
 HDDs read data sequentially and they can't handle the extreme I/O that the program will hammer the drive with, so to avoid excessive fragmentation, one should use this flag to reduce fragmentation somewhat. 
 
-### Additional Options
+### Additional Scripting Options
 
 - `-v`, or `--verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
 - `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 18%). Directories predicted to save less space are skipped automatically
