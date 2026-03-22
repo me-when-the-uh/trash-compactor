@@ -171,9 +171,10 @@ def execute_compression_plan_wrapper(
             elif state == 'running':
                 start_t = stage_start_times.get(algo, now)
                 elapsed = now - start_t
+                rate_str = f" @ {processed / elapsed:.0f}/s" if elapsed > 0 else ""
                 lines.append(
                     Fore.YELLOW
-                    + f"[{elapsed:6.1f}s] Compressing {processed}/{total} files with {algo}..."
+                    + f"[{elapsed:6.1f}s] Compressing {processed}/{total} files with {algo}...{rate_str}"
                     + Style.RESET_ALL
                 )
             else:
@@ -298,14 +299,11 @@ def _plan_compression(
         timer.set_total(len(files))
         timer.set_message("")
 
-    def _on_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str]) -> None:
+    def _on_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int) -> None:
         if not timer:
             return
-        display = timer.format_path(str(path), str(base_dir))
-        if not should_compress and reason:
-            display = f"{display} [skip]"
-        timer.update(processed, display)
-    
+        timer.update(processed)
+
     entropy_started = False
     def _entropy_callback_wrapper(path: Path, processed: int, total: int) -> None:
         nonlocal entropy_started
@@ -315,9 +313,8 @@ def _plan_compression(
             timer.set_label(_("Entropy analysis"))
             timer.set_total(total)
             entropy_started = True
-        
-        display = timer.format_path(str(path), str(base_dir))
-        timer.update(processed, display)
+
+        timer.update(processed)
 
     return plan_compression(
         files,

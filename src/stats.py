@@ -98,7 +98,14 @@ class ProgressTimer:
 
     def _render_line(self) -> str:
         elapsed = time.monotonic() - self._start_time
-        progress = f"({self.processed}/{self.total})" if self.total else ""
+        
+        rate_str = ""
+        if elapsed > 0 and self.processed > 0:
+            rate = self.processed / elapsed
+            rate_str = f" @ {rate:.0f}/s"
+            
+        progress = f"({self.processed}/{self.total}{rate_str})" if self.total else (f"({self.processed}{rate_str})" if self.processed else "")
+        
         parts = [f"[{elapsed:6.1f}s]", self._label]
         if progress:
             parts.append(progress)
@@ -168,9 +175,15 @@ class CompressionStats:
     compressed_files: int = 0
     skipped_files: int = 0
     already_compressed_files: int = 0
+    excluded_files: int = 0
     total_original_size: int = 0
     total_compressed_size: int = 0
     total_skipped_size: int = 0
+    total_skipped_physical_size: int = 0
+    already_compressed_logical_size: int = 0
+    already_compressed_physical_size: int = 0
+    excluded_logical_size: int = 0
+    excluded_physical_size: int = 0
     errors: List[str] = field(default_factory=list)
     directory_skips: List[DirectorySkipRecord] = field(default_factory=list)
     entropy_samples: List[EntropySampleRecord] = field(default_factory=list)
@@ -203,11 +216,23 @@ class CompressionStats:
         resolved_hint = size_hint if size_hint > 0 else original_size
         self.skipped_files += 1
         if resolved_hint > 0:
+            self.total_skipped_physical_size += resolved_hint
+        if resolved_hint > 0:
             self.total_compressed_size += resolved_hint
         if original_size > 0:
             self.total_skipped_size += original_size
         if already_compressed:
             self.already_compressed_files += 1
+            if original_size > 0:
+                self.already_compressed_logical_size += original_size
+            if resolved_hint > 0:
+                self.already_compressed_physical_size += resolved_hint
+        else:
+            self.excluded_files += 1
+            if original_size > 0:
+                self.excluded_logical_size += original_size
+            if resolved_hint > 0:
+                self.excluded_physical_size += resolved_hint
 
         resolved_category = self._classify_skip(reason, already_compressed, category)
         if resolved_category == 'extension':

@@ -27,6 +27,17 @@ def is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
+def hide_console_window() -> None:
+    try:
+        import ctypes
+        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+        if hwnd:
+            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
+    except (AttributeError, OSError):
+        # If console window is unavailable
+        pass
+
+
 def _normalize_for_compare(path: str | Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(path)))
     if len(normalized) == 2 and normalized[1] == ':':
@@ -91,14 +102,22 @@ class CompressionDecision:
     should_compress: bool
     reason: str
     size_hint: int = 0
+    category: str = "generic"
+    already_compressed: bool = False
 
     @classmethod
     def allow(cls, size_hint: int) -> "CompressionDecision":
-        return cls(True, _("File eligible for compression"), size_hint)
+        return cls(True, _("File eligible for compression"), size_hint, "eligible", False)
 
     @classmethod
-    def deny(cls, reason: str, size_hint: int = 0) -> "CompressionDecision":
-        return cls(False, reason, size_hint)
+    def deny(
+        cls,
+        reason: str,
+        size_hint: int = 0,
+        category: str = "generic",
+        already_compressed: bool = False,
+    ) -> "CompressionDecision":
+        return cls(False, reason, size_hint, category, already_compressed)
 
 
 def get_size_category(file_size: int) -> str:
@@ -174,23 +193,38 @@ def should_compress_file(
         suffix = file_path.suffix.lower()
 
     if not ignore_extensions and suffix in SKIP_EXTENSIONS:
-        return CompressionDecision.deny(_("Skipped due to extension {suffix}").format(suffix=suffix))
+        return CompressionDecision.deny(
+            _("Skipped due to extension {suffix}").format(suffix=suffix),
+            category="extension",
+        )
 
     try:
         resolved_size = file_size if file_size is not None else os.stat(file_path).st_size
     except OSError as exc:
         logging.error("Failed to stat %s: %s", file_path, exc)
-        return CompressionDecision.deny(_("Unable to read file size: {exc}").format(exc=exc))
+        return CompressionDecision.deny(
+            _("Unable to read file size: {exc}").format(exc=exc),
+            category="error",
+        )
 
     if resolved_size < MIN_COMPRESSIBLE_SIZE:
-        return CompressionDecision.deny(_("File too small ({size} bytes)").format(size=resolved_size), resolved_size)
+        return CompressionDecision.deny(
+            _("File too small ({size} bytes)").format(size=resolved_size),
+            resolved_size,
+            category="too_small",
+        )
 
     if check_already_compressed:
         is_compressed, compressed_size = is_file_compressed(
             file_path, actual_size=resolved_size, attributes=attributes
         )
         if is_compressed:
-            return CompressionDecision.deny(_("File is already compressed"), compressed_size)
+            return CompressionDecision.deny(
+                _("File is already compressed"),
+                compressed_size,
+                category="already_compressed",
+                already_compressed=True,
+            )
 
     return CompressionDecision.allow(resolved_size)
 

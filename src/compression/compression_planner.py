@@ -1,7 +1,7 @@
 import functools
 import logging
 import os
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
@@ -139,14 +139,37 @@ def _iter_scanned_files(files: Iterable[os.DirEntry], debug_scan_all: bool = Fal
     )
 
     if workers <= 1:
-        for entry in files:
-            yield mapper(entry)
+        yield from map(mapper, files)
         return
 
-    # chunking for eliminating per-task dispatch overhead in the ThreadPool
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        for result in executor.map(mapper, files, chunksize=2000):
-            yield result
+        from itertools import islice
+        chunk_size = 2000
+        in_flight_limit = max(workers * 4, workers + 1)
+        pending: set[Future[list[_ScanPayload]]] = set()
+        entries = iter(files)
+
+        def _submit_next() -> bool:
+            chunk = list(islice(entries, chunk_size))
+            if not chunk:
+                return False
+            # Submit the whole chunk as a single Future to avoid per-task scheduling overhead
+            pending.add(executor.submit(lambda c: [mapper(entry) for entry in c], chunk))
+            return True
+
+        for _ in range(in_flight_limit):
+            if not _submit_next():
+                break
+
+        while pending:
+            done, pending = wait(pending, return_when=FIRST_COMPLETED)
+            for future in done:
+                yield from future.result()
+
+            refill = in_flight_limit - len(pending)
+            for _ in range(refill):
+                if not _submit_next():
+                    break
 
 
 def plan_compression(
@@ -157,7 +180,7 @@ def plan_compression(
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int, bool, Optional[str]], None]] = None,
+    progress_callback: Optional[Callable[[Path, int, bool, Optional[str], int], None]] = None,
     file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
     apply_entropy_filter: bool = True,
     entropy_progress_callback: Optional[Callable[[Path, int, int], None]] = None,
@@ -183,7 +206,7 @@ def plan_compression(
                 )
                 logging.error(reason)
                 if progress_callback:
-                    progress_callback(file_path, processed, False, reason)
+                    progress_callback(file_path, processed, False, reason, payload.file_size)
                 continue
 
             file_size = payload.file_size
@@ -207,25 +230,21 @@ def plan_compression(
                 algorithm = COMPRESSION_ALGORITHMS[get_size_category(file_size)]
                 candidates.append((file_path, file_size, algorithm))
                 if progress_callback:
-                    progress_callback(file_path, processed, True, None)
+                    progress_callback(file_path, processed, True, None, file_size)
             else:
                 reason = decision.reason
                 resolved_size = decision.size_hint or file_size
-                category = None
-                lowered = reason.lower()
-                if 'extension' in lowered:
-                    category = 'extension'
                 stats.record_file_skip(
                     file_path,
                     reason,
                     resolved_size,
                     file_size,
-                    already_compressed="already compressed" in lowered,
-                    category=category,
+                    already_compressed=decision.already_compressed,
+                    category=decision.category,
                 )
                 logging.debug("Skipping %s: %s", file_path, reason)
                 if progress_callback:
-                    progress_callback(file_path, processed, False, reason)
+                    progress_callback(file_path, processed, False, reason, file_size)
 
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():

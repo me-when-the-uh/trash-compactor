@@ -1,6 +1,11 @@
+from __future__ import annotations
+
 import argparse
+import contextlib
+import io
 import logging
 import multiprocessing
+import os
 import sys
 from datetime import datetime
 from textwrap import dedent
@@ -8,27 +13,15 @@ from typing import Optional, Sequence
 
 from colorama import Fore, Style, init
 
-from src import (
-    compress_directory,
-    config,
-    entropy_dry_run,
-    execute_compression_plan_wrapper,
-    get_cpu_info,
-    print_compression_summary,
-    print_entropy_dry_run,
-    set_worker_cap,
-)
+from src import config
 from src.console import EscapeExit, display_banner, prompt_exit, read_user_input
 from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
 from src.file_utils import describe_protected_path, is_admin
 from src.skip_logic import discard_staged_incompressible_cache, log_directory_skips
 from src.i18n import _, load_translations
-from src.stats import CompressionStats
-from src.timer import PerformanceMonitor
-from src.one_click import run_one_click_mode
 from pathlib import Path
 
-VERSION = "0.5.4"
+VERSION = "0.6.0-beta"
 BUILD_DATE = "who cares"
 
 
@@ -105,7 +98,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=_("Target directory to compress. Omit to start the interactive walkthrough."),
     )
 
-    # Not part of the advertised CLI surface yet; used by the interactive launcher.
     parser.add_argument(
         "--one-click",
         action="store_true",
@@ -167,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
 def announce_mode(args: argparse.Namespace) -> None:
     notices: list[str] = []
     if getattr(args, "dry_run", False):
-        notices.append(_("Dry run: analyse entropy without compressing files."))
+        notices.append(_("Dry run: analysing entropy without compressing files."))
     if getattr(args, "single_worker", False):
         notices.append(_("Single-worker mode: queue batches sequentially to minimise disk head contention."))
 
@@ -180,6 +172,9 @@ def announce_mode(args: argparse.Namespace) -> None:
 
 
 def run_compression(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> None:
+    from src.compression_module import compress_directory
+    from src.stats import print_compression_summary
+
     logging.info(_("Starting compression of directory: %s"), directory)
     stats, monitor = compress_directory(
         directory,
@@ -192,6 +187,10 @@ def run_compression(directory: str, verbosity: int, min_savings: float, debug_sc
 
 
 def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
+    from src.compression_module import entropy_dry_run
+    from src.stats import CompressionStats, print_entropy_dry_run
+    from src.timer import PerformanceMonitor
+
     logging.info(_("Starting entropy dry run for directory: %s"), directory)
     stats, monitor, plan = entropy_dry_run(
         directory,
@@ -207,18 +206,34 @@ def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debu
 
 def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
     args = build_parser().parse_args(argv)
-    if not hasattr(args, 'one_click'):
-        setattr(args, 'one_click', False)
-    if args.min_savings is None:
-        args.min_savings = config.DEFAULT_MIN_SAVINGS_PERCENT
-    else:
-        args.min_savings = config.clamp_savings_percent(args.min_savings)
-    
+    args.min_savings = (
+        config.DEFAULT_MIN_SAVINGS_PERCENT
+        if args.min_savings is None
+        else config.clamp_savings_percent(args.min_savings)
+    )
+
     interactive_launch = not args.directory
-    if interactive_launch:
-        args = interactive_configure(args)
-        args.min_savings = config.clamp_savings_percent(args.min_savings)
+
+    from src import benchmark
+    benchmark_ok: Optional[bool] = None
+    if not interactive_launch and not args.no_lzx:
+        benchmark_ok = benchmark.run_benchmark()
+        if not benchmark_ok and not args.force_lzx:
+            args.no_lzx = True
+            setattr(args, 'lzx_disabled_reason', 'benchmark')
+            print(Fore.YELLOW + _("\nNotice: LZX compression has been disabled to prevent slowdowns for compressed apps.\n(Your CPU is too slow)") + Style.RESET_ALL)
+    setattr(args, 'benchmark_ok', benchmark_ok)
+
     return args, interactive_launch
+
+
+def _apply_lzx_choice(args: argparse.Namespace) -> None:
+    configure_lzx(
+        choice_enabled=not args.no_lzx,
+        force_lzx=args.force_lzx,
+        benchmark_ok=getattr(args, 'benchmark_ok', None),
+        disabled_reason=getattr(args, 'lzx_disabled_reason', None),
+    )
 
 
 def _validate_modes(args: argparse.Namespace) -> bool:
@@ -241,6 +256,8 @@ def _emit_verbosity_banner(level: int) -> None:
 
 
 def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Optional[str]:
+    from src.workers import set_worker_cap
+
     set_worker_cap(1 if getattr(args, "single_worker", False) else None)
 
     if is_admin():
@@ -250,16 +267,9 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
             _("Running without administrator privileges. Some protected files may be skipped.")
         )
 
-    physical_cores, logical_cores = get_cpu_info()
     announce_mode(args)
 
-    configure_lzx(
-        choice_enabled=not args.no_lzx,
-        force_lzx=args.force_lzx,
-        cpu_capable=config.is_cpu_capable_for_lzx(),
-        physical=physical_cores,
-        logical=logical_cores,
-    )
+    _apply_lzx_choice(args)
 
     directory, updated_args = acquire_directory(args, interactive_launch)
     args.directory = directory
@@ -280,7 +290,6 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
 
 def main() -> None:
-    # Detect language override before anything else to ensure banner and help text are translated
     override_lang = _detect_language_override(sys.argv[1:])
     load_translations(override_lang)
     
@@ -297,15 +306,36 @@ def main() -> None:
 
     _emit_verbosity_banner(args.verbose)
 
+    if interactive_launch:
+        try:
+            from src.benchmark import run_benchmark
+            from src.file_utils import hide_console_window
+
+            # Keep benchmark output out of the terminal in GUI mode.
+            sink = io.StringIO()
+            with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+                benchmark_ok = run_benchmark()
+
+            # Hide the console window since we're running GUI mode.
+            hide_console_window()
+
+            import webview  
+            from src.gui.backend import run_gui
+            run_gui(benchmark_ok=benchmark_ok)
+            # pywebview can leave non-daemon framework threads alive briefly.
+            # Exit immediately once the window closes for snappier UX.
+            os._exit(0)
+        except (ImportError, ModuleNotFoundError):
+            args = interactive_configure(args)
+            args.min_savings = config.clamp_savings_percent(args.min_savings)
+            if not args.directory:
+                prompt_exit()
+                return
+
     if getattr(args, 'one_click', False) and not args.directory:
-        physical_cores, logical_cores = get_cpu_info()
-        configure_lzx(
-            choice_enabled=not args.no_lzx,
-            force_lzx=args.force_lzx,
-            cpu_capable=config.is_cpu_capable_for_lzx(),
-            physical=physical_cores,
-            logical=logical_cores,
-        )
+        _apply_lzx_choice(args)
+
+        from src.one_click import run_one_click_mode
 
         run_one_click_mode(
             verbosity=args.verbose,
@@ -346,6 +376,9 @@ def main() -> None:
                 if response in ('y', 'yes'):
                     print(_("\nStarting compression..."))
                     monitor.start_operation()
+                    from src.compression_module import execute_compression_plan_wrapper
+                    from src.stats import print_compression_summary
+
                     stats, monitor = execute_compression_plan_wrapper(
                         stats,
                         monitor,

@@ -52,37 +52,43 @@ def pick_directory_dialog() -> Optional[str]:
         return None
 
 
-def configure_lzx(choice_enabled: bool, force_lzx: bool, cpu_capable: bool, physical: int, logical: int) -> bool:
+def configure_lzx(
+    choice_enabled: bool,
+    force_lzx: bool,
+    benchmark_ok: Optional[bool] = None,
+    disabled_reason: Optional[str] = None,
+    announce: bool = True,
+) -> bool:
+    def _disable_with_benchmark_warning() -> None:
+        if not announce:
+            return
+        print(Fore.YELLOW + _("LZX compression disabled because startup benchmark exceeded the safe limit."))
+        print(_("Use -f flag to force LZX anyway."))
+
     if not choice_enabled:
-        if force_lzx:
+        if force_lzx and announce:
             logging.info(_("Ignoring -f because -x disables LZX explicitly"))
-        print(Fore.YELLOW + _("-x: LZX compression disabled via command line flag."))
+        if disabled_reason == 'benchmark':
+            _disable_with_benchmark_warning()
+        else:
+            if announce:
+                print(Fore.YELLOW + _("-x: LZX compression disabled via command line flag."))
         config.COMPRESSION_ALGORITHMS['large'] = 'XPRESS16K'
         return False
 
-    if cpu_capable or force_lzx:
+    if benchmark_ok is None:
+        benchmark_ok = benchmark.run_benchmark()
+
+    if benchmark_ok or force_lzx:
         config.COMPRESSION_ALGORITHMS['large'] = 'LZX'
-        if force_lzx and not cpu_capable:
-            logging.info(
-                _("Forcing LZX compression despite CPU having only {physical} cores and {logical} threads").format(
-                    physical=physical, logical=logical
-                )
-            )
-        else:
-            logging.info(
-                _("Using LZX compression (CPU deemed capable - it has {physical} cores and {logical} threads)").format(
-                    physical=physical, logical=logical
-                )
-            )
+        if announce and force_lzx and not benchmark_ok:
+            logging.info(_("Forcing LZX compression despite startup benchmark timeout."))
+        elif announce:
+            logging.info(_("Using LZX compression."))
         return True
 
     config.COMPRESSION_ALGORITHMS['large'] = 'XPRESS16K'
-    print(Fore.YELLOW + _("\nNotice: Your CPU has {physical} cores and {logical} threads.").format(physical=physical, logical=logical))
-    print(_("LZX compression requires at least {min_physical} cores and {min_logical} threads.").format(
-        min_physical=config.MIN_PHYSICAL_CORES_FOR_LZX, min_logical=config.MIN_LOGICAL_CORES_FOR_LZX
-    ))
-    print(_("LZX compression has been disabled for better system responsiveness."))
-    print(_("Use -f flag to force LZX if you're feeling adventurous."))
+    _disable_with_benchmark_warning()
     return False
 
 
@@ -517,23 +523,7 @@ def interactive_configure(args: Namespace) -> Namespace:
         min_savings=config.clamp_savings_percent(getattr(args, 'min_savings', config.DEFAULT_MIN_SAVINGS_PERCENT)),
     )
 
-    physical, logical = config.get_cpu_info()
-    effective_cores = physical or logical or 1
-
-    # skipping single-core benchmark if it's a dual-core potato
-    if effective_cores <= 2:
-        if not state.force_lzx:
-            state.no_lzx = True
-            print(
-                Fore.YELLOW + _("\nNotice: LZX compression has been disabled by default on potato CPUs with 1-2 cores.") + Style.RESET_ALL
-            )
-    else:
-        if not benchmark.run_benchmark():
-            if not state.force_lzx:
-                state.no_lzx = True
-            print(Fore.YELLOW + _("\nNotice: LZX compression has been disabled to prevent slowdowns for compressed apps.\n(Your CPU is too slow)") + Style.RESET_ALL)
-
-    print(Fore.YELLOW + _("\nInteractive launch detected. Configure your run before starting.") + Style.RESET_ALL)
+    print(Fore.YELLOW + _("\nInteractive launch detected.") + Style.RESET_ALL)
     quick = read_user_input(_("Press '1' for 1-click unattended mode, or Enter for custom setup: ")).strip().lower()
     if quick == '1':
         state.one_click = True
