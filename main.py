@@ -159,7 +159,7 @@ def build_parser() -> argparse.ArgumentParser:
 def announce_mode(args: argparse.Namespace) -> None:
     notices: list[str] = []
     if getattr(args, "dry_run", False):
-        notices.append(_("Dry run: analyse entropy without compressing files."))
+        notices.append(_("Dry run: analysing entropy without compressing files."))
     if getattr(args, "single_worker", False):
         notices.append(_("Single-worker mode: queue batches sequentially to minimise disk head contention."))
 
@@ -309,11 +309,15 @@ def main() -> None:
     if interactive_launch:
         try:
             from src.benchmark import run_benchmark
+            from src.file_utils import hide_console_window
 
             # Keep benchmark output out of the terminal in GUI mode.
             sink = io.StringIO()
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                 benchmark_ok = run_benchmark()
+
+            # Hide the console window since we're running GUI mode.
+            hide_console_window()
 
             import webview  
             from src.gui.backend import run_gui

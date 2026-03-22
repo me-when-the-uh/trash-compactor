@@ -7,9 +7,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 
 
-## [v0.6.0]
+## [v0.6.0] - 2026-03-23
 ### Added
 - GUI mode
+
+### Changed
+- If the directory isn't passed as an argument, a GUI dialog will be shown instead of the CLI
+
+### Known issues
+- If run from a terminal, the terminal will close immediately if the GUI dialog is spawned
 
 
 ## [v0.5.4] - 2026-03-16

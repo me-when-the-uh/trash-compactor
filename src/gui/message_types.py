@@ -3,9 +3,9 @@ Message types for GUI <-> Backend IPC communication.
 JSON-serializable dataclasses matching Compactor's request/response pattern.
 """
 
-from dataclasses import dataclass, asdict
-from typing import Optional, Dict, Any
 import json
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -48,7 +48,7 @@ class FolderSummary:
 @dataclass
 class GuiRequest:
     """Base class for all GUI -> Backend requests."""
-    type: str
+    type: str = field(init=False, default="")
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -57,213 +57,131 @@ class GuiRequest:
 @dataclass
 class GuiResponse:
     """Base class for all Backend -> GUI responses."""
-    type: str
+    type: str = field(init=False, default="")
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
 
 
-# Request Types
-
 @dataclass
 class SelectFolderRequest(GuiRequest):
-    type: str = "SelectFolder"
+    type: str = field(init=False, default="SelectFolder")
 
 
 @dataclass
 class StartCompressionRequest(GuiRequest):
-    type: str = "StartCompression"
+    type: str = field(init=False, default="StartCompression")
     path: str = ""
     min_savings: float = 18.0
-
-    def __init__(self, path: str = "", min_savings: float = 18.0):
-        self.type = "StartCompression"
-        self.path = path
-        self.min_savings = min_savings
 
 
 @dataclass
 class PauseCompressionRequest(GuiRequest):
-    type: str = "PauseCompression"
-
-    def __init__(self):
-        self.type = "PauseCompression"
+    type: str = field(init=False, default="PauseCompression")
 
 
 @dataclass
 class ResumeCompressionRequest(GuiRequest):
-    type: str = "ResumeCompression"
-
-    def __init__(self):
-        self.type = "ResumeCompression"
+    type: str = field(init=False, default="ResumeCompression")
 
 
 @dataclass
 class StopCompressionRequest(GuiRequest):
-    type: str = "StopCompression"
-
-    def __init__(self):
-        self.type = "StopCompression"
+    type: str = field(init=False, default="StopCompression")
 
 
 @dataclass
 class AnalyseFolderRequest(GuiRequest):
-    type: str = "AnalyseFolder"
+    type: str = field(init=False, default="AnalyseFolder")
     path: str = ""
-
-    def __init__(self, path: str = ""):
-        self.type = "AnalyseFolder"
-        self.path = path
 
 
 @dataclass
 class GetQuickCompressionTargetsRequest(GuiRequest):
-    type: str = "GetQuickCompressionTargets"
-
-    def __init__(self):
-        self.type = "GetQuickCompressionTargets"
+    type: str = field(init=False, default="GetQuickCompressionTargets")
 
 
 @dataclass
 class StartQuickCompressionRequest(GuiRequest):
-    type: str = "StartQuickCompression"
-
-    def __init__(self):
-        self.type = "StartQuickCompression"
+    type: str = field(init=False, default="StartQuickCompression")
 
 
 @dataclass
 class GetProgressUpdateRequest(GuiRequest):
-    type: str = "GetProgressUpdate"
-
-    def __init__(self):
-        self.type = "GetProgressUpdate"
+    type: str = field(init=False, default="GetProgressUpdate")
 
 
 @dataclass
 class SaveConfigRequest(GuiRequest):
-    type: str = "SaveConfig"
+    type: str = field(init=False, default="SaveConfig")
     decimal: bool = False
     min_savings: float = 18.0
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
-
-    def __init__(self, decimal: bool = False, min_savings: float = 18.0,
-                 no_lzx: bool = False, force_lzx: bool = False, single_worker: bool = False):
-        self.type = "SaveConfig"
-        self.decimal = decimal
-        self.min_savings = min_savings
-        self.no_lzx = no_lzx
-        self.force_lzx = force_lzx
-        self.single_worker = single_worker
 
 
 @dataclass
 class ResetConfigRequest(GuiRequest):
-    type: str = "ResetConfig"
-
-    def __init__(self):
-        self.type = "ResetConfig"
+    type: str = field(init=False, default="ResetConfig")
 
 
 @dataclass
 class ChooseFolderRequest(GuiRequest):
-    type: str = "ChooseFolder"
-
-    def __init__(self):
-        self.type = "ChooseFolder"
+    type: str = field(init=False, default="ChooseFolder")
 
 
 @dataclass
 class OpenUrlRequest(GuiRequest):
-    type: str = "OpenUrl"
+    type: str = field(init=False, default="OpenUrl")
     url: str = ""
 
-    def __init__(self, url: str = ""):
-        self.type = "OpenUrl"
-        self.url = url
-
-
-# Response Types
 
 @dataclass
 class ConfigResponse(GuiResponse):
-    type: str = "Config"
+    type: str = field(init=False, default="Config")
     decimal: bool = False
     min_savings: float = 18.0
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
-
-    def __init__(self, decimal: bool = False, min_savings: float = 18.0,
-                 no_lzx: bool = False, force_lzx: bool = False, single_worker: bool = False):
-        self.type = "Config"
-        self.decimal = decimal
-        self.min_savings = min_savings
-        self.no_lzx = no_lzx
-        self.force_lzx = force_lzx
-        self.single_worker = single_worker
+    lzx_warning: str = ""
 
 
 @dataclass
 class FolderResponse(GuiResponse):
-    type: str = "Folder"
+    type: str = field(init=False, default="Folder")
     path: str = ""
-
-    def __init__(self, path: str = ""):
-        self.type = "Folder"
-        self.path = path
 
 
 @dataclass
 class StatusResponse(GuiResponse):
-    type: str = "Status"
+    type: str = field(init=False, default="Status")
     status: str = ""
     pct: Optional[float] = None
-
-    def __init__(self, status: str = "", pct: Optional[float] = None):
-        self.type = "Status"
-        self.status = status
-        self.pct = pct
 
 
 @dataclass
 class FolderSummaryResponse(GuiResponse):
-    type: str = "FolderSummary"
-    info: Dict[str, Any] = None
+    type: str = field(init=False, default="FolderSummary")
+    info: Dict[str, Any] = field(default_factory=dict)
     directory: str = ""
     scope: str = ""
-
-    def __init__(self, info: Optional[Dict[str, Any]] = None, directory: str = "", scope: str = ""):
-        self.type = "FolderSummary"
-        self.info = info or {}
-        self.directory = directory
-        self.scope = scope
 
 
 @dataclass
 class QuickCompressionTargetsResponse(GuiResponse):
-    type: str = "QuickCompressionTargets"
-    directories: list[str] = None
+    type: str = field(init=False, default="QuickCompressionTargets")
+    directories: list[str] = field(default_factory=list)
     allow_compactos: bool = False
-
-    def __init__(self, directories: Optional[list[str]] = None, allow_compactos: bool = False):
-        self.type = "QuickCompressionTargets"
-        self.directories = directories or []
-        self.allow_compactos = allow_compactos
 
 
 @dataclass
 class ProgressUpdateResponse(GuiResponse):
-    type: str = "ProgressUpdate"
+    type: str = field(init=False, default="ProgressUpdate")
     status: str = ""
     pct: Optional[float] = None
-
-    def __init__(self, status: str = "", pct: Optional[float] = None):
-        self.type = "ProgressUpdate"
-        self.status = status
-        self.pct = pct
+    quick_history: bool = False
 
 
 @dataclass
@@ -277,14 +195,9 @@ class StateResponse(GuiResponse):
 
 @dataclass
 class WarningResponse(GuiResponse):
-    type: str = "Warning"
+    type: str = field(init=False, default="Warning")
     title: str = ""
     message: str = ""
-
-    def __init__(self, title: str = "", message: str = ""):
-        self.type = "Warning"
-        self.title = title
-        self.message = message
 
 
 def parse_request(data: str) -> Optional[GuiRequest]:

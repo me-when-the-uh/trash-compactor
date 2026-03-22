@@ -234,17 +234,13 @@ def plan_compression(
             else:
                 reason = decision.reason
                 resolved_size = decision.size_hint or file_size
-                category = None
-                lowered = reason.lower()
-                if 'extension' in lowered:
-                    category = 'extension'
                 stats.record_file_skip(
                     file_path,
                     reason,
                     resolved_size,
                     file_size,
-                    already_compressed="already compressed" in lowered,
-                    category=category,
+                    already_compressed=decision.already_compressed,
+                    category=decision.category,
                 )
                 logging.debug("Skipping %s: %s", file_path, reason)
                 if progress_callback:

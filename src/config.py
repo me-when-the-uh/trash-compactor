@@ -98,7 +98,7 @@ def _default_excluded_directories() -> Tuple[str, ...]:
     return tuple(cleaned)
 
 BENCHMARK_DURATION_LIMIT: Final[float] = 0.25
-BENCHMARK_WORKLOAD_ITERATIONS: Final[int] = 120_000
+BENCHMARK_WORKLOAD_ITERATIONS: Final[int] = 125_000
 
 DEFAULT_EXCLUDE_DIRECTORIES: Final[Tuple[str, ...]] = _default_excluded_directories()
 

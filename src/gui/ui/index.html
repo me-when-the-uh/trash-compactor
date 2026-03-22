@@ -4,6 +4,8 @@
     <meta charset="utf-8">
     <title>Trash Compactor</title>
     <style>/*__STYLE__*/</style>
+    <script>window.__TRASH_COMPACTOR_I18N__ = /*__I18N__*/</script>
+    <script>window.__TRASH_COMPACTOR_BOOT_CONFIG__ = /*__BOOT_CONFIG__*/</script>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>/*__SCRIPT__*/</script>
   </head>
@@ -35,7 +37,7 @@
       <section id="Quick_Mode" style="display: none;">
         <div class="quick-mode-panel">
           <div class="quick-mode-title">1-click mode</div>
-          <div class="quick-mode-note">This runs the analysis first and does not compress anything automatically.</div>
+          <div class="quick-mode-note">This runs the analysis first before anything is compressed.</div>
           <div id="Quick_Mode_Message" class="quick-mode-message"></div>
           <ul id="Quick_Mode_Targets" class="quick-mode-targets"></ul>
           <div class="ctr">
@@ -58,7 +60,7 @@
           <button id="Button_Pause" class="pause" onclick="Action.pause()">⏸️ Pause</button>
           <button id="Button_Resume" class="resume" onclick="Action.resume()">▶️ Resume</button>
           <button id="Button_Stop" class="stop" onclick="Action.stop()">⏹️ Stop</button>
-          <button id="Button_Analyse" class="analyse" onclick="Action.analyse()">🔍 Analyse</button>
+          <button id="Button_Analyse" class="analyse" onclick="Gui.analyse()">🔍 Analyse</button>
           <button id="Button_Compress" class="compress" onclick="Action.start_compression()">🗜 Compress</button>
         </div>
       </section>
@@ -67,8 +69,8 @@
         <div id="Quick_Estimate">
           <div class="estimate-card total-card">
             <div class="estimate-card-title">Total</div>
-            <div class="estimate-main"><span id="Estimate_From">0 B</span> -> <span id="Estimate_To" class="estimate-tone-low">0 B</span></div>
-            <div class="estimate-sub" id="Current_Disk_Line"><strong>Currently on-disk:</strong> <span id="Estimate_Current_On_Disk">0 B</span></div>
+            <div class="estimate-main"><span id="Estimate_From"><span id="Placeholder_0B_1">0 B</span></span> -> <span id="Estimate_To" class="estimate-tone-low"><span id="Placeholder_0B_2">0 B</span></span></div>
+            <div class="estimate-sub" id="Current_Disk_Line"><strong>Currently on-disk:</strong> <span id="Estimate_Current_On_Disk"><span id="Placeholder_0B_3">0 B</span></span></div>
             <div class="estimate-sub"><span id="Estimate_Recovery" class="estimate-tone-low">0%</span> <span id="Estimate_Recovery_Label">will be recovered</span></div>
           </div>
           <div class="estimate-card current-card">
@@ -81,16 +83,16 @@
               </div>
             </div>
             <div class="estimate-card-path" id="Current_Directory_Name">Waiting for analysis...</div>
-            <div class="estimate-main"><span id="Current_Estimate_From">0 B</span> -> <span id="Current_Estimate_To" class="estimate-tone-low">0 B</span></div>
-            <div class="estimate-sub" id="Current_Directory_Disk_Line"><strong>Currently on-disk:</strong> <span id="Current_Estimate_Current_On_Disk">0 B</span></div>
+            <div class="estimate-main"><span id="Current_Estimate_From"><span id="Placeholder_0B_4">0 B</span></span> -> <span id="Current_Estimate_To" class="estimate-tone-low"><span id="Placeholder_0B_5">0 B</span></span></div>
+            <div class="estimate-sub" id="Current_Directory_Disk_Line"><strong>Currently on-disk:</strong> <span id="Current_Estimate_Current_On_Disk"><span id="Placeholder_0B_6">0 B</span></span></div>
             <div class="estimate-sub"><span id="Current_Estimate_Recovery" class="estimate-tone-low">0%</span> <span id="Current_Estimate_Recovery_Label">will be recovered</span></div>
           </div>
         </div>
         <div>
-          <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved">0 B</span> <span id="Space_Saved_Label">can be compressed in total</span> (down to <span id="Size_Physical">0 B</span>)</div>
-          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size">0 B</span> <span id="Compressed_Size_Label">already compressed</span> (<span id="File_Count_Compressed">0</span> files)</div>
-          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size">0 B</span> <span id="Compressible_Size_Label">are compressible</span> (<span id="File_Count_Compressible">0</span> files)</div>
-          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size">0 B</span> <span id="Skipped_Size_Label">excluded</span> (<span id="File_Count_Skipped">0</span> files)</div>
+          <div class="saved"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Space_Saved"><span id="Placeholder_0B_7">0 B</span></span> <span id="Space_Saved_Label">can be compressed in total</span> (<span id="Space_Saved_Down_To">down to</span> <span id="Size_Physical"><span id="Placeholder_0B_8">0 B</span></span>)</div>
+          <div class="compressed"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressed_Size"><span id="Placeholder_0B_9">0 B</span></span> <span id="Compressed_Size_Label">already compressed</span> (<span id="File_Count_Compressed">0</span> <span id="File_Count_Compressed_Label">files</span>)</div>
+          <div class="compressible"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Compressible_Size"><span id="Placeholder_0B_10">0 B</span></span> <span id="Compressible_Size_Label">are compressible</span> (<span id="File_Count_Compressible">0</span> <span id="File_Count_Compressible_Label">files</span>)</div>
+          <div class="excluded"><span class="box">&nbsp;&nbsp;&nbsp;&nbsp;</span> <span id="Skipped_Size"><span id="Placeholder_0B_11">0 B</span></span> <span id="Skipped_Size_Label">excluded</span> (<span id="File_Count_Skipped">0</span> <span id="File_Count_Skipped_Label">files</span>)</div>
         </div>
 
         <div id="File_Count_Breakdown">
@@ -103,37 +105,52 @@
     </section>
 
     <section class="page" id="Settings" style="display: none;">
-      <label>Min Savings %
-        <input type="number" id="Min_Savings" name="min_savings" min="0" max="90" value="18">
-      </label>
-      <br><br>
+      <div class="settings-header">
+        <div>
+          <div class="settings-title">Compression settings</div>
+          <div class="settings-note">These options decide how aggressively Trash Compactor searches for savings and how it behaves on slower drives.</div>
+        </div>
+        <button id="Button_Reset" class="cancel settings-reset">Reset to recommended</button>
+      </div>
 
-      <label>
-        <input type="checkbox" id="No_LZX" name="no_lzx"> Disable LZX Compression
-      </label>
-      <br>
+      <div class="setting-item">
+        <div class="setting-row">
+          <label for="Min_Savings" class="setting-label">Minimum savings</label>
+          <div class="setting-control inline-number">
+            <input type="number" id="Min_Savings" name="min_savings" min="0" max="90" value="18">
+            <span class="setting-suffix">%</span>
+          </div>
+        </div>
+        <div class="setting-help">Only files that can save at least this much space will be compressed. Higher values are more selective and faster; lower values squeeze out more space.</div>
+      </div>
 
-      <label>
-        <input type="checkbox" id="Force_LZX" name="force_lzx"> Force LZX Compression
-      </label>
-      <br>
+      <div class="setting-item">
+        <label class="setting-row setting-toggle" for="No_LZX">
+          <span class="setting-label">Disable LZX compression</span>
+          <input type="checkbox" id="No_LZX" name="no_lzx">
+        </label>
+        <div id="No_LZX_Help" class="setting-help">Skips the strongest compression method, which can speed things up on systems where LZX would be too slow. Leave it enabled if you want the best balance of speed and savings.</div>
+      </div>
 
-      <label>
-        <input type="checkbox" id="Single_Worker" name="single_worker"> Single Worker Mode
-      </label>
-      <br><br>
+      <div class="setting-item">
+        <label class="setting-row setting-toggle" for="Single_Worker">
+          <span class="setting-label">Slow HDD mode</span>
+          <input type="checkbox" id="Single_Worker" name="single_worker">
+        </label>
+        <div class="setting-help">Limits the app to one worker at a time for older hard drives and noisy storage setups. On SSDs and modern drives, leaving it off usually gives better throughput.</div>
+      </div>
 
-      <label>Units
-        <select id="SI_Units" name="SI_Units">
-          <option value="I">Binary (MiB)</option>
-          <option value="D">Decimal (MB)</option>
-        </select>
-      </label>
-      <br>
-
-      <div class="ctr">
-        <button id="Button_Save" class="save">💾 Save</button>
-        <button id="Button_Reset" class="cancel">⏹️ Reset</button>
+      <div class="setting-item">
+        <div class="setting-row">
+          <label for="SI_Units" class="setting-label">Units</label>
+          <div class="setting-control select-control">
+            <select id="SI_Units" name="SI_Units">
+              <option value="I">Binary (MiB)</option>
+              <option value="D">Decimal (MB)</option>
+            </select>
+          </div>
+        </div>
+        <div class="setting-help">Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.</div>
       </div>
     </section>
 
@@ -149,6 +166,8 @@
       <p>An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.</p>
 
       <p>For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
+
+      <p>Alternatively, the program can be used as a script to periodically run the compression on specific folders without calling the GUI window, which only appears if you launch the executable file without passing the directory that is to be compressed.</p>
 
       <p>Vibe-coded in Python with a webview-slopped GUI.</p>
 

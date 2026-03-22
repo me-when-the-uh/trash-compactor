@@ -127,6 +127,104 @@ section {
   display: block;
 }
 
+#Settings {
+  max-width: 760px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-title {
+  font-size: 1.02em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+.settings-note {
+  color: #bdbdbd;
+  font-size: 0.89em;
+  line-height: 1.4;
+  max-width: 62ch;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.setting-item:first-of-type {
+  border-top: 0;
+  padding-top: 8px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.setting-toggle {
+  cursor: pointer;
+}
+
+.setting-label {
+  font-size: 0.98em;
+  font-weight: 600;
+}
+
+.setting-help {
+  color: #b3b3b3;
+  font-size: 0.88em;
+  line-height: 1.35;
+  max-width: 60ch;
+}
+
+.setting-help.warning {
+  color: #f0c84b;
+  font-weight: 600;
+}
+
+.setting-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inline-number input {
+  width: 90px;
+  margin: 0;
+}
+
+.setting-suffix {
+  color: #d0d0d0;
+  font-size: 0.95em;
+}
+
+.select-control select {
+  min-width: 170px;
+  margin: 0;
+}
+
+.settings-reset {
+  min-height: 30px;
+  padding: 4px 10px;
+  font-size: 0.85em;
+  flex: 0 0 auto;
+}
+
 div.ctr {
   display: flex;
   justify-content: center;

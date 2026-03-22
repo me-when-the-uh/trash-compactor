@@ -1,5 +1,36 @@
 /* jshint strict: true, esversion: 5, browser: true */
 
+	var I18n = (function()
+	{
+		"use strict";
+
+		var payload = window.__TRASH_COMPACTOR_I18N__ || {};
+		var translations = payload.translations || {};
+		var locale = payload.locale || "en";
+
+		function format_text(text, params) {
+			if (!params) {
+				return text;
+			}
+
+			return text.replace(/\{([a-zA-Z0-9_]+)\}/g, function(match, name) {
+				if (Object.prototype.hasOwnProperty.call(params, name)) {
+					return params[name];
+				}
+				return match;
+			});
+		}
+
+		return {
+			locale: locale,
+			t: function(text, params) {
+				return format_text(translations[text] || text, params);
+			}
+		};
+	})();
+
+	var bootConfig = window.__TRASH_COMPACTOR_BOOT_CONFIG__ || {};
+
 	var Util = (function()
 	{
 		"use strict";
@@ -61,7 +92,7 @@
 
 			format_number: function(number, digits) {
 				if (digits === undefined) digits = 2;
-				return number.toLocaleString("en", {minimumFractionDigits: digits, maximumFractionDigits: digits});
+				return number.toLocaleString(I18n.locale || "en", {minimumFractionDigits: digits, maximumFractionDigits: digits});
 			},
 
 			bytes_to_human_dec: function(bytes) {
@@ -171,6 +202,13 @@
 		},
 
 		quick_compression: function() {
+			if (Gui.should_restart_quick_analysis()) {
+				Action.start_quick_compression();
+				return;
+			}
+			if (Gui.is_busy() || Gui.has_started_analysis()) {
+				return;
+			}
 			pywebview.api.get_quick_compression_targets().then(_dispatch_if_message);
 		},
 
@@ -200,6 +238,12 @@
 	};
 })();
 
+function _dispatch_if_message(res) {
+	if (res && typeof res === "object" && res.type) {
+		Response.dispatch(res);
+	}
+}
+
 // Responses come from Python
 var Response = (function() {
 	"use strict";
@@ -208,11 +252,14 @@ var Response = (function() {
 		dispatch: function(msg) {
 			switch(msg.type) {
 				case "Config":
+										ignore_config_changes = true;
                                         Gui.set_decimal(msg.decimal);
                                         Gui.set_min_savings(msg.min_savings);
                                         Gui.set_checkbox("No_LZX", msg.no_lzx);
-                                        Gui.set_checkbox("Force_LZX", msg.force_lzx);
+										$("#No_LZX_Help").text(msg.lzx_warning || default_lzx_help).toggleClass("warning", !!msg.lzx_warning);
                                         Gui.set_checkbox("Single_Worker", msg.single_worker);
+										last_saved_config = Gui.get_config_payload();
+										ignore_config_changes = false;
                                         break;
 
 				case "Folder":
@@ -220,7 +267,7 @@ var Response = (function() {
 					break;
 
 				case "Status":
-					Gui.queue_status(msg.status, msg.pct);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
 					break;
 
 				case "Paused":
@@ -236,15 +283,21 @@ var Response = (function() {
 					break;
 
 				case "QuickCompressionTargets":
-					Gui.show_quick_mode(msg.directories || [], !!msg.allow_compactos);
+					if (!Gui.should_restart_quick_analysis() && !Gui.is_busy() && !Gui.has_started_analysis()) {
+						Gui.show_quick_mode(msg.directories || [], !!msg.allow_compactos);
+					}
 					break;
 
 				case "ProgressUpdate":
-					Gui.queue_status(msg.status, msg.pct);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
 					break;
 
 				case "Warning":
 					Gui.show_warning(msg.title, msg.message);
+					break;
+
+				case "Error":
+						Gui.show_warning(I18n.t("Error"), msg.message || I18n.t("Unknown error"));
 					break;
 			}
 		}
@@ -266,10 +319,25 @@ var Gui = (function() {
 	var total_summary_directory = "";
 	var directory_summary_index = 0;
 	var quick_history_mode = false;
+	var config_save_timer = null;
+	var last_saved_config = null;
+	var ignore_config_changes = false;
+	var default_lzx_help = "";
+
+	function _upsert_directory_summary(payload) {
+		var i;
+		for (i = 0; i < directory_summary_history.length; i++) {
+			if (directory_summary_history[i].directory === payload.directory) {
+				directory_summary_history[i] = payload;
+				return;
+			}
+		}
+		directory_summary_history.push(payload);
+	}
 
 	function _flush_queued_updates() {
 		if (status_queue) {
-			Gui.set_status(status_queue.status, status_queue.pct);
+			Gui.set_status(status_queue.status, status_queue.pct, status_queue.quick_history);
 			status_queue = null;
 		}
 		if (current_summary_queue) {
@@ -283,7 +351,7 @@ var Gui = (function() {
 			total_summary_queue = null;
 		}
 		if (directory_summary_queue) {
-			directory_summary_history.push(directory_summary_queue);
+			_upsert_directory_summary(directory_summary_queue);
 			directory_summary_queue = null;
 		}
 		Gui.render_summaries();
@@ -308,21 +376,81 @@ var Gui = (function() {
 			try_reset();
 		},
 
+		apply_boot_config: function() {
+			if (!bootConfig || bootConfig.type !== "Config") {
+				return;
+			}
+
+			ignore_config_changes = true;
+			Gui.set_decimal(bootConfig.decimal);
+			Gui.set_min_savings(bootConfig.min_savings);
+			Gui.set_checkbox("No_LZX", bootConfig.no_lzx);
+			$("#No_LZX_Help").text(bootConfig.lzx_warning || default_lzx_help).toggleClass("warning", !!bootConfig.lzx_warning);
+			Gui.set_checkbox("Single_Worker", bootConfig.single_worker);
+			last_saved_config = Gui.get_config_payload();
+			ignore_config_changes = false;
+		},
+
+		localize: function() {
+			document.title = I18n.t("Trash Compactor GUI");
+			$("#Button_Page_Compress").html("⌛ " + I18n.t("Compress"));
+			$("#Button_Page_Settings").html("☸ " + I18n.t("Settings"));
+			$("#Button_Page_About").html("⌕ " + I18n.t("About"));
+			$("#Button_Quick").text(I18n.t("Quick compression"));
+			$("#Quick_Action_Or").text(I18n.t("or"));
+			$("#Button_Folder").text(I18n.t("Choose a folder"));
+			$("#Quick_Mode .quick-mode-title").text(I18n.t("1-click mode"));
+			$("#Quick_Mode .quick-mode-note").text(I18n.t("This runs the analysis first before anything is compressed."));
+			$("#Button_Quick_Start").text(I18n.t("Start quick analysis"));
+			$("#Button_Quick_Cancel").text(I18n.t("Cancel"));
+			$("#Button_Pause").text("⏸️ " + I18n.t("Pause"));
+			$("#Button_Resume").text("▶️ " + I18n.t("Resume"));
+			$("#Button_Stop").text("⏹️ " + I18n.t("Stop"));
+			$("#Button_Analyse").text("🔍 " + I18n.t("Analyse"));
+			$("#Button_Compress").text("🗜 " + I18n.t("Compress"));
+			$("#Current_Directory_Header_Text").text(I18n.t("Current Directory"));
+			$("#Current_Directory_Name").text(I18n.t("Waiting for analysis..."));
+			$("#Estimate_Recovery_Label, #Current_Estimate_Recovery_Label").text(I18n.t("will be recovered"));
+			$("#Space_Saved_Label").text(I18n.t("can be compressed in total"));
+			$("#Compressed_Size_Label").text(I18n.t("already compressed"));
+			$("#Compressible_Size_Label").text(I18n.t("are compressible"));
+			$("#Skipped_Size_Label").text(I18n.t("excluded"));
+			$("#Quick_Estimate .total-card .estimate-card-title").text(I18n.t("Total"));
+			$("#Current_Disk_Line strong, #Current_Directory_Disk_Line strong").text(I18n.t("Currently on-disk:"));
+			$("#Placeholder_0B_1, #Placeholder_0B_2, #Placeholder_0B_3, #Placeholder_0B_4, #Placeholder_0B_5, #Placeholder_0B_6, #Placeholder_0B_7, #Placeholder_0B_8, #Placeholder_0B_9, #Placeholder_0B_10, #Placeholder_0B_11").text(I18n.t("0 B"));
+			$("#Settings .settings-title").text(I18n.t("Compression settings"));
+			$("#Settings .settings-note").text(I18n.t("These options decide how aggressively Trash Compactor searches for savings and how it behaves on slower drives."));
+			$("#Button_Reset").text(I18n.t("Reset to recommended"));
+			$("label[for='Min_Savings']").text(I18n.t("Minimum savings"));
+			$("#Settings .setting-item").eq(0).find(".setting-help").text(I18n.t("Only files that can save at least this much space will be compressed. Higher values are more selective and faster; lower values squeeze out more space."));
+			$("label[for='No_LZX'] .setting-label").text(I18n.t("Disable LZX compression"));
+			default_lzx_help = I18n.t("Skips the strongest compression method, which can speed things up on systems where LZX would be too slow. Leave it enabled if you want the best balance of speed and savings.");
+			$("#No_LZX_Help").text(default_lzx_help).removeClass("warning");
+			$("label[for='Single_Worker'] .setting-label").text(I18n.t("Slow HDD mode"));
+			$("label[for='Single_Worker'] + .setting-help").text(I18n.t("Limits the app to one worker at a time for older hard drives and noisy storage setups. On SSDs and modern drives, leaving it off usually gives better throughput."));
+			$("label[for='SI_Units']").text(I18n.t("Units"));
+			$("#SI_Units option[value='I']").text(I18n.t("Binary (MiB)"));
+			$("#SI_Units option[value='D']").text(I18n.t("Decimal (MB)"));
+			$("#Settings .setting-item:last-child .setting-help").text(I18n.t("Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves."));
+			$("#About h1").text(I18n.t("Trash Compactor GUI"));
+			$("#About p strong").text(I18n.t("Where we're going, we don't need backups!"));
+			$("#About p:nth-of-type(2)").html(I18n.t("Report problems to:") + " <a href=\"https://github.com/me-when-the-uh/trash-compactor\">https://github.com/me-when-the-uh/trash-compactor</a>.");
+			$("#About p:nth-of-type(4)").text(I18n.t("An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics."));
+			$("#About p:nth-of-type(5)").text(I18n.t("For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea."));
+			$("#About p:nth-of-type(6)").text(I18n.t("Vibe-coded in Python with a webview-slopped GUI."));
+			$("#About p:nth-of-type(7)").html(I18n.t("GUI adapted from") + " <a href=\"https://github.com/Freaky/Compactor\">Compactor</a>");
+		},
+
 		boot: function() {
+			Gui.localize();
 			$("a[href]").on("click", function(e) {
 				e.preventDefault();
 				Action.open_url($(this).attr("href"));
 				return false;
 			});
 
-			$("#Button_Save").on("click", function() {
-				Action.save_config({
-					decimal: $("#SI_Units").val() == "D",
-					min_savings: parseFloat($("#Min_Savings").val() || 18),
-                                        no_lzx: $("#No_LZX").is(":checked"),
-                                        force_lzx: $("#Force_LZX").is(":checked"),
-                                        single_worker: $("#Single_Worker").is(":checked")
-                                });
+			$("#Settings input, #Settings select").on("change input", function() {
+				Gui.schedule_config_save();
 			});
 
 			$("#Button_Reset").on("click", function() {
@@ -330,13 +458,15 @@ var Gui = (function() {
 			});
 
 			setInterval(_flush_queued_updates, 100);
+			Gui.apply_boot_config();
 			Gui.request_initial_config();
 		},
 
-		queue_status: function(status, pct) {
+		queue_status: function(status, pct, quick_history) {
 			status_queue = {
 				status: status,
-				pct: pct
+				pct: pct,
+				quick_history: !!quick_history
 			};
 		},
 
@@ -359,6 +489,29 @@ var Gui = (function() {
 				current_summary_queue = payload;
 				total_summary_queue = payload;
 			}
+		},
+
+		is_busy: function() {
+			return $("#Button_Stop").is(":visible");
+		},
+
+		has_started_analysis: function() {
+			return $("#Activity").is(":visible") || $("#Analysis").is(":visible");
+		},
+
+		should_restart_quick_analysis: function() {
+			return quick_history_mode && !Gui.is_busy();
+		},
+
+		analyse: function() {
+			if (Gui.should_restart_quick_analysis()) {
+				Action.start_quick_compression();
+				return;
+			}
+			if (Gui.is_busy()) {
+				return;
+			}
+			Action.analyse();
 		},
 
 		page: function(page) {
@@ -388,6 +541,38 @@ var Gui = (function() {
                         $("#" + id).prop("checked", !!val);
                 },
 
+		get_config_payload: function() {
+			return {
+				decimal: $("#SI_Units").val() == "D",
+				min_savings: parseFloat($("#Min_Savings").val()),
+				no_lzx: $("#No_LZX").is(":checked"),
+				single_worker: $("#Single_Worker").is(":checked")
+			};
+		},
+
+		schedule_config_save: function() {
+			if (ignore_config_changes) {
+				return;
+			}
+
+			if (config_save_timer) {
+				clearTimeout(config_save_timer);
+			}
+
+			config_save_timer = setTimeout(function() {
+				config_save_timer = null;
+				var payload = Gui.get_config_payload();
+				if (isNaN(payload.min_savings)) {
+					return;
+				}
+				if (last_saved_config && JSON.stringify(payload) === JSON.stringify(last_saved_config)) {
+					return;
+				}
+				last_saved_config = payload;
+				Action.save_config(payload);
+			}, 120);
+		},
+
 		show_quick_mode: function(directories, allow_compactos) {
 			var list = $("#Quick_Mode_Targets");
 			var message = $("#Quick_Mode_Message");
@@ -399,15 +584,15 @@ var Gui = (function() {
 				directories.forEach(function(directory) {
 					list.append($("<li></li>").text(directory));
 				});
-				note = "The backend found " + directories.length + " folders to analyze before any compression is started.";
+				note = I18n.t("The program will analyse {count} folders for compressibility.", {count: directories.length});
 				startButton.prop("disabled", false);
 			} else {
-				note = "No default quick-analysis targets were found on this system.";
+				note = I18n.t("No default quick-analysis targets were found on this system.");
 				startButton.prop("disabled", true);
 			}
 
 			if (allow_compactos) {
-				note += " Administrator privileges are available for CompactOS, but quick mode still only analyzes folders.";
+				note += " " + I18n.t("Administrator privileges are available, but they are not necessary for analysing folders.");
 			}
 
 			message.text(note);
@@ -423,7 +608,7 @@ var Gui = (function() {
 		},
 
                 set_min_savings: function(min_savings) {
-			$("#Min_Savings").val(min_savings || 18);
+				$("#Min_Savings").val(min_savings != null ? min_savings : 18);
 		},
 
 		set_folder: function(folder) {
@@ -434,14 +619,14 @@ var Gui = (function() {
 			Gui.scanning();
 		},
 
-		set_status: function(status, pct) {
+		set_status: function(status, pct, quick_history) {
 			$("#Activity_Text").text(status);
 			if (pct != null) {
 				$("#Activity_Progress").val(pct);
 			} else {
 				$("#Activity_Progress").removeAttr("value");
 			}
-			if (typeof status === "string" && status.indexOf("Quick analysis complete") === 0) {
+			if (quick_history) {
 				quick_history_mode = true;
 				if (directory_summary_history.length) {
 					directory_summary_index = directory_summary_history.length - 1;
@@ -605,7 +790,7 @@ var Gui = (function() {
 			$("#Estimate_To").text(Util.bytes_to_human(currentDisplaySize));
 			$("#Estimate_Current_On_Disk").text(Util.bytes_to_human(currentOnDisk));
 			$("#Estimate_Recovery").text(Util.format_number(savedPct, 1) + "%");
-			$("#Estimate_Recovery_Label").text(isAnalysis ? "will be recovered" : "has been recovered");
+			$("#Estimate_Recovery_Label").text(isAnalysis ? I18n.t("will be recovered") : I18n.t("has been recovered"));
 
 			var estimateTo = $("#Estimate_To");
 			var estimateRecovery = $("#Estimate_Recovery");
@@ -655,17 +840,24 @@ var Gui = (function() {
 				$("#Space_Saved").text(Util.bytes_to_human(Math.max(0, (data.logical_size || 0) - currentOnDisk)));
 			}
 
-			$("#Space_Saved_Label").text(isAnalysis ? "can be compressed in total" : "has been compressed in total");
-			$("#Compressed_Size_Label").text(isAnalysis ? "already compressed" : "already compressed before run");
-			$("#Compressible_Size_Label").text(isAnalysis ? "are compressible" : "compressed in this run");
-			$("#Skipped_Size_Label").text("excluded");
+			$("#Space_Saved_Label").text(isAnalysis ? I18n.t("can be compressed in total") : I18n.t("has been compressed in total"));
+			$("#Space_Saved_Down_To").text(I18n.t("down to"));
+			$("#Compressed_Size_Label").text(isAnalysis ? I18n.t("already compressed") : I18n.t("already compressed before run"));
+			$("#File_Count_Compressed_Label, #File_Count_Compressible_Label, #File_Count_Skipped_Label").text(I18n.t("files"));
+			$("#Compressible_Size_Label").text(isAnalysis ? I18n.t("are compressible") : I18n.t("compressed in this run"));
+			$("#Skipped_Size_Label").text(I18n.t("excluded"));
 
 			if (data.analysis_timing) {
 				var t = data.analysis_timing;
-				$("#Analysis_Timing").text(
-					"Scan " + Util.format_number(t.combined_scan_seconds || 0, 2) + "s @ " + Util.format_number(t.scan_rate || 0, 0) + " files/sec"
-					+ " | Entropy " + Util.format_number(t.entropy_seconds || 0, 2) + "s @ " + Util.format_number(t.entropy_rate || 0, 0) + " files/sec"
-				);
+				$("#Analysis_Timing").text(I18n.t(
+					"Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec",
+					{
+						scan_seconds: Util.format_number(t.combined_scan_seconds || 0, 2),
+						scan_rate: Util.format_number(t.scan_rate || 0, 0),
+						entropy_seconds: Util.format_number(t.entropy_seconds || 0, 2),
+						entropy_rate: Util.format_number(t.entropy_rate || 0, 0)
+					}
+				));
 			} else {
 				$("#Analysis_Timing").text("");
 			}
@@ -685,13 +877,13 @@ var Gui = (function() {
 			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 18);
 			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
 
-			$("#Current_Directory_Name").text(directory || "Current Directory");
+			$("#Current_Directory_Name").text(directory || I18n.t("Current Directory"));
 			Gui.update_directory_navigation();
 			$("#Current_Estimate_From").text(Util.bytes_to_human(logicalSize));
 			$("#Current_Estimate_To").text(Util.bytes_to_human(isAnalysis ? projectedOnDisk : currentOnDisk));
 			$("#Current_Estimate_Current_On_Disk").text(Util.bytes_to_human(currentOnDisk));
 			$("#Current_Estimate_Recovery").text(Util.format_number(savedPct, 1) + "%");
-			$("#Current_Estimate_Recovery_Label").text(isAnalysis ? "will be recovered" : "has been recovered");
+			$("#Current_Estimate_Recovery_Label").text(isAnalysis ? I18n.t("will be recovered") : I18n.t("has been recovered"));
 
 			var estimateTo = $("#Current_Estimate_To");
 			var estimateRecovery = $("#Current_Estimate_Recovery");

@@ -49,3 +49,7 @@ def _(text: str) -> str:
 
 def get_current_locale() -> str:
     return _current_locale
+
+
+def get_translations() -> Dict[str, str]:
+    return dict(_translations)

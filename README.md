@@ -146,18 +146,8 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 ## To-Do
 
 ### Short-term Goals
-- Implement a single binary flow (KISS):
-  - Launch GUI when started without arguments
-  - Keep CLI behavior unchanged when arguments are provided
-  - Exit cleanly when the GUI window closes
-- GUI + CLI parity checklist for evaluation:
-  - Folder selection and start flow
-  - Progress updates and final summary
-  - Dry-run parity against CLI output
-  - Existing flags (`-d`, `-v`, `-m`, `-x`, `-f`, `-s`) mapped or surfaced in GUI controls
-- Build/release validation:
-  - Ensure PyInstaller bundles GUI assets from `src/gui/ui`
-  - Verify executable launch in both interactive (GUI) and argument-driven (CLI) modes
+- Fix bugs:
+  - The terminal will close immediately when the GUI is spawned, if you run the program from the terminal instead of Windows Explorer
 
 ### Long-term Goals
 - Research advanced compression methods:

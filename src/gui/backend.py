@@ -1,4 +1,5 @@
 import logging
+import json
 import threading
 import time
 from pathlib import Path
@@ -25,7 +26,6 @@ from .message_types import (
 from .webview_server import create_gui_app, GuiServer
 from ..i18n import _
 
-# Trash-compactor core imports
 from ..compression.compression_executor import execute_compression_plan
 from ..compression.compression_planner import iter_files, plan_compression
 from ..stats import CompressionStats
@@ -52,8 +52,7 @@ class GuiBackend:
         self.stop_event = threading.Event()
         self.pause_event = threading.Event()
         self.benchmark_ok = benchmark_ok
-        
-        # State
+
         self.min_savings = DEFAULT_MIN_SAVINGS_PERCENT
         self.current_folder = ""
         self.decimal = False
@@ -61,68 +60,130 @@ class GuiBackend:
         self.no_lzx = self.default_no_lzx
         self.force_lzx = False
         self.single_worker = False
+        self.lzx_warning = _("It is recommended to disable LZX compression for this system.") if self.default_no_lzx else ""
 
         self.last_analysis_plan = None
         self.last_analysis_stats = None
         self.last_analysis_monitor = None
         self.last_analysis_timing = None
+        self.quick_analysis_results: list[dict[str, Any]] = []
+
+    def _current_config_response(self) -> ConfigResponse:
+        return ConfigResponse(
+            decimal=self.decimal,
+            min_savings=self.min_savings,
+            no_lzx=self.no_lzx,
+            force_lzx=self.force_lzx,
+            single_worker=self.single_worker,
+            lzx_warning=self.lzx_warning,
+        )
+
+    def _clear_analysis_state(self) -> None:
+        self.last_analysis_plan = None
+        self.last_analysis_stats = None
+        self.last_analysis_monitor = None
+        self.last_analysis_timing = None
+
+    def _clear_quick_analysis_results(self) -> None:
+        self.quick_analysis_results = []
+
+    def _requested_path(self, request: GuiRequest) -> str:
+        return getattr(request, "path", "") or self.current_folder
+
+    def _configure_worker_environment(self) -> None:
+        from ..launch import configure_lzx
+        from ..workers import set_worker_cap
+
+        set_worker_cap(1 if self.single_worker else None)
+        configure_lzx(
+            choice_enabled=not self.no_lzx,
+            force_lzx=self.force_lzx,
+            benchmark_ok=self.benchmark_ok,
+            disabled_reason='benchmark' if self.default_no_lzx else None,
+            announce=False,
+        )
+
+    def _send_folder_summary(
+        self,
+        stats: CompressionStats,
+        plan_count: int,
+        total_compressible_size: int,
+        *,
+        directory: str,
+        scope: str,
+        is_analysis: bool = True,
+        analysis_timing: Optional[dict] = None,
+    ) -> None:
+        self._send(
+            FolderSummaryResponse(
+                self._make_stats_summary(
+                    stats,
+                    plan_count,
+                    total_compressible_size,
+                    is_analysis=is_analysis,
+                    analysis_timing=analysis_timing,
+                ),
+                directory=directory,
+                scope=scope,
+            )
+        )
+
+    def _run_pipeline(self, label: str, action: Callable[[], None]) -> None:
+        try:
+            action()
+        except InterruptedError:
+            pass
+        except Exception as exc:
+            logging.exception("%s error", label)
+            self._send(WarningResponse(_("Error"), str(exc)))
+        finally:
+            self._send(StateResponse("Stopped"))
 
     def bind_server(self, server: GuiServer):
         self.server = server
 
     def handle_request(self, request: GuiRequest) -> GuiResponse:
         req_type = getattr(request, "type", "")
-        
-        # Requests that can be returned immediately
+
         if req_type == "SaveConfig":
             self.min_savings = getattr(request, "min_savings", self.min_savings)
             self.decimal = getattr(request, "decimal", self.decimal)
             self.no_lzx = getattr(request, "no_lzx", self.no_lzx)
             self.force_lzx = getattr(request, "force_lzx", self.force_lzx)
             self.single_worker = getattr(request, "single_worker", self.single_worker)
-            
-            return ConfigResponse(
-                decimal=self.decimal, 
-                min_savings=self.min_savings,
-                no_lzx=self.no_lzx,
-                force_lzx=self.force_lzx,
-                single_worker=self.single_worker
-            )
-            
+
+            return self._current_config_response()
+
         elif req_type == "ResetConfig":
             self.min_savings = DEFAULT_MIN_SAVINGS_PERCENT
             self.decimal = False
             self.no_lzx = self.default_no_lzx
             self.force_lzx = False
             self.single_worker = False
-            return ConfigResponse(
-                decimal=self.decimal, 
-                min_savings=self.min_savings,
-                no_lzx=self.no_lzx,
-                force_lzx=self.force_lzx,
-                single_worker=self.single_worker
-            )
-            
-        elif req_type == "StartCompression":
-            requested_path = getattr(request, "path", self.current_folder)
-            if requested_path and requested_path != self.current_folder:
-                self.last_analysis_plan = None
-                self.last_analysis_stats = None
-                self.last_analysis_monitor = None
-                self.last_analysis_timing = None
 
-            self.current_folder = requested_path
+            return self._current_config_response()
+
+        elif req_type == "StartCompression":
+            requested_path = self._requested_path(request)
+            if not requested_path and self.last_analysis_plan is None and not self.quick_analysis_results:
+                return WarningResponse(_("Warning"), _("No folder selected"))
+            if requested_path and requested_path != self.current_folder:
+                self._clear_quick_analysis_results()
+                self._clear_analysis_state()
+
+            if requested_path:
+                self.current_folder = requested_path
             self.min_savings = getattr(request, "min_savings", self.min_savings)
             self.start_worker(self._run_compression)
             return StateResponse("Scanning")
-            
+
         elif req_type == "AnalyseFolder":
-            requested_path = getattr(request, "path", self.current_folder)
+            requested_path = self._requested_path(request)
+            if not requested_path:
+                return WarningResponse(_("Warning"), _("No folder selected"))
+            self._clear_quick_analysis_results()
             if requested_path and requested_path != self.current_folder:
-                self.last_analysis_plan = None
-                self.last_analysis_stats = None
-                self.last_analysis_monitor = None
-                self.last_analysis_timing = None
+                self._clear_analysis_state()
 
             self.current_folder = requested_path
             self.start_worker(self._run_analysis)
@@ -134,25 +195,23 @@ class GuiBackend:
         elif req_type == "StartQuickCompression":
             self.start_worker(self._run_quick_compression)
             return StateResponse("Scanning")
-            
+
         elif req_type == "PauseCompression":
             self.pause_event.set()
             return StateResponse("Paused")
-            
+
         elif req_type == "ResumeCompression":
             self.pause_event.clear()
             return StateResponse("Resumed")
-            
+
         elif req_type == "StopCompression":
             self.stop_event.set()
             return StateResponse("Stopped")
-            
+
         elif req_type == "GetProgressUpdate":
-            # JS polls this; we can just return empty and let push mechanisms handle it, 
-            # or return the latest known status. We return generic OK since we push updates.
             return StatusResponse("", None)
 
-        return StatusResponse("Unknown request", None)
+        return StatusResponse(_("Unknown request"), None)
 
     def start_worker(self, target: Callable):
         self.stop_event.clear()
@@ -183,12 +242,12 @@ class GuiBackend:
     def _sync_stats(self, stats: CompressionStats, plan: list):
         plan_count = len(plan)
         total_compressible_size = sum(p[1] for p in plan)
-        self._send(
-            FolderSummaryResponse(
-                self._make_stats_summary(stats, plan_count, total_compressible_size),
-                directory=str(self.current_folder),
-                scope="current",
-            )
+        self._send_folder_summary(
+            stats,
+            plan_count,
+            total_compressible_size,
+            directory=str(self.current_folder),
+            scope="current",
         )
 
     def _make_quick_targets_response(self) -> QuickCompressionTargetsResponse:
@@ -256,8 +315,6 @@ class GuiBackend:
     def _build_analysis_timing(self, discovery_seconds: float, candidate_files: int, monitor: PerformanceMonitor) -> dict:
         file_scan_seconds = max(0.0, monitor.stats.file_scan_time)
         entropy_seconds = max(0.0, monitor.stats.entropy_analysis_time)
-        total_seconds = max(0.0, monitor.stats.total_time)
-        
         combined_scan_seconds = discovery_seconds + file_scan_seconds
 
         return {
@@ -347,43 +404,20 @@ class GuiBackend:
         return summary
 
     def _run_analysis(self):
-        try:
+        def _pipeline() -> None:
             from ..skip_logic import discard_staged_incompressible_cache
+
             discard_staged_incompressible_cache()
-            
             self._run_analysis_pipeline()
-            self._send(StateResponse("Stopped"))
-        except InterruptedError:
-            self._send(StateResponse("Stopped"))
-        except Exception as e:
-            logging.exception("Analysis error")
-            self._send(WarningResponse("Error", str(e)))
-            self._send(StateResponse("Stopped"))
+
+        self._run_pipeline("Analysis", _pipeline)
 
     def _run_compression(self):
-        try:
-            self._run_compression_pipeline()
-            self._send(StateResponse("Stopped"))
-        except InterruptedError:
-            self._send(StateResponse("Stopped"))
-        except Exception as e:
-            logging.exception("Compression error")
-            self._send(WarningResponse("Error", str(e)))
-            self._send(StateResponse("Stopped"))
+        self._run_pipeline("Compression", self._run_compression_pipeline)
 
     def _run_analysis_pipeline(self):
-        from ..workers import set_worker_cap
-        from ..launch import configure_lzx
-        
-        set_worker_cap(1 if self.single_worker else None)
-        configure_lzx(
-            choice_enabled=not self.no_lzx,
-            force_lzx=self.force_lzx,
-            benchmark_ok=self.benchmark_ok,
-            disabled_reason='benchmark' if self.default_no_lzx else None,
-            announce=False,
-        )
-        
+        self._configure_worker_environment()
+
         base_dir = Path(self.current_folder).resolve()
         stats = CompressionStats()
         stats.set_base_dir(base_dir)
@@ -391,11 +425,10 @@ class GuiBackend:
         monitor = PerformanceMonitor()
         monitor.start_operation()
 
-        # Phase 1: Discover files
         overall_start_time = time.perf_counter()
-        self._send(StatusResponse("Scanning directory...", 0.0))
+        self._send(StatusResponse(_("Scanning directory..."), 0.0))
         all_files = []
-        
+
         scan_start_time = time.perf_counter()
         last_scan_update_time = scan_start_time
 
@@ -410,7 +443,15 @@ class GuiBackend:
                 last_scan_update_time = now
                 elapsed = max(0.001, now - scan_start_time)
                 rate = len(all_files) / elapsed
-                self._send(StatusResponse(f"Scanning directory... {len(all_files)} files found ({rate:.0f} files/s)", None))
+                self._send(
+                    StatusResponse(
+                        _("Scanning directory... {count} files found ({rate:.0f} files/s)").format(
+                            count=len(all_files),
+                            rate=rate,
+                        ),
+                        None,
+                    )
+                )
 
         discovery_seconds = max(0.001, time.perf_counter() - scan_start_time)
 
@@ -421,18 +462,18 @@ class GuiBackend:
             self.last_analysis_monitor = monitor
             monitor.end_operation()
             self.last_analysis_timing = self._build_analysis_timing(discovery_seconds, 0, monitor)
-            self._send(
-                FolderSummaryResponse(
-                    self._make_stats_summary(stats, 0, 0, analysis_timing=self.last_analysis_timing),
-                    directory=str(base_dir),
-                    scope="current",
-                )
+            self._send_folder_summary(
+                stats,
+                0,
+                0,
+                directory=str(base_dir),
+                scope="current",
+                analysis_timing=self.last_analysis_timing,
             )
             return
 
-        # Phase 2: Plan Compression
-        self._send(StatusResponse("Analyzing file entropy...", 0.0))
-        
+        self._send(StatusResponse(_("Analyzing file entropy..."), 0.0))
+
         plan_count = 0
         total_compressible_size = 0
         analysis_start_time = time.perf_counter()
@@ -452,22 +493,30 @@ class GuiBackend:
             now = time.perf_counter()
             if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total_files:
                 last_update_time = now
-                pct = (processed / total_files) * 60.0 # 0-60%
+                pct = (processed / total_files) * 60.0
                 elapsed = max(0.001, now - analysis_start_time)
                 rate = processed / elapsed
-                self._send(ProgressUpdateResponse(f"Analyzing... {processed}/{total_files} ({rate:.0f} files/s)", pct))
-
-            if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total_files:
-                last_summary_update_time = now
                 self._send(
-                    FolderSummaryResponse(
-                        self._make_stats_summary(stats, plan_count, total_compressible_size),
-                        directory=str(base_dir),
-                        scope="current",
+                    ProgressUpdateResponse(
+                        _("Analyzing... {processed}/{total} ({rate:.0f} files/s)").format(
+                            processed=processed,
+                            total=total_files,
+                            rate=rate,
+                        ),
+                        pct,
                     )
                 )
 
-        # Just adapting the entropy wrapper
+            if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total_files:
+                last_summary_update_time = now
+                self._send_folder_summary(
+                    stats,
+                    plan_count,
+                    total_compressible_size,
+                    directory=str(base_dir),
+                    scope="current",
+                )
+
         def _entropy_progress(path: Path, processed: int, total: int):
             nonlocal last_update_time
             if processed % ENTROPY_PROGRESS_GRANULARITY != 0 and processed != total:
@@ -477,8 +526,14 @@ class GuiBackend:
             now = time.perf_counter()
             if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total:
                 last_update_time = now
-                # Don't update pct here, just the status text
-                self._send(ProgressUpdateResponse(f"Sampling entropy... {processed}/{total}"))
+                self._send(
+                    ProgressUpdateResponse(
+                        _("Sampling entropy... {processed}/{total}").format(
+                            processed=processed,
+                            total=total,
+                        )
+                    )
+                )
 
         plan = plan_compression(
             all_files,
@@ -502,44 +557,29 @@ class GuiBackend:
 
         analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)
         self._send(
-            ProgressUpdateResponse("Analysis complete in "f"{analysis_elapsed:.2f}s ", 100.0,)
-        )
-        self._send(
-            FolderSummaryResponse(
-                self._make_stats_summary(
-                    stats,
-                    len(plan),
-                    sum(p[1] for p in plan),
-                    analysis_timing=self.last_analysis_timing,
-                ),
-                directory=str(base_dir),
-                scope="current",
+            ProgressUpdateResponse(
+                _("Analysis complete in {elapsed:.2f}s").format(elapsed=analysis_elapsed),
+                100.0,
             )
+        )
+        self._send_folder_summary(
+            stats,
+            len(plan),
+            sum(p[1] for p in plan),
+            directory=str(base_dir),
+            scope="current",
+            analysis_timing=self.last_analysis_timing,
         )
 
     def _run_quick_compression(self):
-        try:
-            self._run_quick_compression_pipeline()
-            self._send(StateResponse("Stopped"))
-        except InterruptedError:
-            self._send(StateResponse("Stopped"))
-        except Exception as e:
-            logging.exception("Quick compression error")
-            self._send(WarningResponse("Error", str(e)))
-            self._send(StateResponse("Stopped"))
+        self._run_pipeline("Quick compression", self._run_quick_compression_pipeline)
 
     def _run_compression_pipeline(self):
-        from ..workers import set_worker_cap
-        from ..launch import configure_lzx
-        
-        set_worker_cap(1 if self.single_worker else None)
-        configure_lzx(
-            choice_enabled=not self.no_lzx,
-            force_lzx=self.force_lzx,
-            benchmark_ok=self.benchmark_ok,
-            disabled_reason='benchmark' if self.default_no_lzx else None,
-            announce=False,
-        )
+        self._configure_worker_environment()
+
+        if self.quick_analysis_results:
+            self._run_quick_analysis_compression_pipeline()
+            return
         
         if not hasattr(self, 'last_analysis_plan') or self.last_analysis_plan is None:
             self._send(WarningResponse("Warning", "Please analyze the folder before compressing."))
@@ -550,7 +590,7 @@ class GuiBackend:
         monitor = self.last_analysis_monitor
 
         if not plan:
-            self._send(ProgressUpdateResponse("Nothing to compress!", 100.0))
+            self._send(ProgressUpdateResponse(_("Nothing to compress!"), 100.0))
             return
 
         self._send(StateResponse("Compacting"))
@@ -578,13 +618,23 @@ class GuiBackend:
                 pct = 60.0 + (compressed_count[0] / total_to_compress) * 40.0
                 elapsed = max(0.001, now - exec_start_time)
                 rate = compressed_count[0] / elapsed
-                self._send(ProgressUpdateResponse(f"Compressing... {compressed_count[0]}/{total_to_compress} ({rate:.0f} files/s)", pct))
                 self._send(
-                    FolderSummaryResponse(
-                        self._make_stats_summary(stats, total_to_compress, total_compressible_size, is_analysis=False),
-                        directory=str(self.current_folder),
-                        scope="current",
+                    ProgressUpdateResponse(
+                        _("Compressing... {compressed}/{total} ({rate:.0f} files/s)").format(
+                            compressed=compressed_count[0],
+                            total=total_to_compress,
+                            rate=rate,
+                        ),
+                        pct,
                     )
+                )
+                self._send_folder_summary(
+                    stats,
+                    total_to_compress,
+                    total_compressible_size,
+                    directory=str(self.current_folder),
+                    scope="current",
+                    is_analysis=False,
                 )
 
         with monitor.time_compression():
@@ -600,42 +650,161 @@ class GuiBackend:
             )
 
         commit_incompressible_cache()
-        # Reset plan to force re-analysis if attempted again in same session
         self.last_analysis_plan = None
         self.last_analysis_stats = None
-        
-        # Final summary
-        self._send(ProgressUpdateResponse("Complete!", 100.0))
-        self._send(
-            FolderSummaryResponse(
-                self._make_stats_summary(stats, stats.compressed_files, total_compressible_size, is_analysis=False),
-                directory=str(self.current_folder),
-                scope="current",
-            )
-        ) # Plan is depleted
 
-    def _run_quick_compression_pipeline(self):
-        from ..workers import set_worker_cap
-        from ..launch import configure_lzx
-
-        set_worker_cap(1 if self.single_worker else None)
-        configure_lzx(
-            choice_enabled=not self.no_lzx,
-            force_lzx=self.force_lzx,
-            benchmark_ok=self.benchmark_ok,
-            disabled_reason='benchmark' if self.default_no_lzx else None,
-            announce=False,
+        self._send(ProgressUpdateResponse(_("Complete!"), 100.0))
+        self._send_folder_summary(
+            stats,
+            stats.compressed_files,
+            total_compressible_size,
+            directory=str(self.current_folder),
+            scope="current",
+            is_analysis=False,
         )
 
-        targets = list(resolve_targets().directories)
-        if not targets:
-            self._send(WarningResponse("Warning", "No default quick-compression targets were found on this system."))
+    def _run_quick_analysis_compression_pipeline(self) -> None:
+        entries = list(self.quick_analysis_results)
+        if not entries:
+            self._send(WarningResponse(_("Warning"), _("Please run quick analysis before compressing.")))
             return
+
+        total_to_compress = sum(len(entry.get("plan") or []) for entry in entries)
+        if total_to_compress <= 0:
+            self._send(ProgressUpdateResponse(_("Nothing to compress!"), 100.0))
+            return
+
+        self._send(StateResponse("Compacting"))
 
         total_stats = CompressionStats()
         total_stats.min_savings_percent = self.min_savings
-        total_plan_count = 0
-        total_compressible_size = 0
+        total_target_size = 0
+
+        compressed_count = [0]
+        exec_start_time = time.perf_counter()
+
+        for index, entry in enumerate(entries, start=1):
+            self._check_pause_stop()
+
+            directory = str(entry.get("directory") or "")
+            plan = entry.get("plan") or []
+            stats = entry.get("stats")
+            monitor = entry.get("monitor")
+
+            if not directory or stats is None or monitor is None:
+                continue
+
+            if not plan:
+                self._send(
+                    StatusResponse(
+                        _("Quick compression: nothing to compress in {directory} ({index}/{total})").format(
+                            directory=directory,
+                            index=index,
+                            total=len(entries),
+                        ),
+                        None,
+                    )
+                )
+                continue
+
+            self.current_folder = directory
+            directory_target_size = sum(item[1] for item in plan)
+            total_target_size += directory_target_size
+            self._send(
+                StatusResponse(
+                    _("Quick compression: compressing {directory} ({index}/{total})").format(
+                        directory=directory,
+                        index=index,
+                        total=len(entries),
+                    ),
+                    None,
+                )
+            )
+
+            def _exec_start(algo: str, total: int):
+                pass
+
+            def _exec_progress(path: Path, algo: str):
+                compressed_count[0] += 1
+                if compressed_count[0] % COMPRESSION_PROGRESS_GRANULARITY != 0 and compressed_count[0] != total_to_compress:
+                    return
+
+                self._check_pause_stop()
+                now = time.perf_counter()
+                elapsed = max(0.001, now - exec_start_time)
+                rate = compressed_count[0] / elapsed
+                pct = (compressed_count[0] / total_to_compress) * 100.0
+                self._send(
+                    ProgressUpdateResponse(
+                        _("Quick compressing... {compressed}/{total} ({rate:.0f} files/s)").format(
+                            compressed=compressed_count[0],
+                            total=total_to_compress,
+                            rate=rate,
+                        ),
+                        pct,
+                    )
+                )
+                self._send_folder_summary(
+                    stats,
+                    len(plan),
+                    directory_target_size,
+                    directory=directory,
+                    scope="directory",
+                    is_analysis=False,
+                )
+
+            with monitor.time_compression():
+                execute_compression_plan(
+                    plan,
+                    stats,
+                    monitor,
+                    verbosity=0,
+                    xp_workers=xp_worker_count(),
+                    lzx_workers=lzx_worker_count(),
+                    stage_callback=_exec_start,
+                    progress_callback=_exec_progress,
+                )
+
+            self._accumulate_stats(total_stats, stats)
+
+            self._send_folder_summary(
+                stats,
+                len(plan),
+                directory_target_size,
+                directory=directory,
+                scope="directory",
+                is_analysis=False,
+            )
+            self._send_folder_summary(
+                total_stats,
+                total_stats.compressed_files,
+                total_target_size,
+                directory="Total",
+                scope="total",
+                is_analysis=False,
+            )
+
+        commit_incompressible_cache()
+        self.last_analysis_plan = None
+        self.last_analysis_stats = None
+        self.quick_analysis_results = []
+        self._send(ProgressUpdateResponse(_("Quick compression complete"), 100.0, quick_history=True))
+
+    def _run_quick_compression_pipeline(self):
+        self._configure_worker_environment()
+
+        targets = list(resolve_targets().directories)
+        if not targets:
+            self.quick_analysis_results = []
+            self._send(WarningResponse(_("Warning"), _("No default quick-compression targets were found on this system.")))
+            return
+
+        quick_results: list[dict[str, Any]] = []
+        total_analysis_stats = CompressionStats()
+        total_analysis_stats.min_savings_percent = self.min_savings
+        total_analysis_plan_count = 0
+        total_analysis_compressible_size = 0
+
         total_scan_seconds = 0.0
         total_entropy_seconds = 0.0
         total_candidate_files = 0
@@ -644,7 +813,16 @@ class GuiBackend:
         for index, directory in enumerate(targets, start=1):
             self._check_pause_stop()
             self.current_folder = str(directory)
-            self._send(StatusResponse(f"Quick analysis: scanning {directory} ({index}/{len(targets)})", 0.0))
+            self._send(
+                StatusResponse(
+                    _("Quick analysis: scanning {directory} ({index}/{total})").format(
+                        directory=directory,
+                        index=index,
+                        total=len(targets),
+                    ),
+                    0.0,
+                )
+            )
             self._run_analysis_pipeline()
 
             current_stats = self.last_analysis_stats
@@ -655,18 +833,29 @@ class GuiBackend:
             if current_stats is None or current_monitor is None:
                 continue
 
-            self._accumulate_stats(total_stats, current_stats)
-            total_plan_count += len(current_plan)
-            total_compressible_size += sum(item[1] for item in current_plan)
+            current_plan_size = sum(item[1] for item in current_plan)
+            quick_results.append(
+                {
+                    "directory": str(directory),
+                    "plan": current_plan,
+                    "stats": current_stats,
+                    "monitor": current_monitor,
+                    "timing": current_timing,
+                }
+            )
+
+            self._accumulate_stats(total_analysis_stats, current_stats)
+            total_analysis_plan_count += len(current_plan)
+            total_analysis_compressible_size += current_plan_size
             total_scan_seconds += float(current_timing.get("combined_scan_seconds", 0.0) or 0.0)
             total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
             total_candidate_files += len(current_plan)
             total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
 
             total_summary = self._make_stats_summary(
-                total_stats,
-                total_plan_count,
-                total_compressible_size,
+                total_analysis_stats,
+                total_analysis_plan_count,
+                total_analysis_compressible_size,
                 analysis_timing=self._build_quick_total_timing(
                     total_scan_seconds,
                     total_entropy_seconds,
@@ -674,22 +863,23 @@ class GuiBackend:
                     total_entropy_files,
                 ),
             )
-            if current_stats is not None:
-                current_summary = self._make_stats_summary(
-                    current_stats,
-                    len(current_plan),
-                    sum(item[1] for item in current_plan),
-                    analysis_timing=current_timing,
-                )
-                self._send(FolderSummaryResponse(current_summary, directory=str(directory), scope="directory"))
+
+            current_summary = self._make_stats_summary(
+                current_stats,
+                len(current_plan),
+                current_plan_size,
+                analysis_timing=current_timing,
+            )
+            self._send(FolderSummaryResponse(current_summary, directory=str(directory), scope="directory"))
             self._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
 
-        self._send(ProgressUpdateResponse("Quick analysis complete", 100.0))
-        self._send(StateResponse("Stopped"))
+        self.quick_analysis_results = quick_results
+        self._send(ProgressUpdateResponse(_("Quick analysis complete"), 100.0, quick_history=True))
 
 def run_gui(benchmark_ok: Optional[bool] = None):
     backend = GuiBackend(benchmark_ok=benchmark_ok)
     app = create_gui_app(backend.handle_request)
+    app.initial_config = json.loads(backend._current_config_response().to_json())
     backend.bind_server(app)
     app.start()
     print(_("Exiting..."), flush=True)

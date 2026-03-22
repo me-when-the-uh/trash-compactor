@@ -26,7 +26,7 @@ from .message_types import (
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
     ChooseFolderRequest, OpenUrlRequest
 )
-from ..i18n import _
+from ..i18n import _, get_current_locale, get_translations
 
 
 class GuiApi:
@@ -44,22 +44,19 @@ class GuiApi:
 
             root = tk.Tk()
             root.withdraw()
-            folder = filedialog.askdirectory(title="Select folder to compress")
+            folder = filedialog.askdirectory(title=_("Select folder to compress"))
             root.destroy()
 
             if folder:
                 self.current_folder = folder
                 return {"type": "Folder", "path": folder}
-            return {"type": "Error", "message": "No folder selected"}
+            return {"type": "Error", "message": _("No folder selected")}
         except Exception as e:
             logging.exception("Error choosing folder: %s", e)
             return {"type": "Error", "message": str(e)}
 
     def start_compression(self) -> Dict[str, Any]:
         """Start compression on current folder."""
-        if not self.current_folder:
-            return {"type": "Error", "message": "No folder selected"}
-
         req = StartCompressionRequest(path=self.current_folder)
         return self.backend_handler(req)
 
@@ -80,9 +77,6 @@ class GuiApi:
 
     def analyse_folder(self) -> Dict[str, Any]:
         """Analyse current folder for compression opportunities."""
-        if not self.current_folder:
-            return {"type": "Error", "message": "No folder selected"}
-
         req = AnalyseFolderRequest(path=self.current_folder)
         return self.backend_handler(req)
 
@@ -137,6 +131,7 @@ class GuiServer:
         self.api = None
         self.window = None
         self.running = False
+        self.initial_config: Dict[str, Any] = {}
 
     def _handle_request(self, request: GuiRequest) -> Dict[str, Any]:
         """Call backend handler and convert response to dict."""
@@ -166,7 +161,6 @@ class GuiServer:
             logging.error("UI files not found at %s", ui_path)
             return
 
-        # Load UI files
         with open(ui_path / "style.css", "r", encoding="utf-8") as f:
             style = f.read()
         with open(ui_path / "app.js", "r", encoding="utf-8") as f:
@@ -174,17 +168,30 @@ class GuiServer:
         with open(html_file, "r", encoding="utf-8") as f:
             html = f.read()
 
-        # Replace placeholders
         html = html.replace("/*__STYLE__*/", style)
+        html = html.replace(
+            "/*__I18N__*/",
+            json.dumps(
+                {
+                    "locale": get_current_locale(),
+                    "translations": get_translations(),
+                },
+                ensure_ascii=False,
+            ),
+        )
+        html = html.replace(
+            "/*__BOOT_CONFIG__*/",
+            json.dumps(getattr(self, "initial_config", {}) or {}, ensure_ascii=False),
+        )
         html = html.replace("/*__SCRIPT__*/", script)
 
         try:
             self.window = pywebview.create_window(
-                "Trash Compactor",
+                _("Trash Compactor GUI"),
                 html=html,
                 js_api=self.api,
-                width=800,
-                height=600,
+                width=760,
+                height=550,
                 background_color="#3d3d3d",
             )
             self.running = True
@@ -202,8 +209,6 @@ class GuiServer:
         """Send response to GUI (if window exists)."""
         if self.window:
             try:
-                # pywebview evaluate_js to call javascript
-                # Important: we use json.dumps to safely escape the structure.
                 json_str = response.to_json()
                 self.window.evaluate_js(f"Response.dispatch({json_str})")
             except Exception as e:
