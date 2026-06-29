@@ -21,7 +21,7 @@ from src.skip_logic import discard_staged_incompressible_cache, log_directory_sk
 from src.i18n import _, load_translations
 from pathlib import Path
 
-VERSION = "0.6.0-beta"
+VERSION = "0.7.0"
 BUILD_DATE = "who cares"
 
 
@@ -186,7 +186,7 @@ def run_compression(directory: str, verbosity: int, min_savings: float, debug_sc
     monitor.print_summary()
 
 
-def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
+def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[str, int, str]]]:
     from src.compression_module import entropy_dry_run
     from src.stats import CompressionStats, print_entropy_dry_run
     from src.timer import PerformanceMonitor
@@ -311,21 +311,30 @@ def main() -> None:
             from src.benchmark import run_benchmark
             from src.file_utils import hide_console_window
 
-            # Keep benchmark output out of the terminal in GUI mode.
             sink = io.StringIO()
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                 benchmark_ok = run_benchmark()
 
-            # Hide the console window since we're running GUI mode.
             hide_console_window()
 
             import webview  
             from src.gui.backend import run_gui
             run_gui(benchmark_ok=benchmark_ok)
-            # pywebview can leave non-daemon framework threads alive briefly.
-            # Exit immediately once the window closes for snappier UX.
             os._exit(0)
-        except (ImportError, ModuleNotFoundError):
+        except (ImportError, ModuleNotFoundError) as exc:
+            if getattr(sys, "frozen", False):
+                print(
+                    Fore.RED
+                    + _(
+                        "GUI failed to start: pywebview is not bundled in this executable. "
+                        "Rebuild after running: python -m pip install -r requirements.txt"
+                    )
+                    + Style.RESET_ALL,
+                    file=sys.stderr,
+                )
+                print(f"{exc.__class__.__name__}: {exc}", file=sys.stderr)
+                prompt_exit()
+                sys.exit(1)
             args = interactive_configure(args)
             args.min_savings = config.clamp_savings_percent(args.min_savings)
             if not args.directory:

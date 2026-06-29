@@ -163,6 +163,8 @@ class GuiServer:
 
         with open(ui_path / "style.css", "r", encoding="utf-8") as f:
             style = f.read()
+        with open(ui_path / "jquery.min.js", "r", encoding="utf-8") as f:
+            jquery = f.read()
         with open(ui_path / "app.js", "r", encoding="utf-8") as f:
             script = f.read()
         with open(html_file, "r", encoding="utf-8") as f:
@@ -183,6 +185,7 @@ class GuiServer:
             "/*__BOOT_CONFIG__*/",
             json.dumps(getattr(self, "initial_config", {}) or {}, ensure_ascii=False),
         )
+        html = html.replace("/*__JQUERY__*/", jquery)
         html = html.replace("/*__SCRIPT__*/", script)
 
         try:
@@ -190,8 +193,11 @@ class GuiServer:
                 _("Trash Compactor GUI"),
                 html=html,
                 js_api=self.api,
-                width=760,
-                height=550,
+                width=880,
+                height=610,
+                min_size=(760, 550),
+                resizable=True,
+                text_select=False,
                 background_color="#3d3d3d",
             )
             self.running = True

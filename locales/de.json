@@ -185,7 +185,10 @@
     "Scanning directory...": "Scanne Verzeichnis...",
     "Scanning directory... {count} files found ({rate:.0f} files/s)": "Scanne Verzeichnis... {count} Dateien gefunden ({rate:.0f} Dateien/s)",
     "Analyzing file entropy...": "Analysiere Dateientropie...",
+    "Analyzing files...": "Analysiere Dateien...",
+    "{index} / {total}": "{index} / {total}",
     "Analyzing... {processed}/{total} ({rate:.0f} files/s)": "Analysiere... {processed}/{total} ({rate:.0f} Dateien/s)",
+    "(Scanning more files...)": "(Weitere Dateien werden gescannt...)",
     "Sampling entropy... {processed}/{total}": "Erfasse Entropie... {processed}/{total}",
     "Analysis complete in {elapsed:.2f}s": "Analyse abgeschlossen in {elapsed:.2f}s",
     "Nothing to compress!": "Nichts zu komprimieren!",
@@ -200,6 +203,7 @@
     "No default quick-compression targets were found on this system.": "Auf diesem System wurden keine Standardziele für die Schnellkomprimierung gefunden.",
     "Quick analysis: scanning {directory} ({index}/{total})": "Schnellanalyse: Scanne {directory} ({index}/{total})",
     "Quick analysis complete": "Schnellanalyse abgeschlossen",
+    "Quick analysis complete in {elapsed:.2f}s": "Schnellanalyse abgeschlossen in {elapsed:.2f}s",
     "Trash Compactor GUI": "Trash-Compactor-GUI",
     "Compress": "Komprimieren",
     "Settings": "Einstellungen",
@@ -251,5 +255,10 @@
     "GUI adapted from": "GUI übernommen von",
     "The program will analyse {count} folders for compressibility.": "Das Programm analysiert {count} Ordner auf Komprimierbarkeit.",
     "Administrator privileges are available, but they are not necessary for analysing folders.": "Administratorrechte sind verfügbar, für die Analyse von Ordnern aber nicht erforderlich.",
-    "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Scan {scan_seconds}s mit {scan_rate} Dateien/s | Entropie {entropy_seconds}s mit {entropy_rate} Dateien/s"
+    "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Scan {scan_seconds}s mit {scan_rate} Dateien/s | Entropie {entropy_seconds}s mit {entropy_rate} Dateien/s",
+    "Walk {walk_seconds}s @ {walk_rate} files/sec | Check {check_seconds}s @ {check_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Durchlauf {walk_seconds}s mit {walk_rate} Dateien/s | Prüfung {check_seconds}s mit {check_rate} Dateien/s | Entropie {entropy_seconds}s mit {entropy_rate} Dateien/s",
+    "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s": "Durchlauf {walk_seconds}s @ {walk_rate}/s | Prüfung {check_seconds}s @ {check_rate}/s",
+    "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Entropie {entropy_seconds}s @ {entropy_rate}/s",
+    "Scan {scan_seconds}s @ {scan_rate}/s": "Scan {scan_seconds}s @ {scan_rate}/s",
+    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "Echtzeit-Antivirus (z. B. Windows Defender) scannt jeden Lesezugriff und jede komprimierte Datei erneut und kann die Geschwindigkeit halbieren. Erwägen Sie vorläufige Ausnahmen für Zielordner beim ersten Lauf."
 }

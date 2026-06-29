@@ -102,19 +102,20 @@ def evaluate_entropy_directory(
 
 
 def maybe_skip_directory(
-    directory: Path,
+    directory: str | Path,
     base_dir: Path,
     stats: CompressionStats,
     collect_entropy: bool,
     min_savings_percent: float,
     verbosity: int,
 ) -> DirectoryDecision:
+    dir_path = directory if isinstance(directory, Path) else Path(directory)
     decision = should_skip_directory(directory)
     if decision.skip:
         reason = decision.reason or _("Excluded system directory")
         record = DirectorySkipRecord(
-            path=str(directory),
-            relative_path=_relative_to_base(directory, base_dir),
+            path=str(dir_path),
+            relative_path=_relative_to_base(dir_path, base_dir),
             reason=reason,
             category='system',
         )
@@ -125,11 +126,11 @@ def maybe_skip_directory(
         return DirectoryDecision.allow_path()
 
     cache = get_incompressible_cache()
-    if cache.contains(directory):
+    if cache.contains(dir_path):
         reason = _("Cached: High entropy directory")
         skip_record = DirectorySkipRecord(
-            path=str(directory),
-            relative_path=_relative_to_base(directory, base_dir),
+            path=str(dir_path),
+            relative_path=_relative_to_base(dir_path, base_dir),
             reason=reason,
             category='high_entropy',
             average_entropy=8.0,
@@ -140,7 +141,7 @@ def maybe_skip_directory(
         append_directory_skip_record(stats, skip_record)
         return DirectoryDecision.deny(reason)
 
-    skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
+    skip_record, sample_record = evaluate_entropy_directory(dir_path, base_dir, min_savings_percent, verbosity)
     
     if sample_record:
         stats.entropy_samples.append(sample_record)
@@ -150,7 +151,7 @@ def maybe_skip_directory(
             stats.entropy_directories_below_threshold += 1
 
     if skip_record:
-        cache.add(directory)
+        cache.add(dir_path)
         append_directory_skip_record(stats, skip_record)
         return DirectoryDecision.deny(skip_record.reason)
 

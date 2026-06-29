@@ -186,7 +186,11 @@
     "Scanning directory...": "Scanning directory...",
     "Scanning directory... {count} files found ({rate:.0f} files/s)": "Scanning directory... {count} files found ({rate:.0f} files/s)",
     "Analyzing file entropy...": "Analyzing file entropy...",
+    "Analyzing files...": "Analyzing files...",
+    "{index} / {total}": "{index} / {total}",
     "Analyzing... {processed}/{total} ({rate:.0f} files/s)": "Analyzing... {processed}/{total} ({rate:.0f} files/s)",
+    "(Scanning more files...)": "(Scanning more files...)",
+    "Analyzing... {processed} ({rate:.0f} files/s)": "Analyzing... {processed} ({rate:.0f} files/s)",
     "Sampling entropy... {processed}/{total}": "Sampling entropy... {processed}/{total}",
     "Analysis complete in {elapsed:.2f}s": "Analysis complete in {elapsed:.2f}s",
     "Nothing to compress!": "Nothing to compress!",
@@ -201,6 +205,7 @@
     "No default quick-compression targets were found on this system.": "No default quick-compression targets were found on this system.",
     "Quick analysis: scanning {directory} ({index}/{total})": "Quick analysis: scanning {directory} ({index}/{total})",
     "Quick analysis complete": "Quick analysis complete",
+    "Quick analysis complete in {elapsed:.2f}s": "Quick analysis complete in {elapsed:.2f}s",
     "Trash Compactor GUI": "Trash Compactor GUI",
     "Compress": "Compress",
     "Settings": "Settings",
@@ -253,5 +258,11 @@
     "GUI adapted from": "GUI adapted from",
     "The program will analyse {count} folders for compressibility.": "The program will analyse {count} folders for compressibility.",
     "Administrator privileges are available, but they are not necessary for analysing folders.": "Administrator privileges are available, but they are not necessary for analysing folders.",
-    "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec"
+    "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec",
+    "Walk {walk_seconds}s @ {walk_rate} files/sec | Check {check_seconds}s @ {check_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Walk {walk_seconds}s @ {walk_rate} files/sec | Check {check_seconds}s @ {check_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec",
+    "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s": "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s",
+    "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Entropy {entropy_seconds}s @ {entropy_rate}/s",
+    "Scan {scan_seconds}s @ {scan_rate}/s": "Scan {scan_seconds}s @ {scan_rate}/s",
+    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.",
+    "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt": "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt"
 }

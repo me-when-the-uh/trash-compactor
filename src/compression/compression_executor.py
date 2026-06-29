@@ -13,7 +13,7 @@ from ..timer import PerformanceMonitor
 
 _BATCH_SIZE = 100
 _MAX_COMMAND_CHARS = 4000
-_COMPACT_TIMEOUT_SECONDS = 300
+_COMPACT_TIMEOUT_SECONDS = 600
 
 
 def _hidden_startupinfo() -> subprocess.STARTUPINFO:
@@ -46,7 +46,7 @@ def compress_file(file_path: Path, algorithm: str) -> bool:
 
 
 def execute_compression_plan(
-    plan: Sequence[tuple[Path, int, str]],
+    plan: Sequence[tuple[str, int, str]],
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     verbosity: int,
@@ -63,27 +63,27 @@ def execute_compression_plan(
     stats_lock = threading.Lock()
     progress_lock = threading.Lock()
 
-    def _chunk(entries: Sequence[tuple[Path, int]], size: int) -> Iterator[list[tuple[Path, int]]]:
+    def _chunk(entries: Sequence[tuple[str, int]], size: int) -> Iterator[list[tuple[str, int]]]:
         current = []
         current_length = 0
 
-        for path, file_size in entries:
-            path_length = len(str(path.resolve())) + 3  # for quotes and space
+        for path_str, file_size in entries:
+            path_length = len(str(Path(path_str).resolve())) + 3  # for quotes and space
             if current and (len(current) >= size or current_length + path_length > _MAX_COMMAND_CHARS):
                 yield current
                 current = []
                 current_length = 0
 
-            current.append((path, file_size))
+            current.append((path_str, file_size))
             current_length += path_length
 
         if current:
             yield current
 
-    def _compact_batch(algo: str, paths: Sequence[Path]) -> subprocess.CompletedProcess:
+    def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
         # compact /c /a /exe:{algo} path1 path2 ...
         args = ['compact', '/c', '/a', f'/exe:{algo}']
-        args.extend(str(path.resolve()) for path in paths)
+        args.extend(str(Path(path_str).resolve()) for path_str in path_strs)
         return _run_compact(args)
 
     def _record_error(message: str) -> None:
@@ -149,9 +149,9 @@ def execute_compression_plan(
 
         _finalize_success(path, file_size, algo, context='fallback')
 
-    grouped = {}
-    for path, size, algorithm in plan:
-        grouped.setdefault(algorithm, []).append((path, size))
+    grouped: dict[str, list[tuple[str, int]]] = {}
+    for path_str, size, algorithm in plan:
+        grouped.setdefault(algorithm, []).append((path_str, size))
 
     for algorithm, entries in grouped.items():
         workers = lzx_workers if algorithm == 'LZX' else xp_workers
@@ -168,7 +168,7 @@ def execute_compression_plan(
                 executor.submit(
                     _compact_batch,
                     algorithm,
-                    [path for path, _ in batch],
+                    [path_str for path_str, _ in batch],
                 ): batch
                 for batch in batches
             }
@@ -185,7 +185,8 @@ def execute_compression_plan(
                         algorithm,
                         exc,
                     )
-                    for path, file_size in batch:
+                    for path_str, file_size in batch:
+                        path = Path(path_str)
                         _record_error(_("Batch exception for {path}: {exc}").format(path=path, exc=exc))
                         _compress_single(path, file_size, algorithm)
                     continue
@@ -197,9 +198,9 @@ def execute_compression_plan(
                         algorithm,
                         len(batch),
                     )
-                    for path, file_size in batch:
-                        _compress_single(path, file_size, algorithm)
+                    for path_str, file_size in batch:
+                        _compress_single(Path(path_str), file_size, algorithm)
                     continue
 
-                for path, file_size in batch:
-                    _finalize_success(path, file_size, algorithm, context='batch')
+                for path_str, file_size in batch:
+                    _finalize_success(Path(path_str), file_size, algorithm, context='batch')

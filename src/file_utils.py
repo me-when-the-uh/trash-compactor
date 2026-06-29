@@ -28,13 +28,17 @@ def is_admin() -> bool:
 
 
 def hide_console_window() -> None:
+    """Hide or detach the console without affecting a parent process console."""
     try:
-        import ctypes
+        import multiprocessing
+
+        if multiprocessing.current_process().name != "MainProcess":
+            ctypes.windll.kernel32.FreeConsole()
+            return
         hwnd = ctypes.windll.kernel32.GetConsoleWindow()
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
     except (AttributeError, OSError):
-        # If console window is unavailable
         pass
 
 
@@ -125,7 +129,7 @@ def get_size_category(file_size: int) -> str:
     return _SIZE_LABELS[index] if index < len(_SIZE_LABELS) else 'large'
 
 
-def should_skip_directory(directory: Path) -> DirectoryDecision:
+def should_skip_directory(directory: str | Path) -> DirectoryDecision:
     normalized = _normalize_for_compare(directory)
     match, reason = _match_exclusion(normalized)
     if match:

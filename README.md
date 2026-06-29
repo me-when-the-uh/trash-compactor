@@ -53,8 +53,10 @@ Note: For Option 2, ensure Git and Python 3.11 or 3.12 are installed on your sys
 
 Optional: you can compile the app yourself as I did, using PyInstaller:
     ```powershell
-    python -m PyInstaller --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next main.py
+    python -m pip install -r requirements.txt
+    python -m PyInstaller --clean --noconfirm trash-compactor-next.spec
     ```
+  The target machine also needs the [Microsoft WebView2 runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
     or, since we're interested in squeezing programs into small packages, you can install a build of [UPX](https://github.com/upx/upx) to build an app with compressed binaries:
     ```powershell
     python -m PyInstaller --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next --upx-dir 'c:\path\to\upx-win64' main.py 

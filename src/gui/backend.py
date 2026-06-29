@@ -3,7 +3,7 @@ import json
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable
+from typing import Any, Callable, Dict, Optional
 
 from .message_types import (
     GuiRequest,
@@ -43,6 +43,141 @@ SCAN_STOP_CHECK_EVERY_FILES = 64
 PLAN_PROGRESS_GRANULARITY = 32
 ENTROPY_PROGRESS_GRANULARITY = 8
 COMPRESSION_PROGRESS_GRANULARITY = 4
+_PROGRESS_INDETERMINATE = -1.0
+_PROGRESS_WALK_DONE = 35.0
+_PROGRESS_CHECK_END = 75.0
+_PROGRESS_ENTROPY_END = 98.0
+
+
+class _GuiDiscoveryStream:
+    """Yield DirEntry objects while updating walk UI; avoids materializing the full file list."""
+
+    __slots__ = (
+        "_backend",
+        "_base_dir",
+        "_stats",
+        "_progress_kwargs",
+        "count",
+        "walk_seconds",
+        "complete",
+        "buffering",
+        "_check_phase",
+        "_walk_start",
+        "_last_scan_update",
+        "_last_summary_update",
+    )
+
+    def __init__(
+        self,
+        backend: "GuiBackend",
+        base_dir: Path,
+        stats: CompressionStats,
+        progress_kwargs: dict[str, Any],
+    ) -> None:
+        self._backend = backend
+        self._base_dir = base_dir
+        self._stats = stats
+        self._progress_kwargs = progress_kwargs
+        self.count = 0
+        self.walk_seconds = 0.0
+        self.complete = False
+        self.buffering = False
+        self._check_phase = False
+        self._walk_start = 0.0
+        self._last_scan_update = 0.0
+        self._last_summary_update = 0.0
+
+    def enter_check_phase(self) -> None:
+        self._check_phase = True
+
+    def notify_check_progress(self, processed: int) -> None:
+        if processed > self._backend._check_processed:
+            self.buffering = False
+        self._backend._check_processed = processed
+
+    def _sync_buffering_state(self) -> None:
+        if not self._check_phase or self.complete:
+            self.buffering = False
+            return
+        processed = self._backend._check_processed
+        if processed > 0 and processed >= self.count - 1:
+            self.buffering = True
+
+    def __iter__(self):
+        self._walk_start = time.perf_counter()
+        self._last_scan_update = self._walk_start
+        self._last_summary_update = self._walk_start
+        try:
+            for entry in iter_files(
+                self._base_dir,
+                self._stats,
+                0,
+                self._backend.min_savings,
+                collect_entropy=False,
+            ):
+                self.count += 1
+                if self.count % SCAN_STOP_CHECK_EVERY_FILES == 0:
+                    self._backend._check_pause_stop()
+
+                now = time.perf_counter()
+                walk_elapsed = max(0.001, now - self._walk_start)
+                if self._check_phase:
+                    self._sync_buffering_state()
+                    processed = self._backend._check_processed
+                    if (
+                        (self.buffering or processed < self.count)
+                        and now - self._last_scan_update > UI_STATUS_INTERVAL_SECONDS
+                    ):
+                        self._last_scan_update = now
+                        self._backend._send_check_phase_progress(
+                            processed,
+                            self.count,
+                            scanning_more=self.buffering,
+                            **self._progress_kwargs,
+                        )
+                elif now - self._last_scan_update > UI_STATUS_INTERVAL_SECONDS:
+                    self._last_scan_update = now
+                    self._backend._send_progress(
+                        _(
+                            "Scanning directory... {count} files found ({rate:.0f} files/s)"
+                        ).format(
+                            count=self.count,
+                            rate=self.count / walk_elapsed,
+                        ),
+                        _PROGRESS_INDETERMINATE,
+                        **self._progress_kwargs,
+                    )
+
+                if now - self._last_summary_update > UI_SUMMARY_INTERVAL_SECONDS:
+                    self._last_summary_update = now
+                    if self._check_phase:
+                        check_elapsed = max(
+                            0.001,
+                            now - self._backend._check_phase_start,
+                        )
+                        timing = self._backend._build_live_analysis_timing(
+                            walk_seconds=walk_elapsed,
+                            total_files=max(self.count, self._backend._check_processed),
+                            check_seconds=check_elapsed,
+                        )
+                    else:
+                        timing = self._backend._build_live_analysis_timing(
+                            walk_seconds=walk_elapsed,
+                            total_files=self.count,
+                        )
+                    self._backend._send_folder_summary(
+                        self._stats,
+                        0,
+                        0,
+                        directory=str(self._base_dir),
+                        scope="current",
+                        analysis_timing=timing,
+                    )
+                yield entry
+        finally:
+            self.complete = True
+            self.buffering = False
+            self.walk_seconds = max(0.001, time.perf_counter() - self._walk_start)
 
 
 class GuiBackend:
@@ -227,6 +362,69 @@ class GuiBackend:
         if self.server:
             self.server.send_response(response)
 
+    def _scale_quick_progress(
+        self,
+        local_pct: Optional[float],
+        dir_index: Optional[int],
+        dir_total: Optional[int],
+    ) -> Optional[float]:
+        if local_pct is not None and local_pct < 0:
+            return _PROGRESS_INDETERMINATE
+        if not dir_index or not dir_total or dir_total <= 0 or local_pct is None:
+            return local_pct
+        segment = 100.0 / dir_total
+        return ((dir_index - 1) * segment) + (local_pct / 100.0) * segment
+
+    def _send_progress(
+        self,
+        status: str,
+        pct: Optional[float],
+        *,
+        quick_history: bool = False,
+        quick_dir_index: Optional[int] = None,
+        quick_dir_total: Optional[int] = None,
+    ) -> None:
+        self._send(
+            ProgressUpdateResponse(
+                status,
+                self._scale_quick_progress(pct, quick_dir_index, quick_dir_total),
+                quick_history=quick_history,
+            )
+        )
+
+    def _check_phase_progress_pct(self, processed: int, total: int) -> float:
+        if total:
+            return (
+                _PROGRESS_WALK_DONE
+                + (processed / total) * (_PROGRESS_CHECK_END - _PROGRESS_WALK_DONE)
+            )
+        return _PROGRESS_WALK_DONE
+
+    def _send_check_phase_progress(
+        self,
+        processed: int,
+        total: int,
+        *,
+        scanning_more: bool = False,
+        quick_dir_index: Optional[int] = None,
+        quick_dir_total: Optional[int] = None,
+    ) -> None:
+        check_elapsed = max(0.001, time.perf_counter() - self._check_phase_start)
+        check_rate = processed / check_elapsed if processed else 0.0
+        status = _("Analyzing... {processed}/{total} ({rate:.0f} files/s)").format(
+            processed=processed,
+            total=total,
+            rate=check_rate,
+        )
+        if scanning_more:
+            status += " " + _("(Scanning more files...)")
+        self._send_progress(
+            status,
+            self._check_phase_progress_pct(processed, total),
+            quick_dir_index=quick_dir_index,
+            quick_dir_total=quick_dir_total,
+        )
+
     def _check_pause_stop(self):
         if self.stop_event.is_set():
             raise InterruptedError("Stopped by user")
@@ -276,19 +474,51 @@ class GuiBackend:
 
     def _build_quick_total_timing(
         self,
-        scan_seconds: float,
+        walk_seconds: float,
+        check_seconds: float,
         entropy_seconds: float,
-        candidate_files: int,
+        total_files: int,
         entropy_files: int,
     ) -> dict:
+        walk_seconds = max(0.0, walk_seconds)
+        check_seconds = max(0.0, check_seconds)
+        combined_scan_seconds = walk_seconds + check_seconds
         return {
-            "combined_scan_seconds": max(0.0, scan_seconds),
-            "scan_rate": (candidate_files / scan_seconds) if scan_seconds > 0 else 0.0,
+            "combined_scan_seconds": combined_scan_seconds,
+            "walk_seconds": walk_seconds,
+            "walk_rate": (total_files / walk_seconds) if walk_seconds > 0 else 0.0,
+            "check_seconds": check_seconds,
+            "check_rate": (total_files / check_seconds) if check_seconds > 0 else 0.0,
+            "scan_rate": (total_files / combined_scan_seconds) if combined_scan_seconds > 0 else 0.0,
             "entropy_seconds": max(0.0, entropy_seconds),
             "entropy_rate": (entropy_files / entropy_seconds) if entropy_seconds > 0 else 0.0,
         }
 
-    def _apply_dry_run_projection(self, stats: CompressionStats, plan: list[tuple[Path, int, str]]) -> None:
+    def _build_live_analysis_timing(
+        self,
+        *,
+        walk_seconds: float,
+        total_files: int,
+        check_seconds: float = 0.0,
+        entropy_seconds: float = 0.0,
+        entropy_files: int = 0,
+    ) -> dict:
+        walk_seconds = max(0.0, walk_seconds)
+        check_seconds = max(0.0, check_seconds)
+        entropy_seconds = max(0.0, entropy_seconds)
+        combined_scan_seconds = walk_seconds + check_seconds
+        return {
+            "combined_scan_seconds": combined_scan_seconds,
+            "walk_seconds": walk_seconds,
+            "walk_rate": (total_files / walk_seconds) if walk_seconds > 0 else 0.0,
+            "check_seconds": check_seconds,
+            "check_rate": (total_files / check_seconds) if check_seconds > 0 and total_files > 0 else 0.0,
+            "scan_rate": (total_files / combined_scan_seconds) if combined_scan_seconds > 0 else 0.0,
+            "entropy_seconds": entropy_seconds,
+            "entropy_rate": (entropy_files / entropy_seconds) if entropy_seconds > 0 else 0.0,
+        }
+
+    def _apply_dry_run_projection(self, stats: CompressionStats, plan: list[tuple[str, int, str]]) -> None:
         stats.entropy_projected_original_bytes = stats.total_original_size
 
         entropy_map = {Path(record.path): record for record in stats.entropy_samples}
@@ -296,8 +526,8 @@ class GuiBackend:
         projected_compressed_lzx = 0.0
         projected_compressed_xpress = 0.0
 
-        for path, size, algo in plan:
-            record = entropy_map.get(path.parent)
+        for path_str, size, algo in plan:
+            record = entropy_map.get(Path(path_str).parent)
             if record:
                 savings_factor = max(0.0, record.estimated_savings / 100.0)
                 compressed_size = size * (1.0 - savings_factor)
@@ -312,16 +542,30 @@ class GuiBackend:
         stats.entropy_projected_compressed_bytes = int(round(projected_compressed_lzx + skipped_size))
         stats.entropy_projected_compressed_bytes_conservative = int(round(projected_compressed_xpress + skipped_size))
 
-    def _build_analysis_timing(self, discovery_seconds: float, candidate_files: int, monitor: PerformanceMonitor) -> dict:
-        file_scan_seconds = max(0.0, monitor.stats.file_scan_time)
+    def _build_analysis_timing(
+        self,
+        walk_seconds: float,
+        candidate_files: int,
+        monitor: PerformanceMonitor,
+    ) -> dict:
+        walk_seconds = max(0.0, walk_seconds)
+        check_seconds = max(0.0, monitor.stats.file_scan_time)
         entropy_seconds = max(0.0, monitor.stats.entropy_analysis_time)
-        combined_scan_seconds = discovery_seconds + file_scan_seconds
+        combined_scan_seconds = walk_seconds + check_seconds
+        walk_rate = (candidate_files / walk_seconds) if walk_seconds > 0 else 0.0
+        check_rate = (candidate_files / check_seconds) if check_seconds > 0 else 0.0
 
         return {
             "combined_scan_seconds": combined_scan_seconds,
-            "scan_rate": (candidate_files / combined_scan_seconds) if combined_scan_seconds > 0 else 0.0,
+            "walk_seconds": walk_seconds,
+            "walk_rate": walk_rate,
+            "check_seconds": check_seconds,
+            "check_rate": check_rate,
+            "scan_rate": walk_rate,
             "entropy_seconds": entropy_seconds,
-            "entropy_rate": (monitor.stats.files_analyzed_for_entropy / entropy_seconds) if entropy_seconds > 0 else 0.0,
+            "entropy_rate": (
+                monitor.stats.files_analyzed_for_entropy / entropy_seconds
+            ) if entropy_seconds > 0 else 0.0,
         }
 
     def _make_stats_summary(
@@ -415,8 +659,18 @@ class GuiBackend:
     def _run_compression(self):
         self._run_pipeline("Compression", self._run_compression_pipeline)
 
-    def _run_analysis_pipeline(self):
+    def _run_analysis_pipeline(
+        self,
+        *,
+        report_completion: bool = True,
+        quick_dir_index: Optional[int] = None,
+        quick_dir_total: Optional[int] = None,
+    ):
         self._configure_worker_environment()
+        progress_kwargs = {
+            "quick_dir_index": quick_dir_index,
+            "quick_dir_total": quick_dir_total,
+        }
 
         base_dir = Path(self.current_folder).resolve()
         stats = CompressionStats()
@@ -426,59 +680,17 @@ class GuiBackend:
         monitor.start_operation()
 
         overall_start_time = time.perf_counter()
-        self._send(StatusResponse(_("Scanning directory..."), 0.0))
-        all_files = []
+        self._check_processed = 0
+        self._send_progress(_("Scanning directory..."), _PROGRESS_INDETERMINATE, **progress_kwargs)
 
-        scan_start_time = time.perf_counter()
-        last_scan_update_time = scan_start_time
-
-        for entry in iter_files(base_dir, stats, 0, self.min_savings, collect_entropy=False):
-            all_files.append(entry)
-
-            if len(all_files) % SCAN_STOP_CHECK_EVERY_FILES == 0:
-                self._check_pause_stop()
-
-            now = time.perf_counter()
-            if now - last_scan_update_time > UI_STATUS_INTERVAL_SECONDS:
-                last_scan_update_time = now
-                elapsed = max(0.001, now - scan_start_time)
-                rate = len(all_files) / elapsed
-                self._send(
-                    StatusResponse(
-                        _("Scanning directory... {count} files found ({rate:.0f} files/s)").format(
-                            count=len(all_files),
-                            rate=rate,
-                        ),
-                        None,
-                    )
-                )
-
-        discovery_seconds = max(0.001, time.perf_counter() - scan_start_time)
-
-        total_files = len(all_files)
-        if total_files == 0:
-            self.last_analysis_plan = []
-            self.last_analysis_stats = stats
-            self.last_analysis_monitor = monitor
-            monitor.end_operation()
-            self.last_analysis_timing = self._build_analysis_timing(discovery_seconds, 0, monitor)
-            self._send_folder_summary(
-                stats,
-                0,
-                0,
-                directory=str(base_dir),
-                scope="current",
-                analysis_timing=self.last_analysis_timing,
-            )
-            return
-
-        self._send(StatusResponse(_("Analyzing file entropy..."), 0.0))
+        discovery = _GuiDiscoveryStream(self, base_dir, stats, progress_kwargs)
 
         plan_count = 0
         total_compressible_size = 0
-        analysis_start_time = time.perf_counter()
-        last_update_time = analysis_start_time
-        last_summary_update_time = analysis_start_time
+        self._check_phase_start = time.perf_counter()
+        entropy_phase_start: Optional[float] = None
+        last_update_time = self._check_phase_start
+        last_summary_update_time = self._check_phase_start
 
         def _plan_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int):
             nonlocal plan_count, total_compressible_size, last_update_time, last_summary_update_time
@@ -486,25 +698,21 @@ class GuiBackend:
                 plan_count += 1
                 total_compressible_size += size
 
+            discovery.notify_check_progress(processed)
+            total_files = max(discovery.count, processed)
             if processed % PLAN_PROGRESS_GRANULARITY != 0 and processed != total_files:
                 return
             self._check_pause_stop()
-            
+
             now = time.perf_counter()
+            check_elapsed = max(0.001, now - self._check_phase_start)
+
             if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total_files:
                 last_update_time = now
-                pct = (processed / total_files) * 60.0
-                elapsed = max(0.001, now - analysis_start_time)
-                rate = processed / elapsed
-                self._send(
-                    ProgressUpdateResponse(
-                        _("Analyzing... {processed}/{total} ({rate:.0f} files/s)").format(
-                            processed=processed,
-                            total=total_files,
-                            rate=rate,
-                        ),
-                        pct,
-                    )
+                self._send_check_phase_progress(
+                    processed,
+                    total_files,
+                    **progress_kwargs,
                 )
 
             if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total_files:
@@ -515,28 +723,63 @@ class GuiBackend:
                     total_compressible_size,
                     directory=str(base_dir),
                     scope="current",
+                    analysis_timing=self._build_live_analysis_timing(
+                        walk_seconds=discovery.walk_seconds,
+                        total_files=total_files,
+                        check_seconds=check_elapsed,
+                    ),
                 )
 
         def _entropy_progress(path: Path, processed: int, total: int):
-            nonlocal last_update_time
+            nonlocal entropy_phase_start, last_update_time, last_summary_update_time
             if processed % ENTROPY_PROGRESS_GRANULARITY != 0 and processed != total:
                 return
 
             self._check_pause_stop()
             now = time.perf_counter()
+            if entropy_phase_start is None:
+                entropy_phase_start = now
+            entropy_elapsed = max(0.001, now - entropy_phase_start)
+
             if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total:
                 last_update_time = now
-                self._send(
-                    ProgressUpdateResponse(
-                        _("Sampling entropy... {processed}/{total}").format(
-                            processed=processed,
-                            total=total,
-                        )
-                    )
+                local_pct = (
+                    _PROGRESS_CHECK_END
+                    + (processed / total) * (_PROGRESS_ENTROPY_END - _PROGRESS_CHECK_END)
+                    if total
+                    else _PROGRESS_CHECK_END
+                )
+                self._send_progress(
+                    _("Sampling entropy... {processed}/{total}").format(
+                        processed=processed,
+                        total=total,
+                    ),
+                    local_pct,
+                    **progress_kwargs,
                 )
 
+            if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total:
+                last_summary_update_time = now
+                self._send_folder_summary(
+                    stats,
+                    plan_count,
+                    total_compressible_size,
+                    directory=str(base_dir),
+                    scope="current",
+                    analysis_timing=self._build_live_analysis_timing(
+                        walk_seconds=discovery.walk_seconds,
+                        total_files=max(discovery.count, processed),
+                        check_seconds=max(0.0, monitor.stats.file_scan_time),
+                        entropy_seconds=entropy_elapsed,
+                        entropy_files=processed,
+                    ),
+                )
+
+        discovery.enter_check_phase()
+        self._send_progress(_("Analyzing files..."), _PROGRESS_WALK_DONE, **progress_kwargs)
+
         plan = plan_compression(
-            all_files,
+            discovery,
             stats,
             monitor,
             base_dir=base_dir,
@@ -546,22 +789,43 @@ class GuiBackend:
             entropy_progress_callback=_entropy_progress,
             debug_scan_all=False,
         )
-        
+
+        total_files = discovery.count
+        walk_seconds = discovery.walk_seconds
+
+        if total_files == 0:
+            self.last_analysis_plan = []
+            self.last_analysis_stats = stats
+            self.last_analysis_monitor = monitor
+            monitor.end_operation()
+            self.last_analysis_timing = self._build_analysis_timing(walk_seconds, 0, monitor)
+            self._send_folder_summary(
+                stats,
+                0,
+                0,
+                directory=str(base_dir),
+                scope="current",
+                analysis_timing=self.last_analysis_timing,
+            )
+            return
+
+        monitor.stats.total_files = total_files
+
         self.last_analysis_plan = plan
         self.last_analysis_stats = stats
         self.last_analysis_monitor = monitor
 
         self._apply_dry_run_projection(stats, plan)
         monitor.end_operation()
-        self.last_analysis_timing = self._build_analysis_timing(discovery_seconds, total_files, monitor)
+        self.last_analysis_timing = self._build_analysis_timing(walk_seconds, total_files, monitor)
 
-        analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)
-        self._send(
-            ProgressUpdateResponse(
+        if report_completion:
+            analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)
+            self._send_progress(
                 _("Analysis complete in {elapsed:.2f}s").format(elapsed=analysis_elapsed),
                 100.0,
+                **progress_kwargs,
             )
-        )
         self._send_folder_summary(
             stats,
             len(plan),
@@ -799,31 +1063,37 @@ class GuiBackend:
             self._send(WarningResponse(_("Warning"), _("No default quick-compression targets were found on this system.")))
             return
 
+        quick_start_time = time.perf_counter()
         quick_results: list[dict[str, Any]] = []
         total_analysis_stats = CompressionStats()
         total_analysis_stats.min_savings_percent = self.min_savings
         total_analysis_plan_count = 0
         total_analysis_compressible_size = 0
 
-        total_scan_seconds = 0.0
+        total_walk_seconds = 0.0
+        total_check_seconds = 0.0
         total_entropy_seconds = 0.0
-        total_candidate_files = 0
+        total_scanned_files = 0
         total_entropy_files = 0
 
         for index, directory in enumerate(targets, start=1):
             self._check_pause_stop()
             self.current_folder = str(directory)
-            self._send(
-                StatusResponse(
-                    _("Quick analysis: scanning {directory} ({index}/{total})").format(
-                        directory=directory,
-                        index=index,
-                        total=len(targets),
-                    ),
-                    0.0,
-                )
+            self._send_progress(
+                _("Quick analysis: scanning {directory} ({index}/{total})").format(
+                    directory=directory,
+                    index=index,
+                    total=len(targets),
+                ),
+                _PROGRESS_INDETERMINATE,
+                quick_dir_index=index,
+                quick_dir_total=len(targets),
             )
-            self._run_analysis_pipeline()
+            self._run_analysis_pipeline(
+                report_completion=False,
+                quick_dir_index=index,
+                quick_dir_total=len(targets),
+            )
 
             current_stats = self.last_analysis_stats
             current_plan = self.last_analysis_plan or []
@@ -847,9 +1117,10 @@ class GuiBackend:
             self._accumulate_stats(total_analysis_stats, current_stats)
             total_analysis_plan_count += len(current_plan)
             total_analysis_compressible_size += current_plan_size
-            total_scan_seconds += float(current_timing.get("combined_scan_seconds", 0.0) or 0.0)
+            total_walk_seconds += float(current_timing.get("walk_seconds", 0.0) or 0.0)
+            total_check_seconds += float(current_timing.get("check_seconds", 0.0) or 0.0)
             total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
-            total_candidate_files += len(current_plan)
+            total_scanned_files += int(getattr(current_monitor.stats, "total_files", 0) or 0)
             total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
 
             total_summary = self._make_stats_summary(
@@ -857,9 +1128,10 @@ class GuiBackend:
                 total_analysis_plan_count,
                 total_analysis_compressible_size,
                 analysis_timing=self._build_quick_total_timing(
-                    total_scan_seconds,
+                    total_walk_seconds,
+                    total_check_seconds,
                     total_entropy_seconds,
-                    total_candidate_files,
+                    total_scanned_files,
                     total_entropy_files,
                 ),
             )
@@ -874,7 +1146,12 @@ class GuiBackend:
             self._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
 
         self.quick_analysis_results = quick_results
-        self._send(ProgressUpdateResponse(_("Quick analysis complete"), 100.0, quick_history=True))
+        quick_elapsed = max(0.001, time.perf_counter() - quick_start_time)
+        self._send_progress(
+            _("Quick analysis complete in {elapsed:.2f}s").format(elapsed=quick_elapsed),
+            100.0,
+            quick_history=True,
+        )
 
 def run_gui(benchmark_ok: Optional[bool] = None):
     backend = GuiBackend(benchmark_ok=benchmark_ok)

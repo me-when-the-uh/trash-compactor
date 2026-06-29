@@ -408,6 +408,7 @@ var Gui = (function() {
 			$("#Button_Stop").text("⏹️ " + I18n.t("Stop"));
 			$("#Button_Analyse").text("🔍 " + I18n.t("Analyse"));
 			$("#Button_Compress").text("🗜 " + I18n.t("Compress"));
+			$("#Defender_Notice").text(I18n.t("Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs."));
 			$("#Current_Directory_Header_Text").text(I18n.t("Current Directory"));
 			$("#Current_Directory_Name").text(I18n.t("Waiting for analysis..."));
 			$("#Estimate_Recovery_Label, #Current_Estimate_Recovery_Label").text(I18n.t("will be recovered"));
@@ -619,13 +620,29 @@ var Gui = (function() {
 			Gui.scanning();
 		},
 
+		set_progress: function(pct) {
+			var track = $("#Activity_Progress");
+			var fill = $("#Activity_Progress_Fill");
+			track.removeClass("indeterminate complete");
+
+			if (pct == null || pct < 0) {
+				track.addClass("indeterminate");
+				fill.css("width", "");
+				track.attr("aria-valuenow", "");
+				return;
+			}
+
+			var clamped = Math.max(0, Math.min(100, pct));
+			fill.css("width", clamped + "%");
+			track.attr("aria-valuenow", String(Math.round(clamped)));
+			if (clamped >= 100) {
+				track.addClass("complete");
+			}
+		},
+
 		set_status: function(status, pct, quick_history) {
 			$("#Activity_Text").text(status);
-			if (pct != null) {
-				$("#Activity_Progress").val(pct);
-			} else {
-				$("#Activity_Progress").removeAttr("value");
-			}
+			Gui.set_progress(pct);
 			if (quick_history) {
 				quick_history_mode = true;
 				if (directory_summary_history.length) {
@@ -639,6 +656,7 @@ var Gui = (function() {
 			Gui.hide_quick_mode();
 			$("#Activity").show();
 			$("#Analysis").show();
+			Gui.set_progress(-1);
 
 			$("#Button_Pause").show();
 			$("#Button_Resume").hide();
@@ -754,7 +772,10 @@ var Gui = (function() {
 			nav.show();
 			prev.prop("disabled", directory_summary_index <= 0);
 			next.prop("disabled", directory_summary_index >= directory_summary_history.length - 1);
-			position.text((directory_summary_index + 1) + " / " + directory_summary_history.length);
+			position.text(I18n.t("{index} / {total}", {
+				index: directory_summary_index + 1,
+				total: directory_summary_history.length
+			}));
 		},
 
 		previous_directory: function() {
@@ -771,6 +792,48 @@ var Gui = (function() {
 			}
 			directory_summary_index += 1;
 			Gui.render_summaries();
+		},
+
+		set_analysis_timing: function(timing) {
+			if (!timing) {
+				$("#Analysis_Timing").text("");
+				return;
+			}
+			if (timing.walk_seconds != null && timing.check_seconds != null) {
+				$("#Analysis_Timing").text(
+					I18n.t(
+						"Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s",
+						{
+							walk_seconds: Util.format_number(timing.walk_seconds || 0, 2),
+							walk_rate: Util.format_number(timing.walk_rate || 0, 0),
+							check_seconds: Util.format_number(timing.check_seconds || 0, 2),
+							check_rate: Util.format_number(timing.check_rate || 0, 0)
+						}
+					) + "\n" + I18n.t(
+						"Entropy {entropy_seconds}s @ {entropy_rate}/s",
+						{
+							entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 2),
+							entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
+						}
+					)
+				);
+			} else {
+				$("#Analysis_Timing").text(
+					I18n.t(
+						"Scan {scan_seconds}s @ {scan_rate}/s",
+						{
+							scan_seconds: Util.format_number(timing.combined_scan_seconds || 0, 2),
+							scan_rate: Util.format_number(timing.scan_rate || 0, 0)
+						}
+					) + "\n" + I18n.t(
+						"Entropy {entropy_seconds}s @ {entropy_rate}/s",
+						{
+							entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 2),
+							entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
+						}
+					)
+				);
+			}
 		},
 
 		set_folder_summary: function(data) {
@@ -847,20 +910,7 @@ var Gui = (function() {
 			$("#Compressible_Size_Label").text(isAnalysis ? I18n.t("are compressible") : I18n.t("compressed in this run"));
 			$("#Skipped_Size_Label").text(I18n.t("excluded"));
 
-			if (data.analysis_timing) {
-				var t = data.analysis_timing;
-				$("#Analysis_Timing").text(I18n.t(
-					"Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec",
-					{
-						scan_seconds: Util.format_number(t.combined_scan_seconds || 0, 2),
-						scan_rate: Util.format_number(t.scan_rate || 0, 0),
-						entropy_seconds: Util.format_number(t.entropy_seconds || 0, 2),
-						entropy_rate: Util.format_number(t.entropy_rate || 0, 0)
-					}
-				));
-			} else {
-				$("#Analysis_Timing").text("");
-			}
+			Gui.set_analysis_timing(data.analysis_timing);
 
 			$("#File_Count_Compressed").text(Util.format_number(data.compressed.count, 0));
 			$("#File_Count_Compressible").text(Util.format_number(data.compressible.count, 0));
@@ -868,6 +918,9 @@ var Gui = (function() {
 		},
 
 		set_current_folder_summary: function(data, directory) {
+			if (data.analysis_timing) {
+				Gui.set_analysis_timing(data.analysis_timing);
+			}
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;
 			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);

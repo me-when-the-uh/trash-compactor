@@ -129,14 +129,21 @@ def get_volume_details(path: str) -> VolumeDetails:
 
     rotational = None
     if drive_type == DRIVE_FIXED and letter and len(letter) == 2 and letter[1] == ':':
-        inspector = DriveInspector(letter)
-        rotational = inspector.seek_penalty()
-        if rotational is None:
-            rotational = inspector.by_metadata()
+        try:
+            inspector = DriveInspector(letter)
+            rotational = inspector.seek_penalty()
             if rotational is None:
-                rotational = inspector.by_latency()
+                rotational = inspector.by_metadata()
                 if rotational is None:
-                    inspector.note_alignment()
+                    rotational = inspector.by_latency()
+                    if rotational is None:
+                        inspector.note_alignment()
+        except Exception as exc:
+            logging.debug(
+                "Drive inspection skipped for %s (WMI unavailable or failed): %s",
+                letter,
+                exc,
+            )
 
     return VolumeDetails(anchor, letter, drive_type, filesystem, rotational)
 
@@ -169,11 +176,16 @@ def is_hard_drive(drive_path: str) -> bool:
 
 class DriveInspector:
     def __init__(self, drive_letter: str):
-        if wmi is None:
-            raise ImportError("wmi module required for drive inspection")
         self.drive_letter = drive_letter
-        self.conn = wmi.WMI()
+        self.conn = None
         self._disk_number: Optional[int] = None
+        if wmi is None:
+            logging.debug("wmi module not installed; skipping WMI drive inspection for %s", drive_letter)
+            return
+        try:
+            self.conn = wmi.WMI()
+        except Exception as exc:
+            logging.debug("WMI connection failed for %s: %s", drive_letter, exc)
 
     def seek_penalty(self) -> Optional[bool]:
         disk_number = self._physical_disk_number()
@@ -215,6 +227,8 @@ class DriveInspector:
             KERNEL32.CloseHandle(handle)
 
     def by_metadata(self) -> Optional[bool]:
+        if self.conn is None:
+            return None
         disk_number = self._physical_disk_number()
         if disk_number is None:
             return None
@@ -263,6 +277,8 @@ class DriveInspector:
         return None
 
     def by_latency(self) -> Optional[bool]:
+        if self.conn is None:
+            return None
         disk_number = self._physical_disk_number()
         if disk_number is None:
             return None
@@ -293,6 +309,8 @@ class DriveInspector:
         return None
 
     def _physical_disk_number(self) -> Optional[int]:
+        if self.conn is None:
+            return None
         if self._disk_number is not None:
             return self._disk_number
 
@@ -313,6 +331,8 @@ class DriveInspector:
         return None
 
     def note_alignment(self) -> None:
+        if self.conn is None:
+            return
         disk_number = self._physical_disk_number()
         if disk_number is None:
             return

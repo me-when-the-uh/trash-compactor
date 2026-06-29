@@ -186,7 +186,10 @@
     "Scanning directory...": "Сканирование каталога...",
     "Scanning directory... {count} files found ({rate:.0f} files/s)": "Сканирование каталога... найдено файлов: {count} ({rate:.0f} файлов/с)",
     "Analyzing file entropy...": "Анализ энтропии файлов...",
+    "Analyzing files...": "Анализ файлов...",
+    "{index} / {total}": "{index} / {total}",
     "Analyzing... {processed}/{total} ({rate:.0f} files/s)": "Анализ... {processed}/{total} ({rate:.0f} файлов/с)",
+    "(Scanning more files...)": "(Сканирование дополнительных файлов...)",
     "Sampling entropy... {processed}/{total}": "Измерение энтропии... {processed}/{total}",
     "Analysis complete in {elapsed:.2f}s": "Анализ завершен за {elapsed:.2f} с",
     "Nothing to compress!": "Нечего сжимать!",
@@ -201,6 +204,7 @@
     "No default quick-compression targets were found on this system.": "На этой системе не найдено стандартных целей для быстрого сжатия.",
     "Quick analysis: scanning {directory} ({index}/{total})": "Быстрый анализ: сканирование {directory} ({index}/{total})",
     "Quick analysis complete": "Быстрый анализ завершен",
+    "Quick analysis complete in {elapsed:.2f}s": "Быстрый анализ завершен за {elapsed:.2f} с",
     "Trash Compactor GUI": "Графический интерфейс Trash Compactor",
     "Compress": "Сжать",
     "Settings": "Настройки",
@@ -252,5 +256,10 @@
     "GUI adapted from": "GUI адаптирован из",
     "The program will analyse {count} folders for compressibility.": "Программа проанализирует {count} папок на возможность сжатия.",
     "Administrator privileges are available, but they are not necessary for analysing folders.": "Права администратора доступны, но для анализа папок они не нужны.",
-    "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Сканирование {scan_seconds}с @ {scan_rate} файлов/с | Энтропия {entropy_seconds}с @ {entropy_rate} файлов/с"
+    "Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Сканирование {scan_seconds}с @ {scan_rate} файлов/с | Энтропия {entropy_seconds}с @ {entropy_rate} файлов/с",
+    "Walk {walk_seconds}s @ {walk_rate} files/sec | Check {check_seconds}s @ {check_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec": "Обход {walk_seconds}с @ {walk_rate} файлов/с | Проверка {check_seconds}с @ {check_rate} файлов/с | Энтропия {entropy_seconds}с @ {entropy_rate} файлов/с",
+    "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s": "Обход {walk_seconds}с @ {walk_rate}/с | Проверка {check_seconds}с @ {check_rate}/с",
+    "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Энтропия {entropy_seconds}с @ {entropy_rate}/с",
+    "Scan {scan_seconds}s @ {scan_rate}/s": "Сканирование {scan_seconds}с @ {scan_rate}/с",
+    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "Антивирус в реальном времени (например, Защитник Windows) повторно сканирует каждое чтение и каждый сжатый файл и может снизить скорость вдвое. Рассмотрите временное исключение целевых папок при первых запусках."
 }

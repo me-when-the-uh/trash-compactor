@@ -6,12 +6,12 @@
     <style>/*__STYLE__*/</style>
     <script>window.__TRASH_COMPACTOR_I18N__ = /*__I18N__*/</script>
     <script>window.__TRASH_COMPACTOR_BOOT_CONFIG__ = /*__BOOT_CONFIG__*/</script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>/*__JQUERY__*/</script>
     <script>/*__SCRIPT__*/</script>
   </head>
   <body>
     <header>
-      <h1><span class="side">⇒</span>T<span class="sml">r<span class="sml">a<span class="sml">s</span>h</span></span> C<span class="sml">o<span class="sml">m<span class="sml">p<span class="sml">a</span>c</span>t</span>o</span>r <span class="side">⇐</span></h1>
+      <h1><span class="side">⇒</span>Trash C<span class="sml">o<span class="sml">m<span class="sml">p<span class="sml">a</span>c</span>t</span>o</span>r <span class="side">⇐</span></h1>
       <div class="push"></div>
       <nav>
         <ul>
@@ -50,8 +50,8 @@
       <section id="Activity" style="display: none;">
         <div id="Activity_Text"></div>
         <div id="Analysis_Timing"></div>
-        <div class="ctr">
-          <progress id="Activity_Progress"></progress>
+        <div id="Activity_Progress" class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="Activity_Progress_Fill" class="progress-fill"></div>
         </div>
       </section>
 
@@ -77,9 +77,9 @@
             <div class="estimate-card-title current-card-title" id="Current_Directory_Header">
               <span id="Current_Directory_Header_Text">Current Directory</span>
               <div id="Current_Directory_Nav" class="directory-nav" style="display: none;">
-                <button id="Directory_Prev" class="directory-nav-btn" onclick="Gui.previous_directory()">◀</button>
+                <button id="Directory_Prev" class="directory-nav-btn" type="button" onclick="Gui.previous_directory()" title="Previous directory" aria-label="Previous directory">‹</button>
                 <span id="Directory_Position" class="directory-position"></span>
-                <button id="Directory_Next" class="directory-nav-btn" onclick="Gui.next_directory()">▶</button>
+                <button id="Directory_Next" class="directory-nav-btn" type="button" onclick="Gui.next_directory()" title="Next directory" aria-label="Next directory">›</button>
               </div>
             </div>
             <div class="estimate-card-path" id="Current_Directory_Name">Waiting for analysis...</div>
@@ -111,6 +111,10 @@
           <div class="settings-note">These options decide how aggressively Trash Compactor searches for savings and how it behaves on slower drives.</div>
         </div>
         <button id="Button_Reset" class="cancel settings-reset">Reset to recommended</button>
+      </div>
+
+      <div id="Defender_Notice" class="defender-notice setting-help performance">
+        Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.
       </div>
 
       <div class="setting-item">

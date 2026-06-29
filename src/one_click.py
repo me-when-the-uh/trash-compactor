@@ -255,7 +255,7 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
             + Style.RESET_ALL
         )
 
-    per_dir: list[tuple[Path, CompressionStats, list[tuple[Path, int, str]]]] = []
+    per_dir: list[tuple[Path, CompressionStats, list[tuple[str, int, str]]]] = []
 
     total_original = 0
     total_compressed_lzx = 0
