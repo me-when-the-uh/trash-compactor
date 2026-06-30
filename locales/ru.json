@@ -250,7 +250,7 @@
     "Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.": "Определяет, в каких единицах отображаются размеры файлов. Это меняет только их отображение, а не результаты сжатия.",
     "Where we're going, we don't need backups!": "Там, куда мы отправляемся, бэкапы не нужны!",
     "Report problems to:": "Сообщать об ошибках:",
-    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "Интеллектуальный графический интерфейс для сжатия файлов в NTFS с использованием эвристик на основе энтропии.",
+    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "(Надеюсь,) простой в использовании графический интерфейс для сжатия файлов в NTFS с использованием эвристик на основе энтропии.",
     "For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.": "Для файлов и программ, которые редко меняются. Любые изменения в файле отменяют его сжатие, поэтому рекомендуется запускать эту утилиту периодически.",
     "Vibe-coded in Python with a webview-slopped GUI.": "Сделано на Python с webview-интерфейсом на коленке.",
     "GUI adapted from": "GUI адаптирован из",
@@ -261,5 +261,11 @@
     "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s": "Обход {walk_seconds}с @ {walk_rate}/с | Проверка {check_seconds}с @ {check_rate}/с",
     "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Энтропия {entropy_seconds}с @ {entropy_rate}/с",
     "Scan {scan_seconds}s @ {scan_rate}/s": "Сканирование {scan_seconds}с @ {scan_rate}/с",
-    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "Антивирус в реальном времени (например, Защитник Windows) повторно сканирует каждое чтение и каждый сжатый файл и может снизить скорость вдвое. Рассмотрите временное исключение целевых папок при первых запусках."
+    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "Антивирус в реальном времени (например, Защитник Windows) повторно сканирует каждое чтение и каждый сжатый файл и может снизить скорость вдвое. Рассмотрите временное исключение целевых папок при первых запусках.",
+    "Compress Windows binaries (CompactOS)": "Сжать бинарные файлы Windows (CompactOS)",
+    "Requires administrator privileges. This will compress Windows system binaries to save additional space.": "Требуются права администратора. Это сожмёт системные бинарные файлы Windows для дополнительной экономии места.",
+    "Compressing Windows binaries...": "Сжатие бинарных файлов Windows...",
+    "CompactOS compression complete.": "Сжатие CompactOS завершено.",
+    "CompactOS compression failed (exit code {code}).": "Сжатие CompactOS не удалось (код выхода {code}).",
+    "CompactOS compression failed.": "Сжатие CompactOS не удалось."
 }

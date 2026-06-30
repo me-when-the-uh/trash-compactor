@@ -104,6 +104,7 @@ class GetQuickCompressionTargetsRequest(GuiRequest):
 @dataclass
 class StartQuickCompressionRequest(GuiRequest):
     type: str = field(init=False, default="StartQuickCompression")
+    compactos: bool = False
 
 
 @dataclass
@@ -182,6 +183,16 @@ class ProgressUpdateResponse(GuiResponse):
     status: str = ""
     pct: Optional[float] = None
     quick_history: bool = False
+    final: bool = False
+
+
+@dataclass
+class CompactOSIndicatorResponse(GuiResponse):
+    type: str = field(init=False, default="CompactOSIndicator")
+    show: bool = False
+    text: str = ""
+    done: bool = False
+    saved_bytes: int = 0
 
 
 @dataclass
@@ -224,7 +235,9 @@ def parse_request(data: str) -> Optional[GuiRequest]:
         elif req_type == "GetQuickCompressionTargets":
             return GetQuickCompressionTargetsRequest()
         elif req_type == "StartQuickCompression":
-            return StartQuickCompressionRequest()
+            return StartQuickCompressionRequest(
+                compactos=obj.get("compactos", False),
+            )
         elif req_type == "GetProgressUpdate":
             return GetProgressUpdateRequest()
         elif req_type == "SaveConfig":

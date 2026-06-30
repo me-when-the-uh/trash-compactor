@@ -85,9 +85,9 @@ class GuiApi:
         req = GetQuickCompressionTargetsRequest()
         return self.backend_handler(req)
 
-    def start_quick_compression(self) -> Dict[str, Any]:
+    def start_quick_compression(self, compactos: bool = False) -> Dict[str, Any]:
         """Start the one-click compression pipeline."""
-        req = StartQuickCompressionRequest()
+        req = StartQuickCompressionRequest(compactos=compactos)
         return self.backend_handler(req)
 
     def get_progress_update(self) -> Dict[str, Any]:
@@ -194,8 +194,8 @@ class GuiServer:
                 html=html,
                 js_api=self.api,
                 width=880,
-                height=610,
-                min_size=(760, 550),
+                height=650,
+                min_size=(760, 600),
                 resizable=True,
                 text_select=False,
                 background_color="#3d3d3d",

@@ -247,7 +247,7 @@
     "Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.": "Escolhe como os tamanhos de arquivo são exibidos na interface. Isso altera os rótulos que você vê, mas não os resultados da compactação.",
     "Where we're going, we don't need backups!": "Para onde vamos, não precisamos de backups!",
     "Report problems to:": "Relatar problemas em:",
-    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "Uma interface gráfica inteligente para compactação do sistema de arquivos NTFS do Windows usando heurísticas baseadas em entropia.",
+    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "Uma interface gráfica (com sorte) fácil de usar para compactação do sistema de arquivos NTFS do Windows usando heurísticas baseadas em entropia.",
     "For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.": "Para uso com arquivos e programas que raramente mudam - qualquer modificação desfaz a compactação desse arquivo, então é uma boa ideia executar esta ferramenta periodicamente.",
     "Vibe-coded in Python with a webview-slopped GUI.": "Feito em Python com uma GUI improvisada em webview.",
     "GUI adapted from": "GUI adaptada de",
@@ -258,5 +258,11 @@
     "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s": "Varredura {walk_seconds}s @ {walk_rate}/s | Verificação {check_seconds}s @ {check_rate}/s",
     "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Entropia {entropy_seconds}s @ {entropy_rate}/s",
     "Scan {scan_seconds}s @ {scan_rate}/s": "Varredura {scan_seconds}s @ {scan_rate}/s",
-    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "O antivírus em tempo real (p. ex. Windows Defender) reescaneia cada leitura e cada arquivo compactado e pode reduzir a velocidade pela metade. Considere excluir temporariamente as pastas de destino nas primeiras execuções."
+    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "O antivírus em tempo real (p. ex. Windows Defender) reescaneia cada leitura e cada arquivo compactado e pode reduzir a velocidade pela metade. Considere excluir temporariamente as pastas de destino nas primeiras execuções.",
+    "Compress Windows binaries (CompactOS)": "Compactar binários do Windows (CompactOS)",
+    "Requires administrator privileges. This will compress Windows system binaries to save additional space.": "Requer privilégios de administrador. Isso vai compactar os binários do sistema Windows para economizar espaço adicional.",
+    "Compressing Windows binaries...": "Compactando binários do Windows...",
+    "CompactOS compression complete.": "Compactação CompactOS concluída.",
+    "CompactOS compression failed (exit code {code}).": "Compactação CompactOS falhou (código de saída {code}).",
+    "CompactOS compression failed.": "Compactação CompactOS falhou."
 }

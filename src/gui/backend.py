@@ -9,7 +9,7 @@ from .message_types import (
     GuiRequest,
     GuiResponse,
     AnalyseFolderRequest,
-    StartCompressionRequest, 
+    StartCompressionRequest,
     PauseCompressionRequest,
     ResumeCompressionRequest,
     StopCompressionRequest,
@@ -21,7 +21,8 @@ from .message_types import (
     WarningResponse,
     ConfigResponse,
     QuickCompressionTargetsResponse,
-    ResetConfigRequest
+    ResetConfigRequest,
+    CompactOSIndicatorResponse
 )
 from .webview_server import create_gui_app, GuiServer
 from ..i18n import _
@@ -34,7 +35,7 @@ from ..workers import lzx_worker_count, xp_worker_count
 from ..config import DEFAULT_MIN_SAVINGS_PERCENT, DRY_RUN_CONSERVATIVE_FACTORS
 from ..file_utils import is_admin
 from ..skip_logic import commit_incompressible_cache
-from ..one_click import resolve_targets
+from ..one_click import resolve_targets, run_compactos_hidden
 
 
 UI_STATUS_INTERVAL_SECONDS = 0.10
@@ -328,7 +329,8 @@ class GuiBackend:
             return self._make_quick_targets_response()
 
         elif req_type == "StartQuickCompression":
-            self.start_worker(self._run_quick_compression)
+            compactos = getattr(request, "compactos", False)
+            self.start_worker(lambda: self._run_quick_compression(compactos=compactos))
             return StateResponse("Scanning")
 
         elif req_type == "PauseCompression":
@@ -383,12 +385,14 @@ class GuiBackend:
         quick_history: bool = False,
         quick_dir_index: Optional[int] = None,
         quick_dir_total: Optional[int] = None,
+        final: bool = False,
     ) -> None:
         self._send(
             ProgressUpdateResponse(
                 status,
                 self._scale_quick_progress(pct, quick_dir_index, quick_dir_total),
                 quick_history=quick_history,
+                final=final,
             )
         )
 
@@ -835,8 +839,8 @@ class GuiBackend:
             analysis_timing=self.last_analysis_timing,
         )
 
-    def _run_quick_compression(self):
-        self._run_pipeline("Quick compression", self._run_quick_compression_pipeline)
+    def _run_quick_compression(self, compactos: bool = False):
+        self._run_pipeline("Quick compression", lambda: self._run_quick_compression_pipeline(compactos=compactos))
 
     def _run_compression_pipeline(self):
         self._configure_worker_environment()
@@ -917,7 +921,11 @@ class GuiBackend:
         self.last_analysis_plan = None
         self.last_analysis_stats = None
 
-        self._send(ProgressUpdateResponse(_("Complete!"), 100.0))
+        self._send_progress(
+            _("Complete!"),
+            100.0,
+            final=True,
+        )
         self._send_folder_summary(
             stats,
             stats.compressed_files,
@@ -998,15 +1006,13 @@ class GuiBackend:
                 elapsed = max(0.001, now - exec_start_time)
                 rate = compressed_count[0] / elapsed
                 pct = (compressed_count[0] / total_to_compress) * 100.0
-                self._send(
-                    ProgressUpdateResponse(
-                        _("Quick compressing... {compressed}/{total} ({rate:.0f} files/s)").format(
-                            compressed=compressed_count[0],
-                            total=total_to_compress,
-                            rate=rate,
-                        ),
-                        pct,
-                    )
+                self._send_progress(
+                    _("Quick compressing... {compressed}/{total} ({rate:.0f} files/s)").format(
+                        compressed=compressed_count[0],
+                        total=total_to_compress,
+                        rate=rate,
+                    ),
+                    pct,
                 )
                 self._send_folder_summary(
                     stats,
@@ -1052,9 +1058,14 @@ class GuiBackend:
         self.last_analysis_plan = None
         self.last_analysis_stats = None
         self.quick_analysis_results = []
-        self._send(ProgressUpdateResponse(_("Quick compression complete"), 100.0, quick_history=True))
+        self._send_progress(
+            _("Quick compression complete"),
+            100.0,
+            quick_history=True,
+            final=True,
+        )
 
-    def _run_quick_compression_pipeline(self):
+    def _run_quick_compression_pipeline(self, compactos: bool = False):
         self._configure_worker_environment()
 
         targets = list(resolve_targets().directories)
@@ -1063,7 +1074,26 @@ class GuiBackend:
             self._send(WarningResponse(_("Warning"), _("No default quick-compression targets were found on this system.")))
             return
 
-        quick_start_time = time.perf_counter()
+        compactos_thread = None
+        compactos_result = {"success": False, "output": ""}
+        if compactos and is_admin():
+            self._send(CompactOSIndicatorResponse(show=True, text=_("Compressing Windows binaries...")))
+
+            def _run_compactos():
+                def _progress(s, p=None):
+                    self._send(CompactOSIndicatorResponse(show=True, text=s))
+                success, output, parsed = run_compactos_hidden(
+                    progress_callback=_progress,
+                    line_callback=_progress,
+                )
+                compactos_result["success"] = success
+                compactos_result["output"] = output
+                saved = int(parsed.get("saved_bytes") or 0) if isinstance(parsed, dict) else 0
+                msg = _("Done compressing Windows binaries.") if success else _("CompactOS compression failed.")
+                self._send(CompactOSIndicatorResponse(show=True, text=msg, done=success, saved_bytes=saved))
+            compactos_thread = threading.Thread(target=_run_compactos, daemon=True)
+            compactos_thread.start()
+
         quick_results: list[dict[str, Any]] = []
         total_analysis_stats = CompressionStats()
         total_analysis_stats.min_savings_percent = self.min_savings
@@ -1146,12 +1176,14 @@ class GuiBackend:
             self._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
 
         self.quick_analysis_results = quick_results
-        quick_elapsed = max(0.001, time.perf_counter() - quick_start_time)
         self._send_progress(
-            _("Quick analysis complete in {elapsed:.2f}s").format(elapsed=quick_elapsed),
+            _("Scanning complete"),
             100.0,
             quick_history=True,
         )
+
+        if compactos_thread is not None:
+            compactos_thread.join()
 
 def run_gui(benchmark_ok: Optional[bool] = None):
     backend = GuiBackend(benchmark_ok=benchmark_ok)

@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import sys
 import time
@@ -65,6 +66,7 @@ def resolve_targets() -> OneClickTargets:
 
 
 def _spawn_compactos_window() -> None:
+    """Spawn a visible CompactOS window (CLI fallback)."""
     if os.name != "nt":
         return
 
@@ -100,6 +102,111 @@ def _spawn_compactos_window() -> None:
             subprocess.Popen(["cmd.exe", "/c", "start", "cmd.exe", "/c", cmd])
         except OSError:
             return
+
+
+def _parse_compactos_summary(output: str) -> dict[str, object]:
+    if not output:
+        return {}
+    info: dict[str, object] = {}
+    m = re.search(r"([\d,]+)\s+files?\s+within\s+([\d,]+)\s+dir", output, re.I)
+    if m:
+        info["files"] = int(m.group(1).replace(",", ""))
+        info["dirs"] = int(m.group(2).replace(",", ""))
+    m = re.search(
+        r"([\d,]+)\s+total bytes of data are stored in ([\d,]+)\s+bytes", output, re.I
+    )
+    if m:
+        orig = int(m.group(1).replace(",", ""))
+        comp = int(m.group(2).replace(",", ""))
+        info["original_bytes"] = orig
+        info["compressed_bytes"] = comp
+        info["saved_bytes"] = max(0, orig - comp)
+    m = re.search(r"compression ratio is ([\d.]+)\s+to\s+1", output, re.I)
+    if m:
+        info["ratio"] = float(m.group(1))
+    return info
+
+
+def _human_bytes(n: int) -> str:
+    if n >= (1 << 30):
+        return f"{n / (1 << 30):.1f} GiB"
+    if n >= (1 << 20):
+        return f"{n / (1 << 20):.1f} MiB"
+    if n >= (1 << 10):
+        return f"{n / (1 << 10):.1f} KiB"
+    return f"{n} B"
+
+
+def run_compactos_hidden(
+    progress_callback=None,
+    line_callback=None,
+) -> tuple[bool, str, dict]:
+    """Run compact.exe /compactos:always hidden (no visible window)."""
+    if os.name != "nt":
+        return False, "Not Windows"
+
+    import tempfile
+    comp_log = Path(tempfile.gettempdir()) / "compactos_result.txt"
+
+    ps_command = "compact.exe /compactos:always 2>&1"
+
+    try:
+        proc = subprocess.Popen(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                ps_command,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+
+        output_lines = []
+        if progress_callback:
+            progress_callback(_("Compressing Windows binaries..."), None)
+
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            if not line:
+                continue
+            output_lines.append(line)
+            if line_callback:
+                line_callback(line)
+            if progress_callback:
+                progress_callback(line, None)
+
+        proc.wait()
+        output = "\n".join(output_lines)
+        success = proc.returncode == 0
+        parsed = _parse_compactos_summary(output)
+
+        if progress_callback:
+            if success:
+                progress_callback(_("CompactOS compression complete."), 100.0)
+            else:
+                progress_callback(
+                    _("CompactOS compression failed (exit code {code}).").format(code=proc.returncode),
+                    100.0,
+                )
+
+        # Write log for CLI fallback
+        try:
+            comp_log.write_text(output, encoding="utf-8")
+            os.environ["COMPACTOS_LOG"] = str(comp_log)
+        except Exception:
+            pass
+
+        return success, output, parsed
+
+    except OSError:
+        return False, "Failed to start compact.exe", {}
 
 
 def _attention_beep() -> None:
@@ -355,9 +462,18 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
     if comp_log and Path(comp_log).exists():
         try:
             content = Path(comp_log).read_text(encoding="utf-8", errors="ignore")
-            for line in content.splitlines():
-                if "bytes of data" in line.lower() or "ratio" in line.lower() or "compression" in line.lower():
-                    print(Fore.GREEN + f"CompactOS: {line.strip()}" + Style.RESET_ALL)
+            parsed = _parse_compactos_summary(content)
+            if parsed.get("saved_bytes"):
+                print(
+                    Fore.GREEN
+                    + f"CompactOS: {parsed.get('files', '?')} files, saved {_human_bytes(int(parsed['saved_bytes']))}"
+                    + (f" (ratio {parsed['ratio']:.1f})" if parsed.get("ratio") else "")
+                    + Style.RESET_ALL
+                )
+            else:
+                for line in content.splitlines():
+                    if "bytes of data" in line.lower() or "ratio" in line.lower() or "compression" in line.lower():
+                        print(Fore.GREEN + f"CompactOS: {line.strip()}" + Style.RESET_ALL)
             Path(comp_log).unlink(missing_ok=True)
         except Exception:
             pass

@@ -2,8 +2,6 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
 ## [v0.7.0] - 2026-06-29
 ### Added
 - Progress bar for GUI mode
@@ -12,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - GUI was made more modern and user-friendly
 - Scanning logic has been changed to a sliding window algorithm, to decrease average RAM usage by 95%
 
+### Fixed
+- Minimum window size increased, as it wasn't enough to house all items
 
 ## [v0.6.0] - 2026-03-23
 ### Added

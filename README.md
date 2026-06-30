@@ -54,7 +54,7 @@ Note: For Option 2, ensure Git and Python 3.11 or 3.12 are installed on your sys
 Optional: you can compile the app yourself as I did, using PyInstaller:
     ```powershell
     python -m pip install -r requirements.txt
-    python -m PyInstaller --clean --noconfirm trash-compactor-next.spec
+    python -m PyInstaller --clean --noconfirm --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next main.py
     ```
   The target machine also needs the [Microsoft WebView2 runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
     or, since we're interested in squeezing programs into small packages, you can install a build of [UPX](https://github.com/upx/upx) to build an app with compressed binaries:
@@ -73,7 +73,7 @@ Optional: you can compile the app yourself as I did, using PyInstaller:
     - Apply optimal compression algorithms
     - Display compression statistics
 
-### Interactive configuration
+### GUI-based Interactive configuration
 
 Launching without arguments opens a GUI window that lets you browse to the target directory, toggle flags, and adjust the minimum savings threshold before starting.
 
@@ -85,7 +85,7 @@ Launching without arguments opens a GUI window that lets you browse to the targe
   3. Blue projected values indicate that you'll save more than double of the Minimum Savings % on average. Go for it!
 - If it looks good to you, press "Compress" to compress the files in the directory.
 
-### Scripting Operation Modes
+### CLI-based Scripting Operation Modes
 
 Trash-Compactor offers three distinct operation modes to handle different scenarios:
 
@@ -160,7 +160,6 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 - Research advanced compression methods:
   - Evaluate alternative NTFS compression APIs, like [UPX](https://github.com/upx/upx)
   - Consider filesystem-agnostic approaches (moving compressed files in/out of the source drive unpacks them)
-  - Benchmark different compression strategies
   - Research possibilities for custom compression algorithms
   - Investigate integration with other Windows compression features
 - Quality of Life features:
@@ -168,5 +167,5 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 - Security and Reliability:
   - Improve handling and messaging for network/NAS paths
   - Add verification of filesystem compatibility
-- Backburner / deferred:
-  - DirectStorage detection research (defer until a dedicated test matrix is available)
+- Backburner:
+  - DirectStorage detection research

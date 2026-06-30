@@ -213,7 +213,8 @@
 		},
 
 		start_quick_compression: function() {
-			pywebview.api.start_quick_compression().then(_dispatch_if_message);
+			var compactos = $("#Quick_CompactOS").is(":checked");
+			pywebview.api.start_quick_compression(compactos).then(_dispatch_if_message);
 		},
 
 		pause: function() {
@@ -292,6 +293,10 @@ var Response = (function() {
 						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
 					break;
 
+				case "CompactOSIndicator":
+						Gui.set_compactos_indicator(!!msg.show, msg.text, !!msg.done, msg.saved_bytes || 0);
+					break;
+
 				case "Warning":
 					Gui.show_warning(msg.title, msg.message);
 					break;
@@ -323,6 +328,7 @@ var Gui = (function() {
 	var last_saved_config = null;
 	var ignore_config_changes = false;
 	var default_lzx_help = "";
+	var compactos_active = false;
 
 	function _upsert_directory_summary(payload) {
 		var i;
@@ -337,7 +343,7 @@ var Gui = (function() {
 
 	function _flush_queued_updates() {
 		if (status_queue) {
-			Gui.set_status(status_queue.status, status_queue.pct, status_queue.quick_history);
+			Gui.set_status(status_queue.status, status_queue.pct, status_queue.quick_history, status_queue.final);
 			status_queue = null;
 		}
 		if (current_summary_queue) {
@@ -403,6 +409,8 @@ var Gui = (function() {
 			$("#Quick_Mode .quick-mode-note").text(I18n.t("This runs the analysis first before anything is compressed."));
 			$("#Button_Quick_Start").text(I18n.t("Start quick analysis"));
 			$("#Button_Quick_Cancel").text(I18n.t("Cancel"));
+			$("#Quick_CompactOS_Label").text(I18n.t("Compress Windows binaries (CompactOS)"));
+			$("#Quick_CompactOS_Help").text(I18n.t("Requires administrator privileges. This will compress Windows system binaries to save additional space."));
 			$("#Button_Pause").text("⏸️ " + I18n.t("Pause"));
 			$("#Button_Resume").text("▶️ " + I18n.t("Resume"));
 			$("#Button_Stop").text("⏹️ " + I18n.t("Stop"));
@@ -463,11 +471,12 @@ var Gui = (function() {
 			Gui.request_initial_config();
 		},
 
-		queue_status: function(status, pct, quick_history) {
+		queue_status: function(status, pct, quick_history, final) {
 			status_queue = {
 				status: status,
 				pct: pct,
-				quick_history: !!quick_history
+				quick_history: !!quick_history,
+				final: !!final
 			};
 		},
 
@@ -594,6 +603,11 @@ var Gui = (function() {
 
 			if (allow_compactos) {
 				note += " " + I18n.t("Administrator privileges are available, but they are not necessary for analysing folders.");
+				$("#Quick_CompactOS_Container").show();
+				$("#Quick_CompactOS").prop("checked", false);
+			} else {
+				$("#Quick_CompactOS_Container").hide();
+				$("#Quick_CompactOS").prop("checked", false);
 			}
 
 			message.text(note);
@@ -620,7 +634,7 @@ var Gui = (function() {
 			Gui.scanning();
 		},
 
-		set_progress: function(pct) {
+		set_progress: function(pct, final) {
 			var track = $("#Activity_Progress");
 			var fill = $("#Activity_Progress_Fill");
 			track.removeClass("indeterminate complete");
@@ -635,14 +649,14 @@ var Gui = (function() {
 			var clamped = Math.max(0, Math.min(100, pct));
 			fill.css("width", clamped + "%");
 			track.attr("aria-valuenow", String(Math.round(clamped)));
-			if (clamped >= 100) {
+			if (clamped >= 100 && final) {
 				track.addClass("complete");
 			}
 		},
 
-		set_status: function(status, pct, quick_history) {
+		set_status: function(status, pct, quick_history, final) {
 			$("#Activity_Text").text(status);
-			Gui.set_progress(pct);
+			Gui.set_progress(pct, final);
 			if (quick_history) {
 				quick_history_mode = true;
 				if (directory_summary_history.length) {
@@ -961,6 +975,63 @@ var Gui = (function() {
 
 		show_warning: function(title, message) {
 			alert(title + "\n\n" + message);
+		},
+
+		set_compactos_indicator: function(active, text, done, savedBytes) {
+			compactos_active = active;
+			var indicator = $("#CompactOS_Indicator");
+			var indicatorText = $("#CompactOS_Indicator_Text");
+			var icon = indicator.find(".compactos-icon");
+			if (active) {
+				Gui._reserve_compactos_size(indicator, indicatorText, icon);
+				indicator.removeClass("stopped");
+				if (done) {
+					indicator.addClass("done");
+					var base = text || I18n.t("Done compressing Windows binaries.");
+					if (savedBytes > 0) {
+						base += " Saved " + Util.bytes_to_human(savedBytes);
+					}
+					indicatorText.text(base);
+					icon.text("✓");
+				} else if (text && /fail|error/i.test(text)) {
+					indicator.removeClass("done").addClass("stopped");
+					icon.text("!");
+				} else {
+					indicator.removeClass("done");
+					indicatorText.text(text || I18n.t("Compressing Windows binaries..."));
+					icon.text("");
+				}
+				indicator.show();
+			} else {
+				indicator.hide().removeClass("done stopped");
+				icon.text("");
+			}
+		},
+
+		_reserve_compactos_size: function($ind, $txt, $icon) {
+			if ($ind.data("sized")) return;
+			var probe = $ind.clone().css({
+				display: "inline-flex", visibility: "hidden",
+				position: "absolute", left: "-9999px"
+			}).appendTo("body");
+			var pTxt = probe.find(".compactos-text");
+			var pIcon = probe.find(".compactos-icon");
+			var maxW = 0;
+			[
+				{t: I18n.t("Compressing Windows binaries..."), d: false},
+				{t: I18n.t("Done compressing Windows binaries."), d: true},
+				{t: I18n.t("Done compressing Windows binaries.") + " Saved 12.3 GiB.", d: true}
+			].forEach(function(c) {
+				probe.toggleClass("done", c.d);
+				pTxt.text(c.t);
+				pIcon.text(c.d ? "✓" : "");
+				void probe[0].offsetWidth;
+				var w = probe[0].scrollWidth;
+				if (w > maxW) maxW = w;
+			});
+			probe.remove();
+			if (maxW > 80) $ind.css("min-width", maxW + "px");
+			$ind.data("sized", true);
 		}
 	};
 })();

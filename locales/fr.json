@@ -247,7 +247,7 @@
     "Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.": "Choisit la façon dont les tailles de fichiers sont affichées dans l'interface. Cela change les libellés visibles, pas les résultats de compression.",
     "Where we're going, we don't need backups!": "Là où nous allons, nous n'avons pas besoin de sauvegardes !",
     "Report problems to:": "Signaler les problèmes sur :",
-    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "Une interface graphique intelligente pour la compression du système de fichiers NTFS Windows à l'aide d'heuristiques basées sur l'entropie.",
+    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "Une interface graphique (espérons-le) facile à utiliser pour la compression du système de fichiers NTFS Windows à l'aide d'heuristiques basées sur l'entropie.",
     "For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.": "À utiliser avec des fichiers et programmes qui changent rarement - toute modification annulera la compression de ce fichier, donc relancer régulièrement cet outil est une bonne idée.",
     "Vibe-coded in Python with a webview-slopped GUI.": "Codé en Python avec une interface webview bricolée.",
     "GUI adapted from": "Interface adaptée de",
@@ -258,5 +258,11 @@
     "Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s": "Parcours {walk_seconds}s @ {walk_rate}/s | Vérification {check_seconds}s @ {check_rate}/s",
     "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Entropie {entropy_seconds}s @ {entropy_rate}/s",
     "Scan {scan_seconds}s @ {scan_rate}/s": "Analyse {scan_seconds}s @ {scan_rate}/s",
-    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "L'antivirus en temps réel (p. ex. Windows Defender) rescanne chaque lecture et chaque fichier compressé et peut diviser la vitesse par deux. Envisagez d'exclure temporairement les dossiers cibles lors des premières exécutions."
+    "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "L'antivirus en temps réel (p. ex. Windows Defender) rescanne chaque lecture et chaque fichier compressé et peut diviser la vitesse par deux. Envisagez d'exclure temporairement les dossiers cibles lors des premières exécutions.",
+    "Compress Windows binaries (CompactOS)": "Compresser les binaires Windows (CompactOS)",
+    "Requires administrator privileges. This will compress Windows system binaries to save additional space.": "Nécessite des privilèges administrateur. Cela va compresser les binaires système Windows pour économiser de l'espace supplémentaire.",
+    "Compressing Windows binaries...": "Compression des binaires Windows...",
+    "CompactOS compression complete.": "Compression CompactOS terminée.",
+    "CompactOS compression failed (exit code {code}).": "Compression CompactOS échouée (code de sortie {code}).",
+    "CompactOS compression failed.": "Compression CompactOS échouée."
 }

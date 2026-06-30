@@ -11,7 +11,7 @@
   </head>
   <body>
     <header>
-      <h1><span class="side">⇒</span>Trash C<span class="sml">o<span class="sml">m<span class="sml">p<span class="sml">a</span>c</span>t</span>o</span>r <span class="side">⇐</span></h1>
+      <h1><span class="side">⇒</span>T<span class="sml">r<span class="sml">a<span class="sml">s<span class="sml">h</span> C<span class="sml">o<span class="sml">m<span class="sml">p<span class="sml">a</span>c</span>t</span>o</span></span></span></span>r <span class="side">⇐</span></h1>
       <div class="push"></div>
       <nav>
         <ul>
@@ -19,13 +19,19 @@
           <li><button id="Button_Page_Settings" onclick="Gui.page('Settings')">☸ Settings</button></li>
           <li><button id="Button_Page_About" onclick="Gui.page('About')">⌕ About</button></li>
         </ul>
-        <div style="text-align: right; margin: 4px">
+        <!-- <div style="text-align: right; margin: 4px">
           <small style="color: grey;"><span class="version"></span> / <span class="compile-date"></span></small>
-        </div>
+        </div> -->
       </nav>
     </header>
 
     <section class="page" id="Compress">
+      <div class="compactos-wrap">
+        <div id="CompactOS_Indicator" class="compactos-indicator" style="display: none;">
+          <span class="compactos-icon" aria-hidden="true"></span>
+          <span id="CompactOS_Indicator_Text" class="compactos-text"></span>
+        </div>
+      </div>
       <section id="FolderChooser">
         <div class="ctr action-row">
           <button id="Button_Quick" class="quick" onclick="Action.quick_compression()">Quick compression</button>
@@ -40,6 +46,13 @@
           <div class="quick-mode-note">This runs the analysis first before anything is compressed.</div>
           <div id="Quick_Mode_Message" class="quick-mode-message"></div>
           <ul id="Quick_Mode_Targets" class="quick-mode-targets"></ul>
+          <div class="setting-item" id="Quick_CompactOS_Container" style="display: none;">
+            <label class="setting-row setting-toggle" for="Quick_CompactOS">
+              <span class="setting-label" id="Quick_CompactOS_Label">Compress Windows binaries (CompactOS)</span>
+              <input type="checkbox" id="Quick_CompactOS" name="compactos">
+            </label>
+            <div id="Quick_CompactOS_Help" class="setting-help">Requires administrator privileges. This will compress Windows system binaries to save additional space.</div>
+          </div>
           <div class="ctr">
             <button id="Button_Quick_Start" class="quick" onclick="Action.start_quick_compression()">Start quick analysis</button>
             <button id="Button_Quick_Cancel" class="cancel" onclick="Gui.hide_quick_mode()">Cancel</button>
@@ -167,7 +180,7 @@
 
       <hr>
 
-      <p>An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.</p>
+      <p>A (hopefully) easy-to-use graphical interface for Windows NTFS compression using entropy-based heuristics.</p>
 
       <p>For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
 

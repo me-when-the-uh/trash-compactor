@@ -3,7 +3,9 @@ html {
 }
 
 body {
-  font-family: "Helvetica Neue", Helvetica, Arial, serif;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
   color: #eee;
   background-color: rgb(61, 61, 61);
   margin: 0;
@@ -12,6 +14,10 @@ body {
   overflow-x: hidden;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.page {
+  font-size: 1.14em;
 }
 
 header {
@@ -27,7 +33,7 @@ header .push {
   margin-left: auto;
 }
 
-progress, textarea, input {
+progress {
   margin: 4px;
 }
 
@@ -40,7 +46,7 @@ h1 {
   background-color: #333;
   flex: 0 1 auto;
   min-width: 0;
-  font-size: clamp(0.85em, 1.2vw + 0.5em, 1.1em);
+  font-size: clamp(1.05em, 1.4vw + 0.65em, 1.35em);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -94,12 +100,34 @@ h1 span.sml {
 }
 
 input, textarea, select {
-  border: 1px solid black;
-  padding: 4px;
-  margin: 4px;
-  font-size: larger;
+  background-color: #252525;
+  color: #f1f1f1;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 5px 7px;
+  margin: 2px 4px;
+  font-size: 0.98em;
   -webkit-user-select: text;
   user-select: text;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: #229af7;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(34, 154, 247, 0.18);
+}
+
+input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+input[type="checkbox"] {
+  accent-color: #229af7;
+  width: 15px;
+  height: 15px;
+  vertical-align: middle;
+  margin: 0 6px 0 2px;
+  flex-shrink: 0;
 }
 
 a, a:visited {
@@ -176,121 +204,275 @@ section button.quick:hover, section button.quick:active {
   }
 }
 
+@keyframes compactos-spin {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.compactos-wrap {
+  text-align: center;
+  margin: 2px 0 4px;
+}
+
+.compactos-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: rgba(143, 201, 255, 0.1);
+  border: 1px solid rgba(143, 201, 255, 0.25);
+  border-radius: 999px;
+  font-size: 0.82em;
+  color: #8fc9ff;
+  white-space: nowrap;
+}
+
+.compactos-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.compactos-indicator:not(.done) .compactos-icon {
+  border: 2px solid rgba(143, 201, 255, 0.25);
+  border-top-color: #8fc9ff;
+  border-radius: 50%;
+  animation: compactos-spin 0.9s linear infinite;
+}
+
+.compactos-indicator.done .compactos-icon {
+  color: #2ecc55;
+  border: none;
+  animation: none;
+}
+
+.compactos-indicator.stopped .compactos-icon {
+  animation: none;
+  border-color: rgba(170, 170, 170, 0.4);
+}
+
+.compactos-indicator.done {
+  background: rgba(46, 204, 85, 0.12);
+  border-color: rgba(46, 204, 85, 0.35);
+  color: #7fdc9f;
+}
+
+.compactos-text {
+  font-weight: 500;
+}
+
+#Quick_CompactOS_Container {
+  margin: 2px 0;
+}
+#Quick_CompactOS_Container .setting-item {
+  padding: 2px 0;
+  gap: 2px;
+}
+#Quick_CompactOS_Container .setting-help {
+  font-size: 0.75em;
+  line-height: 1.2;
+  margin-top: 0;
+}
+input#Quick_CompactOS {
+  width: 18px;
+  height: 18px;
+  margin: 0 6px 0 2px;
+  transform: scale(1.35);
+  flex-shrink: 0;
+}
+
+.quick-mode-panel {
+  padding: 6px 8px;
+}
+.quick-mode-title {
+  font-size: 0.95em;
+  margin-bottom: 1px;
+}
+.quick-mode-note {
+  margin-bottom: 3px;
+}
+.quick-mode-message {
+  margin-bottom: 3px;
+}
+.quick-mode-targets {
+  margin: 1px 0 4px 14px;
+}
+
 section {
-  margin: clamp(6px, 1vw, 8px) clamp(8px, 1.5vw, 12px);
+  margin: 8px 10px 6px;
   display: block;
   min-width: 0;
 }
 
 #Settings {
-  max-width: 760px;
+  max-width: 860px;
+  width: 100%;
+  padding-right: 16px;
 }
 
 .settings-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 10px;
-  margin-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  gap: 14px;
+  padding: 0 8px 9px 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  flex-wrap: wrap;
 }
 
 .settings-title {
-  font-size: 1.02em;
+  font-size: 1.0em;
   font-weight: 700;
-  letter-spacing: 0.02em;
-  margin-bottom: 2px;
+  letter-spacing: 0.01em;
+  margin-bottom: 1px;
 }
 
 .settings-note {
-  color: #bdbdbd;
+  color: #a8a8a8;
   font-size: 0.89em;
-  line-height: 1.4;
-  max-width: 62ch;
+  line-height: 1.35;
+  max-width: 58ch;
 }
 
 .setting-item {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 10px 0;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  gap: 3px;
+  padding: 9px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .setting-item:first-of-type {
   border-top: 0;
-  padding-top: 8px;
+  padding-top: 6px;
 }
 
 .setting-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  gap: 14px;
+  flex-wrap: nowrap;
 }
 
 .setting-toggle {
   cursor: pointer;
+  padding: 2px 0;
 }
 
 .setting-label {
-  font-size: 0.98em;
+  font-size: 0.95em;
   font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .setting-help {
-  color: #b3b3b3;
+  color: #a8a8a8;
   font-size: 0.88em;
-  line-height: 1.35;
-  max-width: 60ch;
+  line-height: 1.32;
+  max-width: 68ch;
+  padding-left: 1px;
 }
 
 .setting-help.warning {
-  color: #f0c84b;
-  font-weight: 600;
+  color: #e8c36a;
+  font-weight: 500;
+  background: rgba(80, 60, 20, 0.3);
+  padding: 2px 4px;
+  border-radius: 2px;
+  display: inline-block;
 }
 
 .setting-help.performance {
-  color: #8fc9ff;
-  font-weight: 500;
+  color: inherit;
 }
 
 .defender-notice {
-  margin-top: 4px;
+  margin: 4px 8px 8px 8px;
   padding: 8px 10px;
-  border-radius: 6px;
-  background: rgba(143, 201, 255, 0.08);
-  border: 1px solid rgba(143, 201, 255, 0.2);
+  border-radius: 4px;
+  background: #2a323a;
+  border: 1px solid #3a4a57;
+  border-left: 3px solid #5fa8e6;
+  font-size: 0.87em;
+  line-height: 1.35;
+  color: #c8d8e6;
 }
 
 .setting-control {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.inline-number {
+  display: inline-flex;
+  align-items: center;
+  background: #252525;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 0 2px 0 6px;
+  margin: 2px 0;
 }
 
 .inline-number input {
-  width: 90px;
+  background: transparent;
+  border: none;
+  color: #f1f1f1;
+  width: 3.6em;
+  padding: 4px 2px;
   margin: 0;
+  font-size: 0.98em;
+  font-variant-numeric: tabular-nums;
+}
+
+.inline-number input:focus {
+  box-shadow: none;
 }
 
 .setting-suffix {
-  color: #d0d0d0;
-  font-size: 0.95em;
+  color: #c8c8c8;
+  font-size: 0.9em;
+  padding-right: 4px;
+  user-select: none;
 }
 
 .select-control select {
   min-width: 170px;
   margin: 0;
+  background: #252525;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 4px 6px;
+  color: #f1f1f1;
 }
 
 .settings-reset {
-  min-height: 30px;
-  padding: 4px 10px;
-  font-size: 0.85em;
+  min-height: 28px;
+  padding: 3px 11px;
+  font-size: 0.8em;
   flex: 0 0 auto;
+  background: #3a3a3a !important;
+  color: #ddd !important;
+  border: 1px solid #4f4f4f !important;
+}
+
+.settings-reset:hover {
+  background: #454545 !important;
+  border-color: #555 !important;
 }
 
 div.ctr {
@@ -342,10 +524,12 @@ div.ctr {
 .quick-mode-message {
   color: #d8d8d8;
   margin-bottom: 6px;
+  font-size: 0.95em;
 }
 
 .quick-mode-note {
   color: #8fc9ff;
+  font-size: 0.9em;
 }
 
 .quick-mode-targets {
@@ -354,6 +538,7 @@ div.ctr {
   margin: 2px 0 8px 20px;
   padding: 0;
   color: #eee;
+  font-size: 0.92em;
 }
 
 .quick-mode-targets li {
@@ -567,7 +752,7 @@ textarea {
 }
 
 #Analysis .box {
-  border: 1px solid black;
+  border: 1px solid #333;
 }
 
 #Analysis > div:not(#Quick_Estimate):not(#File_Count_Breakdown) {
@@ -585,12 +770,12 @@ textarea {
 
 #File_Count_Breakdown {
   display: flex;
-  width: 95%;
+  width: 100%;
   min-width: 0;
   font-size: smaller;
-  border: 1px solid black;
-  border-radius: 2px;
-  margin: 6px auto;
+  border: 1px solid #333;
+  border-radius: 3px;
+  margin: 8px 0;
   overflow: hidden;
 }
 
@@ -612,32 +797,45 @@ textarea {
 nav button {
   display: inline-block;
   background-color: transparent;
-  color: #fff;
-  padding: 5px 6px;
-  border-width: 0;
+  color: #e6e6e6;
+  padding: 5px 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
+  font-size: 0.9em;
+  margin: 0 1px;
+  border-radius: 2px 2px 0 0;
+  transition: all 60ms ease;
+}
+
+nav button:hover {
+  color: #fff;
+  background-color: rgba(255,255,255,0.06);
 }
 
 nav button.active {
-  background-color: #229af7;
+  color: #fff;
+  background-color: rgba(34, 154, 247, 0.16);
+  border-bottom-color: #229af7;
+  font-weight: 600;
 }
 
 section button {
   color: #fff;
   background-color: #0079d6;
-  border-color: transparent;
-  padding: clamp(4px, 0.8vw, 5px) clamp(5px, 1vw, 8px);
+  border: 1px solid transparent;
+  padding: 5px 9px;
   border-radius: 4px;
-  border-width: 1px;
-  margin: clamp(2px, 0.5vw, 4px);
+  margin: 3px 4px;
   cursor: pointer;
   flex: 0 0 auto;
-  min-width: 110px;
+  min-width: 108px;
   max-width: 100%;
-  font-size: clamp(0.82em, 0.8vw + 0.6em, 0.95em);
+  font-size: 0.9em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  transition: background-color 60ms ease;
 }
 
 #Command button {
@@ -645,7 +843,7 @@ section button {
 }
 
 section button:hover, section button:active {
-  background-color: #2289e6;
+  background-color: #1a7bc9;
 }
 
 ul {
@@ -660,10 +858,11 @@ li {
   display: inline-block;
 }
 
+/* legacy label reset; our settings use explicit classes */
 label {
   display: block;
-  margin: 10px 0;
-  padding: 8px;
+  margin: 0;
+  padding: 0;
 }
 
 @media (max-width: 740px) {

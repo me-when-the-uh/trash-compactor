@@ -202,6 +202,7 @@
     "Quick compression: compressing {directory} ({index}/{total})": "Quick compression: compressing {directory} ({index}/{total})",
     "Quick compressing... {compressed}/{total} ({rate:.0f} files/s)": "Quick compressing... {compressed}/{total} ({rate:.0f} files/s)",
     "Quick compression complete": "Quick compression complete",
+    "Scanning complete": "Scanning complete",
     "No default quick-compression targets were found on this system.": "No default quick-compression targets were found on this system.",
     "Quick analysis: scanning {directory} ({index}/{total})": "Quick analysis: scanning {directory} ({index}/{total})",
     "Quick analysis complete": "Quick analysis complete",
@@ -252,7 +253,7 @@
     "Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.": "Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.",
     "Where we're going, we don't need backups!": "Where we're going, we don't need backups!",
     "Report problems to:": "Report problems to:",
-    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.",
+    "An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.": "A (hopefully) easy-to-use graphical interface for Windows NTFS compression using entropy-based heuristics.",
     "For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.": "For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.",
     "Vibe-coded in Python with a webview-slopped GUI.": "Vibe-coded in Python with a webview-slopped GUI.",
     "GUI adapted from": "GUI adapted from",
@@ -264,5 +265,12 @@
     "Entropy {entropy_seconds}s @ {entropy_rate}/s": "Entropy {entropy_seconds}s @ {entropy_rate}/s",
     "Scan {scan_seconds}s @ {scan_rate}/s": "Scan {scan_seconds}s @ {scan_rate}/s",
     "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.": "Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.",
-    "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt": "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt"
+    "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt": "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt",
+    "Compress Windows binaries (CompactOS)": "Compress Windows binaries (CompactOS)",
+    "Requires administrator privileges. This will compress Windows system binaries to save additional space.": "Requires administrator privileges. This will compress Windows system binaries to save additional space.",
+    "Compressing Windows binaries...": "Compressing Windows binaries...",
+    "Done compressing Windows binaries.": "Done compressing Windows binaries.",
+    "CompactOS compression complete.": "CompactOS compression complete.",
+    "CompactOS compression failed (exit code {code}).": "CompactOS compression failed (exit code {code}).",
+    "CompactOS compression failed.": "CompactOS compression failed."
 }
