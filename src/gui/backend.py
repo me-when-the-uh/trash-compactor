@@ -45,9 +45,22 @@ PLAN_PROGRESS_GRANULARITY = 32
 ENTROPY_PROGRESS_GRANULARITY = 8
 COMPRESSION_PROGRESS_GRANULARITY = 4
 _PROGRESS_INDETERMINATE = -1.0
-_PROGRESS_WALK_DONE = 35.0
-_PROGRESS_CHECK_END = 75.0
-_PROGRESS_ENTROPY_END = 98.0
+_PROGRESS_SCAN_BASELINE_FILES = 100_000
+_PROGRESS_SCAN_END = 100.0 / 3.0
+_PROGRESS_ENTROPY_END = 100.0
+
+
+def _scan_phase_progress_pct(file_count: int) -> float:
+    if file_count <= 0:
+        return 0.0
+    return (file_count / _PROGRESS_SCAN_BASELINE_FILES) * _PROGRESS_SCAN_END
+
+
+def _entropy_phase_progress_pct(processed: int, total: int) -> float:
+    if total:
+        span = _PROGRESS_ENTROPY_END - _PROGRESS_SCAN_END
+        return _PROGRESS_SCAN_END + (processed / total) * span
+    return _PROGRESS_SCAN_END
 
 
 class _GuiDiscoveryStream:
@@ -145,27 +158,19 @@ class _GuiDiscoveryStream:
                             count=self.count,
                             rate=self.count / walk_elapsed,
                         ),
-                        _PROGRESS_INDETERMINATE,
+                        _scan_phase_progress_pct(self.count),
                         **self._progress_kwargs,
                     )
 
-                if now - self._last_summary_update > UI_SUMMARY_INTERVAL_SECONDS:
+                if (
+                    not self._check_phase
+                    and now - self._last_summary_update > UI_SUMMARY_INTERVAL_SECONDS
+                ):
                     self._last_summary_update = now
-                    if self._check_phase:
-                        check_elapsed = max(
-                            0.001,
-                            now - self._backend._check_phase_start,
-                        )
-                        timing = self._backend._build_live_analysis_timing(
-                            walk_seconds=walk_elapsed,
-                            total_files=max(self.count, self._backend._check_processed),
-                            check_seconds=check_elapsed,
-                        )
-                    else:
-                        timing = self._backend._build_live_analysis_timing(
-                            walk_seconds=walk_elapsed,
-                            total_files=self.count,
-                        )
+                    timing = self._backend._build_live_analysis_timing(
+                        walk_seconds=walk_elapsed,
+                        total_files=self.count,
+                    )
                     self._backend._send_folder_summary(
                         self._stats,
                         0,
@@ -310,7 +315,8 @@ class GuiBackend:
             if requested_path:
                 self.current_folder = requested_path
             self.min_savings = getattr(request, "min_savings", self.min_savings)
-            self.start_worker(self._run_compression)
+            if not self.start_worker(self._run_compression):
+                return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
             return StateResponse("Scanning")
 
         elif req_type == "AnalyseFolder":
@@ -322,7 +328,8 @@ class GuiBackend:
                 self._clear_analysis_state()
 
             self.current_folder = requested_path
-            self.start_worker(self._run_analysis)
+            if not self.start_worker(self._run_analysis):
+                return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
             return StateResponse("Scanning")
 
         elif req_type == "GetQuickCompressionTargets":
@@ -330,7 +337,10 @@ class GuiBackend:
 
         elif req_type == "StartQuickCompression":
             compactos = getattr(request, "compactos", False)
-            self.start_worker(lambda: self._run_quick_compression(compactos=compactos))
+            self._clear_quick_analysis_results()
+            self._clear_analysis_state()
+            if not self.start_worker(lambda: self._run_quick_compression(compactos=compactos)):
+                return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
             return StateResponse("Scanning")
 
         elif req_type == "PauseCompression":
@@ -350,15 +360,20 @@ class GuiBackend:
 
         return StatusResponse(_("Unknown request"), None)
 
-    def start_worker(self, target: Callable):
+    def start_worker(self, target: Callable) -> bool:
         self.stop_event.clear()
         self.pause_event.clear()
-        if self.worker_thread and self.worker_thread.is_alive():
-            logging.warning("User requested action while worker is already running.")
-            return
+        thread = self.worker_thread
+        if thread and thread.is_alive():
+            logging.warning("Waiting for prior worker to finish after stop.")
+            thread.join(timeout=30.0)
+            if thread.is_alive():
+                logging.error("Prior worker did not exit in time.")
+                return False
 
         self.worker_thread = threading.Thread(target=target, daemon=True)
         self.worker_thread.start()
+        return True
 
     def _send(self, response: GuiResponse):
         if self.server:
@@ -396,14 +411,6 @@ class GuiBackend:
             )
         )
 
-    def _check_phase_progress_pct(self, processed: int, total: int) -> float:
-        if total:
-            return (
-                _PROGRESS_WALK_DONE
-                + (processed / total) * (_PROGRESS_CHECK_END - _PROGRESS_WALK_DONE)
-            )
-        return _PROGRESS_WALK_DONE
-
     def _send_check_phase_progress(
         self,
         processed: int,
@@ -424,7 +431,7 @@ class GuiBackend:
             status += " " + _("(Scanning more files...)")
         self._send_progress(
             status,
-            self._check_phase_progress_pct(processed, total),
+            _scan_phase_progress_pct(total),
             quick_dir_index=quick_dir_index,
             quick_dir_total=quick_dir_total,
         )
@@ -475,28 +482,6 @@ class GuiBackend:
         target.entropy_projected_original_bytes += source.entropy_projected_original_bytes or source.total_original_size
         target.entropy_projected_compressed_bytes += source.entropy_projected_compressed_bytes or source.total_compressed_size
         target.entropy_projected_compressed_bytes_conservative += source.entropy_projected_compressed_bytes_conservative or source.total_compressed_size
-
-    def _build_quick_total_timing(
-        self,
-        walk_seconds: float,
-        check_seconds: float,
-        entropy_seconds: float,
-        total_files: int,
-        entropy_files: int,
-    ) -> dict:
-        walk_seconds = max(0.0, walk_seconds)
-        check_seconds = max(0.0, check_seconds)
-        combined_scan_seconds = walk_seconds + check_seconds
-        return {
-            "combined_scan_seconds": combined_scan_seconds,
-            "walk_seconds": walk_seconds,
-            "walk_rate": (total_files / walk_seconds) if walk_seconds > 0 else 0.0,
-            "check_seconds": check_seconds,
-            "check_rate": (total_files / check_seconds) if check_seconds > 0 else 0.0,
-            "scan_rate": (total_files / combined_scan_seconds) if combined_scan_seconds > 0 else 0.0,
-            "entropy_seconds": max(0.0, entropy_seconds),
-            "entropy_rate": (entropy_files / entropy_seconds) if entropy_seconds > 0 else 0.0,
-        }
 
     def _build_live_analysis_timing(
         self,
@@ -685,7 +670,7 @@ class GuiBackend:
 
         overall_start_time = time.perf_counter()
         self._check_processed = 0
-        self._send_progress(_("Scanning directory..."), _PROGRESS_INDETERMINATE, **progress_kwargs)
+        self._send_progress(_("Scanning directory..."), 0.0, **progress_kwargs)
 
         discovery = _GuiDiscoveryStream(self, base_dir, stats, progress_kwargs)
 
@@ -747,12 +732,7 @@ class GuiBackend:
 
             if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total:
                 last_update_time = now
-                local_pct = (
-                    _PROGRESS_CHECK_END
-                    + (processed / total) * (_PROGRESS_ENTROPY_END - _PROGRESS_CHECK_END)
-                    if total
-                    else _PROGRESS_CHECK_END
-                )
+                local_pct = _entropy_phase_progress_pct(processed, total)
                 self._send_progress(
                     _("Sampling entropy... {processed}/{total}").format(
                         processed=processed,
@@ -780,7 +760,11 @@ class GuiBackend:
                 )
 
         discovery.enter_check_phase()
-        self._send_progress(_("Analyzing files..."), _PROGRESS_WALK_DONE, **progress_kwargs)
+        self._send_progress(
+            _("Analyzing files..."),
+            _scan_phase_progress_pct(discovery.count),
+            **progress_kwargs,
+        )
 
         plan = plan_compression(
             discovery,
@@ -955,6 +939,28 @@ class GuiBackend:
         compressed_count = [0]
         exec_start_time = time.perf_counter()
 
+        try:
+            self._run_quick_analysis_compression_loop(
+                entries,
+                total_to_compress,
+                total_stats,
+                total_target_size,
+                compressed_count,
+                exec_start_time,
+            )
+        except InterruptedError:
+            self._discard_quick_pipeline_state()
+            raise
+
+    def _run_quick_analysis_compression_loop(
+        self,
+        entries: list[dict[str, Any]],
+        total_to_compress: int,
+        total_stats: CompressionStats,
+        total_target_size: int,
+        compressed_count: list[int],
+        exec_start_time: float,
+    ) -> None:
         for index, entry in enumerate(entries, start=1):
             self._check_pause_stop()
 
@@ -1065,12 +1071,16 @@ class GuiBackend:
             final=True,
         )
 
+    def _discard_quick_pipeline_state(self) -> None:
+        self._clear_quick_analysis_results()
+        self._clear_analysis_state()
+
     def _run_quick_compression_pipeline(self, compactos: bool = False):
         self._configure_worker_environment()
 
         targets = list(resolve_targets().directories)
         if not targets:
-            self.quick_analysis_results = []
+            self._discard_quick_pipeline_state()
             self._send(WarningResponse(_("Warning"), _("No default quick-compression targets were found on this system.")))
             return
 
@@ -1106,84 +1116,91 @@ class GuiBackend:
         total_scanned_files = 0
         total_entropy_files = 0
 
-        for index, directory in enumerate(targets, start=1):
-            self._check_pause_stop()
-            self.current_folder = str(directory)
+        interrupted = False
+        try:
+            for index, directory in enumerate(targets, start=1):
+                self._check_pause_stop()
+                self.current_folder = str(directory)
+                self._send_progress(
+                    _("Quick analysis: scanning {directory} ({index}/{total})").format(
+                        directory=directory,
+                        index=index,
+                        total=len(targets),
+                    ),
+                    0.0,
+                    quick_dir_index=index,
+                    quick_dir_total=len(targets),
+                )
+                self._run_analysis_pipeline(
+                    report_completion=False,
+                    quick_dir_index=index,
+                    quick_dir_total=len(targets),
+                )
+
+                current_stats = self.last_analysis_stats
+                current_plan = self.last_analysis_plan or []
+                current_monitor = self.last_analysis_monitor
+                current_timing = self.last_analysis_timing or {}
+
+                if current_stats is None or current_monitor is None:
+                    continue
+
+                current_plan_size = sum(item[1] for item in current_plan)
+                quick_results.append(
+                    {
+                        "directory": str(directory),
+                        "plan": current_plan,
+                        "stats": current_stats,
+                        "monitor": current_monitor,
+                        "timing": current_timing,
+                    }
+                )
+
+                self._accumulate_stats(total_analysis_stats, current_stats)
+                total_analysis_plan_count += len(current_plan)
+                total_analysis_compressible_size += current_plan_size
+                total_walk_seconds += float(current_timing.get("walk_seconds", 0.0) or 0.0)
+                total_check_seconds += float(current_timing.get("check_seconds", 0.0) or 0.0)
+                total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
+                total_scanned_files += int(getattr(current_monitor.stats, "total_files", 0) or 0)
+                total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
+
+                total_summary = self._make_stats_summary(
+                    total_analysis_stats,
+                    total_analysis_plan_count,
+                    total_analysis_compressible_size,
+                    analysis_timing=self._build_live_analysis_timing(
+                        walk_seconds=total_walk_seconds,
+                        total_files=total_scanned_files,
+                        check_seconds=total_check_seconds,
+                        entropy_seconds=total_entropy_seconds,
+                        entropy_files=total_entropy_files,
+                    ),
+                )
+
+                current_summary = self._make_stats_summary(
+                    current_stats,
+                    len(current_plan),
+                    current_plan_size,
+                    analysis_timing=current_timing,
+                )
+                self._send(FolderSummaryResponse(current_summary, directory=str(directory), scope="directory"))
+                self._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
+
+            self.quick_analysis_results = quick_results
             self._send_progress(
-                _("Quick analysis: scanning {directory} ({index}/{total})").format(
-                    directory=directory,
-                    index=index,
-                    total=len(targets),
-                ),
-                _PROGRESS_INDETERMINATE,
-                quick_dir_index=index,
-                quick_dir_total=len(targets),
+                _("Scanning complete"),
+                100.0,
+                quick_history=True,
             )
-            self._run_analysis_pipeline(
-                report_completion=False,
-                quick_dir_index=index,
-                quick_dir_total=len(targets),
-            )
-
-            current_stats = self.last_analysis_stats
-            current_plan = self.last_analysis_plan or []
-            current_monitor = self.last_analysis_monitor
-            current_timing = self.last_analysis_timing or {}
-
-            if current_stats is None or current_monitor is None:
-                continue
-
-            current_plan_size = sum(item[1] for item in current_plan)
-            quick_results.append(
-                {
-                    "directory": str(directory),
-                    "plan": current_plan,
-                    "stats": current_stats,
-                    "monitor": current_monitor,
-                    "timing": current_timing,
-                }
-            )
-
-            self._accumulate_stats(total_analysis_stats, current_stats)
-            total_analysis_plan_count += len(current_plan)
-            total_analysis_compressible_size += current_plan_size
-            total_walk_seconds += float(current_timing.get("walk_seconds", 0.0) or 0.0)
-            total_check_seconds += float(current_timing.get("check_seconds", 0.0) or 0.0)
-            total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
-            total_scanned_files += int(getattr(current_monitor.stats, "total_files", 0) or 0)
-            total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
-
-            total_summary = self._make_stats_summary(
-                total_analysis_stats,
-                total_analysis_plan_count,
-                total_analysis_compressible_size,
-                analysis_timing=self._build_quick_total_timing(
-                    total_walk_seconds,
-                    total_check_seconds,
-                    total_entropy_seconds,
-                    total_scanned_files,
-                    total_entropy_files,
-                ),
-            )
-
-            current_summary = self._make_stats_summary(
-                current_stats,
-                len(current_plan),
-                current_plan_size,
-                analysis_timing=current_timing,
-            )
-            self._send(FolderSummaryResponse(current_summary, directory=str(directory), scope="directory"))
-            self._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
-
-        self.quick_analysis_results = quick_results
-        self._send_progress(
-            _("Scanning complete"),
-            100.0,
-            quick_history=True,
-        )
-
-        if compactos_thread is not None:
-            compactos_thread.join()
+        except InterruptedError:
+            interrupted = True
+            quick_results.clear()
+            self._discard_quick_pipeline_state()
+            raise
+        finally:
+            if compactos_thread is not None:
+                compactos_thread.join(timeout=0.1 if interrupted else None)
 
 def run_gui(benchmark_ok: Optional[bool] = None):
     backend = GuiBackend(benchmark_ok=benchmark_ok)

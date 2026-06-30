@@ -17,6 +17,8 @@ Compressing large directories to gain extra storage space will be so free and wi
   - Skips already-compressed files
   - Skips using LZX compression if the computer is identified as too slow to handle it without performance losses (taking care of users)
   - Detailed compression and file throughput stats
+  - GUI with progress bar, walk/check/entropy timing breakdown, and Defender performance notice
+  - Streaming file discovery to keep RAM usage low on large directory trees
 
   ## Limitations
 
@@ -33,7 +35,7 @@ Compressing large directories to gain extra storage space will be so free and wi
 
 ### Option 1: Using the Executable (Recommended)
 
-1. [Download the latest release](https://github.com/misha1350/trash-compactor/releases/latest)
+1. [Download the latest release](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
 2. Run the executable file
 
 ### Option 2: Running from Source
@@ -41,7 +43,7 @@ Compressing large directories to gain extra storage space will be so free and wi
 1. Open PowerShell
 2. Clone and navigate to the repository:
     ```powershell
-    git clone https://github.com/misha1350/trash-compactor.git
+    git clone https://github.com/me-when-the-uh/trash-compactor.git
     cd trash-compactor
     ```
 3. Run the program:
@@ -51,16 +53,14 @@ Compressing large directories to gain extra storage space will be so free and wi
 
 Note: For Option 2, ensure Git and Python 3.11 or 3.12 are installed on your system.
 
-Optional: you can compile the app yourself as I did, using PyInstaller:
+Optional: compile the app yourself with PyInstaller (recommended spec file):
     ```powershell
     python -m pip install -r requirements.txt
-    python -m PyInstaller --clean --noconfirm --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next main.py
+    python -m PyInstaller --clean --noconfirm trash-compactor-next.spec
     ```
   The target machine also needs the [Microsoft WebView2 runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
-    or, since we're interested in squeezing programs into small packages, you can install a build of [UPX](https://github.com/upx/upx) to build an app with compressed binaries:
-    ```powershell
-    python -m PyInstaller --onefile --add-data "locales;locales" --add-data "src/gui/ui;src/gui/ui" --name trash-compactor-next --upx-dir 'c:\path\to\upx-win64' main.py 
-    ```
+
+  `trash-compactor.spec` builds a `trash-compactor.exe` variant; `trash-compactor-next.spec` builds `trash-compactor-next.exe` with the same GUI bundle and webview hidden imports. UPX compression is disabled in both specs because it can break pywebview; you can enable it manually if you accept that risk.
 
 ## Usage
 
@@ -96,13 +96,15 @@ This mode will automatically compress the following directories:
 - `Program Files (x86)` (including your Steam folder)
 - `AppData`
 - `Downloads`
+- `Documents`
+- `ProgramData`
 - `Windows` via CompactOS **only when running as Administrator** (you will be prompted first)
 
 Expect at least 15GB to be saved on stock Windows installations.
 
 If launched without Administrator privileges, 1-click mode still performs regular compression on accessible files and directories, while CompactOS is skipped automatically.
 
-If launched with Administrator privileges, 1-click mode asks whether to start CompactOS before scanning begins. If you accept, CompactOS starts immediately in a separate window while the directory scan/analysis runs.
+If launched with Administrator privileges, 1-click mode asks whether to start CompactOS before scanning begins. If you accept, CompactOS starts immediately while the directory scan/analysis runs. In **CLI** 1-click mode this opens a separate PowerShell window; in **GUI** quick compression it runs hidden with a live status indicator in the app.
 
 #### Normal Mode
 For first-time compression of directories with optimal performance.
@@ -154,11 +156,11 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 
 ### Short-term Goals
 - Fix bugs:
-  - The terminal will close immediately when the GUI is spawned, if you run the program from the terminal instead of Windows Explorer
+  - When launched from a terminal, the console is hidden once the GUI opens; some terminal sessions may still behave oddly depending on the shell
 
 ### Long-term Goals
 - Research advanced compression methods:
-  - Evaluate alternative NTFS compression APIs, like [UPX](https://github.com/upx/upx)
+  - Evaluate native NTFS/WOF compression APIs as an alternative to spawning `compact.exe`
   - Consider filesystem-agnostic approaches (moving compressed files in/out of the source drive unpacks them)
   - Research possibilities for custom compression algorithms
   - Investigate integration with other Windows compression features

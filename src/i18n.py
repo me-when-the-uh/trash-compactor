@@ -11,11 +11,11 @@ def load_translations(locale_code: Optional[str] = None) -> None:
     global _translations, _current_locale
     
     if locale_code is None:
-        try: # to detect system language
+        try:
             sys_locale = locale.getdefaultlocale()[0]
             if sys_locale:
                 locale_code = sys_locale.split('_')[0]
-        except Exception:
+        except (AttributeError, ValueError, TypeError):
             pass
             
     if not locale_code:

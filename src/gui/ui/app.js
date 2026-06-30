@@ -191,7 +191,7 @@
 			pywebview.api.choose_folder().then(function(res) {
 				if (res && res.type === 'Folder') {
 					Response.dispatch(res);
-					// Auto start analysis
+					Gui.exit_quick_history_mode();
 					Action.analyse();
 				}
 			});
@@ -202,11 +202,11 @@
 		},
 
 		quick_compression: function() {
-			if (Gui.should_restart_quick_analysis()) {
-				Action.start_quick_compression();
+			if (Gui.is_busy()) {
 				return;
 			}
-			if (Gui.is_busy() || Gui.has_started_analysis()) {
+			if (Gui.in_quick_history_mode()) {
+				Action.start_quick_compression();
 				return;
 			}
 			pywebview.api.get_quick_compression_targets().then(_dispatch_if_message);
@@ -284,7 +284,7 @@ var Response = (function() {
 					break;
 
 				case "QuickCompressionTargets":
-					if (!Gui.should_restart_quick_analysis() && !Gui.is_busy() && !Gui.has_started_analysis()) {
+					if (!Gui.is_busy()) {
 						Gui.show_quick_mode(msg.directories || [], !!msg.allow_compactos);
 					}
 					break;
@@ -505,22 +505,22 @@ var Gui = (function() {
 			return $("#Button_Stop").is(":visible");
 		},
 
-		has_started_analysis: function() {
-			return $("#Activity").is(":visible") || $("#Analysis").is(":visible");
-		},
-
-		should_restart_quick_analysis: function() {
+		in_quick_history_mode: function() {
 			return quick_history_mode && !Gui.is_busy();
 		},
 
+		exit_quick_history_mode: function() {
+			quick_history_mode = false;
+			directory_summary_history = [];
+			directory_summary_index = 0;
+			Gui.update_directory_navigation();
+		},
+
 		analyse: function() {
-			if (Gui.should_restart_quick_analysis()) {
-				Action.start_quick_compression();
-				return;
-			}
 			if (Gui.is_busy()) {
 				return;
 			}
+			Gui.exit_quick_history_mode();
 			Action.analyse();
 		},
 
@@ -702,6 +702,7 @@ var Gui = (function() {
 		stopped: function() {
 			_flush_queued_updates();
 			Gui.hide_quick_mode();
+			$("#Activity").hide();
 			Gui.scanned();
 		},
 
