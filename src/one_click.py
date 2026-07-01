@@ -104,26 +104,55 @@ def _spawn_compactos_window() -> None:
             return
 
 
+def _parse_int_token(token: str) -> int:
+    return int(re.sub(r"[^\d]", "", token))
+
+
 def _parse_compactos_summary(output: str) -> dict[str, object]:
     if not output:
         return {}
     info: dict[str, object] = {}
     m = re.search(r"([\d,]+)\s+files?\s+within\s+([\d,]+)\s+dir", output, re.I)
     if m:
-        info["files"] = int(m.group(1).replace(",", ""))
-        info["dirs"] = int(m.group(2).replace(",", ""))
+        info["files"] = _parse_int_token(m.group(1))
+        info["dirs"] = _parse_int_token(m.group(2))
     m = re.search(
         r"([\d,]+)\s+total bytes of data are stored in ([\d,]+)\s+bytes", output, re.I
     )
     if m:
-        orig = int(m.group(1).replace(",", ""))
-        comp = int(m.group(2).replace(",", ""))
+        orig = _parse_int_token(m.group(1))
+        comp = _parse_int_token(m.group(2))
         info["original_bytes"] = orig
         info["compressed_bytes"] = comp
         info["saved_bytes"] = max(0, orig - comp)
     m = re.search(r"compression ratio is ([\d.]+)\s+to\s+1", output, re.I)
     if m:
         info["ratio"] = float(m.group(1))
+
+    if "saved_bytes" not in info:
+        for line in output.splitlines():
+            numbers = re.findall(r"[\d][\d.,\s]*\d", line)
+            parsed = [_parse_int_token(token) for token in numbers if _parse_int_token(token) > 0]
+            if len(parsed) >= 2 and parsed[0] > parsed[1] and parsed[0] >= 1_000_000:
+                info["original_bytes"] = parsed[0]
+                info["compressed_bytes"] = parsed[1]
+                info["saved_bytes"] = max(0, parsed[0] - parsed[1])
+                break
+
+    if "files" not in info:
+        for line in output.splitlines():
+            numbers = re.findall(r"\b[\d.,]+\b", line)
+            parsed = [_parse_int_token(token) for token in numbers if _parse_int_token(token) > 0]
+            if len(parsed) >= 2 and all(value < 1_000_000 for value in parsed[:2]):
+                info["files"] = parsed[0]
+                info["dirs"] = parsed[1]
+                break
+
+    if "ratio" not in info:
+        m = re.search(r"([\d.,]+)\s*(?:to|:)\s*1\b", output, re.I)
+        if m:
+            info["ratio"] = float(m.group(1).replace(",", "."))
+
     return info
 
 

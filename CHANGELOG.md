@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- GUI Compress now respects the Min Savings % from Settings (was resetting to 18%)
+- Quick-compression results no longer wiped when Compress is clicked after browsing a folder first
+- CLI 1-click mode works again without pywebview; invalid-path + `1` no longer hangs in a loop
+- Re-analyse in the GUI is instant again (removed slow per-click drive inspection)
+- Folder picker errors are shown in the GUI instead of failing silently
+- Incompressible cache matches paths regardless of letter case (`C:\Games` vs `c:\games`)
+- CompactOS summary parsing works better on non-English Windows installs
+
+### Changed
+- GUI blocks analysis/compression on protected, network, or non-NTFS paths with a clear warning
+- Stuck `compact.exe` fallbacks time out after 60s per file instead of 600s
+- Quick-mode CompactOS no longer blocks the UI after analysis finishes
+
 ## [v0.7.0] - 2026-06-29
 ### Added
 - Progress bar for GUI mode

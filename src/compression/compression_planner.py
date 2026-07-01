@@ -12,7 +12,7 @@ from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
 from .entropy import sample_file_entropy
-from .file_scan import CountingDirEntryIter, iter_files, iter_scanned_files  # noqa: F401
+from .file_scan import CountingDirEntryIter, FileScanInput, iter_files, iter_scanned_files  # noqa: F401
 
 PlanEntry = tuple[str, int, str]
 
@@ -32,7 +32,7 @@ def _format_size(num_bytes: int) -> str:
 
 
 def plan_compression(
-    files: Iterable[os.DirEntry],
+    files: Iterable["FileScanInput"],
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     *,
@@ -109,6 +109,7 @@ def plan_compression(
 
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():
+            get_incompressible_cache().clear_hash_cache()
             candidates = _filter_high_entropy_directories(
                 candidates,
                 base_dir=base_dir,
@@ -143,11 +144,13 @@ def _filter_high_entropy_directories(
     if not candidates or min_savings_percent <= 0:
         return candidates
 
-    directories = {Path(path_str).parent for path_str, _, _ in candidates}
-    directories.add(base_dir)
+    base_dir_str = os.fspath(base_dir)
+    directory_paths: set[str] = {os.path.dirname(path_str) for path_str, _, _ in candidates}
+    directory_paths.add(base_dir_str)
+    directories = {Path(path_str) for path_str in directory_paths}
 
     root_skip_record: Optional[DirectorySkipRecord] = None
-    if any(Path(path_str).parent == base_dir for path_str, _, _ in candidates):
+    if any(os.path.dirname(path_str) == base_dir_str for path_str, _, _ in candidates):
         average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(
             base_dir,
             include_subdirectories=False,
@@ -269,8 +272,9 @@ def _filter_high_entropy_directories(
 
     filtered: list[PlanEntry] = []
     for path_str, file_size, algorithm in candidates:
-        parent = Path(path_str).parent
-        if root_skip_record is not None and parent == base_dir:
+        parent_str = os.path.dirname(path_str)
+        parent = Path(parent_str)
+        if root_skip_record is not None and parent_str == base_dir_str:
             stats.record_file_skip(
                 Path(path_str),
                 root_skip_record.reason,
@@ -360,7 +364,8 @@ def evaluate_directories_parallel(
     skip_results: dict[Path, DirectorySkipRecord] = {}
     sample_results: list[EntropySampleRecord] = []
 
-    if worker_count <= 1 or len(directory_list) == 1:
+    serial_threshold = max(worker_count * 2, 8)
+    if worker_count <= 1 or len(directory_list) < serial_threshold:
         for directory in directory_list:
             skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
             _on_complete(directory)

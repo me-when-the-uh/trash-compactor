@@ -14,6 +14,16 @@ from ..timer import PerformanceMonitor
 _BATCH_SIZE = 100
 _MAX_COMMAND_CHARS = 4000
 _COMPACT_TIMEOUT_SECONDS = 600
+_SINGLE_FILE_TIMEOUT_SECONDS = 60
+
+
+def _compact_path(path_str: str) -> str:
+    resolved = str(Path(path_str).resolve())
+    if resolved.startswith("\\\\?\\"):
+        stripped = resolved[4:]
+        if len(stripped) < 260:
+            return stripped
+    return resolved
 
 
 def _hidden_startupinfo() -> subprocess.STARTUPINFO:
@@ -22,7 +32,12 @@ def _hidden_startupinfo() -> subprocess.STARTUPINFO:
     return startupinfo
 
 
-def _run_compact(args: Sequence[str], *, capture: bool = False) -> subprocess.CompletedProcess:
+def _run_compact(
+    args: Sequence[str],
+    *,
+    capture: bool = False,
+    timeout: int = _COMPACT_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
         stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
@@ -30,15 +45,15 @@ def _run_compact(args: Sequence[str], *, capture: bool = False) -> subprocess.Co
         startupinfo=_hidden_startupinfo(),
         shell=False,
         text=capture,
-        timeout=_COMPACT_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
 
 
-def compress_file(file_path: Path, algorithm: str) -> bool:
+def compress_file(file_path: Path, algorithm: str, *, timeout: int = _COMPACT_TIMEOUT_SECONDS) -> bool:
     try:
         # compact /c /a /exe:{algorithm} "{file_path}"
-        command = ['compact', '/c', '/a', f'/exe:{algorithm}', str(file_path.resolve())]
-        result = _run_compact(command)
+        command = ['compact', '/c', '/a', f'/exe:{algorithm}', _compact_path(str(file_path))]
+        result = _run_compact(command, timeout=timeout)
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError) as exc:
         logging.error("Error compressing %s: %s", file_path, exc)
@@ -68,7 +83,7 @@ def execute_compression_plan(
         current_length = 0
 
         for path_str, file_size in entries:
-            path_length = len(str(Path(path_str).resolve())) + 3  # for quotes and space
+            path_length = len(_compact_path(path_str)) + 3  # for quotes and space
             if current and (len(current) >= size or current_length + path_length > _MAX_COMMAND_CHARS):
                 yield current
                 current = []
@@ -83,7 +98,7 @@ def execute_compression_plan(
     def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
         # compact /c /a /exe:{algo} path1 path2 ...
         args = ['compact', '/c', '/a', f'/exe:{algo}']
-        args.extend(str(Path(path_str).resolve()) for path_str in path_strs)
+        args.extend(_compact_path(path_str) for path_str in path_strs)
         return _run_compact(args)
 
     def _record_error(message: str) -> None:
@@ -140,8 +155,14 @@ def execute_compression_plan(
         else:
             _record_success(path, compressed_size, algo, verified)
 
-    def _compress_single(path: Path, file_size: int, algo: str) -> None:
-        success = compress_file(path, algo)
+    def _compress_single(
+        path: Path,
+        file_size: int,
+        algo: str,
+        *,
+        timeout: int = _SINGLE_FILE_TIMEOUT_SECONDS,
+    ) -> None:
+        success = compress_file(path, algo, timeout=timeout)
 
         if not success:
             _record_failure(path, file_size, algo)
@@ -188,7 +209,7 @@ def execute_compression_plan(
                     for path_str, file_size in batch:
                         path = Path(path_str)
                         _record_error(_("Batch exception for {path}: {exc}").format(path=path, exc=exc))
-                        _compress_single(path, file_size, algorithm)
+                        _compress_single(path, file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
                     continue
 
                 if result.returncode != 0:
@@ -199,7 +220,7 @@ def execute_compression_plan(
                         len(batch),
                     )
                     for path_str, file_size in batch:
-                        _compress_single(Path(path_str), file_size, algorithm)
+                        _compress_single(Path(path_str), file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
                     continue
 
                 for path_str, file_size in batch:

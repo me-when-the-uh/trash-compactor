@@ -1,3 +1,4 @@
+import os
 import xxhash
 from pathlib import Path
 from typing import Set
@@ -9,6 +10,7 @@ class IncompressibleCache:
         self.cache_file_path.parent.mkdir(parents=True, exist_ok=True)
         self._cache: Set[str] = set()
         self._staged: Set[str] = set()
+        self._hash_cache: dict[Path, str] = {}
         self._load()
 
     def _load(self):
@@ -24,9 +26,17 @@ class IncompressibleCache:
             pass
 
     def _compute_hash(self, path: Path) -> str:
+        if path in self._hash_cache:
+            return self._hash_cache[path]
         h = xxhash.xxh64()
-        h.update(str(path.absolute()).encode("utf-8"))
-        return h.hexdigest()
+        normalized = os.path.normcase(os.path.normpath(str(path.absolute())))
+        h.update(normalized.encode("utf-8"))
+        digest = h.hexdigest()
+        self._hash_cache[path] = digest
+        return digest
+
+    def clear_hash_cache(self) -> None:
+        self._hash_cache.clear()
 
     def add(self, path: Path):
         hash_val = self._compute_hash(path)
@@ -38,11 +48,15 @@ class IncompressibleCache:
         if not self._staged:
             return
 
+        staged = sorted(self._staged)
         try:
             with open(self.cache_file_path, "a", encoding="utf-8") as f:
-                for hash_val in sorted(self._staged):
+                for hash_val in staged:
                     f.write(f"{hash_val}\n")
         except OSError:
+            for hash_val in staged:
+                self._cache.discard(hash_val)
+            self._staged.clear()
             return
 
         self._staged.clear()
@@ -64,4 +78,3 @@ class IncompressibleCache:
 
     def contains(self, path: Path) -> bool:
         return self._compute_hash(path) in self._cache
-

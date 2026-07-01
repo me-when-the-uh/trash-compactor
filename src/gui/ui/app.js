@@ -193,6 +193,10 @@
 					Response.dispatch(res);
 					Gui.exit_quick_history_mode();
 					Action.analyse();
+					return;
+				}
+				if (res && res.type === 'Error') {
+					Gui.show_warning(I18n.t('Warning'), res.message || I18n.t('No folder selected'));
 				}
 			});
 		},
@@ -329,6 +333,8 @@ var Gui = (function() {
 	var ignore_config_changes = false;
 	var default_lzx_help = "";
 	var compactos_active = false;
+	var last_analysis_timing = null;
+	var last_lz4_certain_files = 0;
 
 	function _upsert_directory_summary(payload) {
 		var i;
@@ -482,6 +488,30 @@ var Gui = (function() {
 
 			$("#Button_Reset").on("click", function() {
 				Action.reset_config();
+			});
+
+			$(document).on("keydown", function(e) {
+				if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "a" || e.key === "A")) {
+					e.preventDefault();
+					Gui.analyse();
+					return;
+				}
+				if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === "Enter") {
+					e.preventDefault();
+					if (!$("#Button_Compress").is(":hidden") && !$("#Button_Compress").prop("disabled")) {
+						Action.start_compression();
+					}
+					return;
+				}
+				if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "q" || e.key === "Q")) {
+					e.preventDefault();
+					Action.quick_compression();
+					return;
+				}
+				if (e.key === "Escape" && Gui.is_busy()) {
+					e.preventDefault();
+					Action.stop();
+				}
 			});
 
 			setInterval(_flush_queued_updates, 100);
@@ -724,6 +754,10 @@ var Gui = (function() {
 			$("#Button_Resume").hide();
 			$("#Button_Stop").hide();
 			$("#Button_Analyse").show();
+			$("#Analysis").show();
+			if (last_analysis_timing) {
+				Gui.set_analysis_timing(last_analysis_timing, last_lz4_certain_files);
+			}
 
 			if ($("#File_Count_Compressible").text() != "0") {
 				$("#Button_Compress").show();
@@ -733,6 +767,9 @@ var Gui = (function() {
 		},
 
 		reset_folder_summary: function() {
+			last_analysis_timing = null;
+			last_lz4_certain_files = 0;
+			$("#Analysis_Timing").text("");
 			current_summary_queue = null;
 			total_summary_queue = null;
 			directory_summary_queue = null;
@@ -821,46 +858,50 @@ var Gui = (function() {
 			Gui.render_summaries();
 		},
 
-		set_analysis_timing: function(timing) {
-			if (!timing) {
+		set_analysis_timing: function(timing, lz4CertainFiles) {
+			if (timing) {
+				last_analysis_timing = timing;
+				if (lz4CertainFiles != null) {
+					last_lz4_certain_files = lz4CertainFiles;
+				}
+			} else if (!last_analysis_timing) {
 				$("#Analysis_Timing").text("");
 				return;
 			}
-			if (timing.walk_seconds != null && timing.check_seconds != null) {
-				$("#Analysis_Timing").text(
-					I18n.t(
-						"Walk {walk_seconds}s @ {walk_rate}/s | Check {check_seconds}s @ {check_rate}/s",
-						{
-							walk_seconds: Util.format_number(timing.walk_seconds || 0, 2),
-							walk_rate: Util.format_number(timing.walk_rate || 0, 0),
-							check_seconds: Util.format_number(timing.check_seconds || 0, 2),
-							check_rate: Util.format_number(timing.check_rate || 0, 0)
-						}
-					) + "\n" + I18n.t(
-						"Entropy {entropy_seconds}s @ {entropy_rate}/s",
-						{
-							entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 2),
-							entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
-						}
-					)
-				);
-			} else {
-				$("#Analysis_Timing").text(
-					I18n.t(
-						"Scan {scan_seconds}s @ {scan_rate}/s",
-						{
-							scan_seconds: Util.format_number(timing.combined_scan_seconds || 0, 2),
-							scan_rate: Util.format_number(timing.scan_rate || 0, 0)
-						}
-					) + "\n" + I18n.t(
-						"Entropy {entropy_seconds}s @ {entropy_rate}/s",
-						{
-							entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 2),
-							entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
-						}
-					)
+
+			timing = timing || last_analysis_timing;
+			lz4CertainFiles = lz4CertainFiles != null ? lz4CertainFiles : last_lz4_certain_files;
+
+			var scanSeconds = timing.scan_seconds;
+			if (scanSeconds == null) {
+				scanSeconds = timing.combined_scan_seconds || timing.walk_seconds || 0;
+			}
+			var totalSeconds = timing.total_seconds;
+			if (totalSeconds == null) {
+				totalSeconds = scanSeconds + (timing.entropy_seconds || 0);
+			}
+
+			var timingText = I18n.t(
+				"Scan {scan_seconds}s @ {scan_rate}/s",
+				{
+					scan_seconds: Util.format_number(scanSeconds, 1),
+					scan_rate: Util.format_number(timing.scan_rate || 0, 0)
+				}
+			);
+			if (timing.entropy_seconds > 0) {
+				timingText += "\n" + I18n.t(
+					"Entropy {entropy_seconds}s @ {entropy_rate}/s",
+					{
+						entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 1),
+						entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
+					}
 				);
 			}
+			timingText += "\n" + I18n.t(
+				"Total {total_seconds}s",
+				{total_seconds: Util.format_number(totalSeconds, 1)}
+			);
+			$("#Analysis_Timing").text(timingText);
 		},
 
 		set_folder_summary: function(data) {
@@ -937,7 +978,10 @@ var Gui = (function() {
 			$("#Compressible_Size_Label").text(isAnalysis ? I18n.t("are compressible") : I18n.t("compressed in this run"));
 			$("#Skipped_Size_Label").text(I18n.t("excluded"));
 
-			Gui.set_analysis_timing(data.analysis_timing);
+			Gui.set_analysis_timing(
+				data.analysis_timing,
+				data.lz4_certain_incompressible_files || 0
+			);
 
 			$("#File_Count_Compressed").text(Util.format_number(data.compressed.count, 0));
 			$("#File_Count_Compressible").text(Util.format_number(data.compressible.count, 0));
@@ -946,7 +990,10 @@ var Gui = (function() {
 
 		set_current_folder_summary: function(data, directory) {
 			if (data.analysis_timing) {
-				Gui.set_analysis_timing(data.analysis_timing);
+				Gui.set_analysis_timing(
+					data.analysis_timing,
+					data.lz4_certain_incompressible_files || 0
+				);
 			}
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;

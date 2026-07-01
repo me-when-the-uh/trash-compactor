@@ -47,6 +47,8 @@ class GuiBackend:
         self.last_analysis_monitor = None
         self.last_analysis_timing = None
         self.quick_analysis_results: list[dict[str, Any]] = []
+        self._cached_validation_path = ""
+        self._cached_volume_details = None
 
     def _current_config_response(self) -> ConfigResponse:
         return ConfigResponse(
@@ -127,16 +129,19 @@ class GuiBackend:
         return dispatch_request(self, request)
 
     def start_worker(self, target: Callable) -> bool:
-        self.stop_event.clear()
-        self.pause_event.clear()
         thread = self.worker_thread
         if thread and thread.is_alive():
+            if not self.stop_event.is_set():
+                logging.warning("Worker already running.")
+                return False
             logging.warning("Waiting for prior worker to finish after stop.")
-            thread.join(timeout=30.0)
+            thread.join(timeout=1.0)
             if thread.is_alive():
                 logging.error("Prior worker did not exit in time.")
                 return False
 
+        self.stop_event.clear()
+        self.pause_event.clear()
         self.worker_thread = threading.Thread(target=target, daemon=True)
         self.worker_thread.start()
         return True

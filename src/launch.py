@@ -344,3 +344,5 @@ def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, N
         # Force interactive mode if directory is missing/invalid
         args.directory = ""
         args = interactive_configure(args)
+        if getattr(args, "one_click", False):
+            return "", args

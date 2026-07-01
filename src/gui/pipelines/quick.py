@@ -1,4 +1,5 @@
 import threading
+import time
 from typing import TYPE_CHECKING, Any
 
 from ...file_utils import is_admin
@@ -46,12 +47,12 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
     total_analysis_plan_count = 0
     total_analysis_compressible_size = 0
 
-    total_walk_seconds = 0.0
-    total_check_seconds = 0.0
+    total_scan_seconds = 0.0
     total_entropy_seconds = 0.0
     total_scanned_files = 0
     total_entropy_files = 0
 
+    quick_start_time = time.perf_counter()
     interrupted = False
     try:
         for index, directory in enumerate(targets, start=1):
@@ -96,23 +97,23 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
             accumulate_stats(total_analysis_stats, current_stats)
             total_analysis_plan_count += len(current_plan)
             total_analysis_compressible_size += current_plan_size
-            total_walk_seconds += float(current_timing.get("walk_seconds", 0.0) or 0.0)
-            total_check_seconds += float(current_timing.get("check_seconds", 0.0) or 0.0)
+            total_scan_seconds += float(current_timing.get("scan_seconds", 0.0) or 0.0)
             total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
             total_scanned_files += int(getattr(current_monitor.stats, "total_files", 0) or 0)
             total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
 
+            quick_elapsed = max(0.001, time.perf_counter() - quick_start_time)
             total_summary = make_stats_summary(
                 total_analysis_stats,
                 total_analysis_plan_count,
                 total_analysis_compressible_size,
                 min_savings_percent=backend.min_savings,
                 analysis_timing=build_live_analysis_timing(
-                    walk_seconds=total_walk_seconds,
+                    scan_seconds=total_scan_seconds,
                     total_files=total_scanned_files,
-                    check_seconds=total_check_seconds,
                     entropy_seconds=total_entropy_seconds,
                     entropy_files=total_entropy_files,
+                    total_seconds=quick_elapsed,
                 ),
             )
 
@@ -127,8 +128,9 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
             backend._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
 
         backend.quick_analysis_results = quick_results
+        quick_elapsed = max(0.001, time.perf_counter() - quick_start_time)
         backend._send_progress(
-            _("Scanning complete"),
+            _("Scanned in {elapsed:.1f}s").format(elapsed=quick_elapsed),
             100.0,
             quick_history=True,
         )
@@ -139,4 +141,4 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
         raise
     finally:
         if compactos_thread is not None:
-            compactos_thread.join(timeout=0.1 if interrupted else None)
+            compactos_thread.join(timeout=0.1)

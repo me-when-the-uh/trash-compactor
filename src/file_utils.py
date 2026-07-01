@@ -83,7 +83,7 @@ def get_ntfs_compressed_size(file_path: str | Path) -> int:
             raise ctypes.WinError(error)
     return (high.value << 32) + low
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DirectoryDecision:
     skip: bool
     reason: str = ""
@@ -101,7 +101,7 @@ class DirectoryDecision:
         return cls(False, "")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class CompressionDecision:
     should_compress: bool
     reason: str
@@ -163,7 +163,7 @@ def is_file_compressed(
         try:
             stat_info = os.stat(file_path)
             actual_size = stat_info.st_size
-            attributes = stat_info.st_file_attributes
+            attributes = getattr(stat_info, "st_file_attributes", 0)
         except OSError as exc:
             logging.error("Failed to get actual file size for %s: %s", file_path, exc)
             return False, 0

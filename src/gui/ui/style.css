@@ -574,12 +574,14 @@ textarea {
   font-size: clamp(0.78em, 0.68vw + 0.58em, 0.86em);
   font-variant-numeric: tabular-nums;
   line-height: 1.35;
-  min-height: 2.7em;
-  max-height: 2.7em;
-  margin: 0 0 10px;
+  margin: 0 0 8px;
   padding: 0;
-  overflow: hidden;
   white-space: pre-line;
+}
+
+#Analysis_Timing:empty {
+  display: none;
+  margin: 0;
 }
 
 #Quick_Estimate {

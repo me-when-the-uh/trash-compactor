@@ -45,7 +45,7 @@ def run_analysis_pipeline(
     backend._check_processed = 0
     backend._send_progress(_("Scanning directory..."), 0.0, **progress_kwargs)
 
-    discovery = GuiDiscoveryStream(backend, base_dir, stats, progress_kwargs)
+    discovery = GuiDiscoveryStream(backend, base_dir, stats, progress_kwargs, overall_start_time)
 
     plan_count = 0
     total_compressible_size = 0
@@ -53,6 +53,15 @@ def run_analysis_pipeline(
     entropy_phase_start: Optional[float] = None
     last_update_time = backend._check_phase_start
     last_summary_update_time = backend._check_phase_start
+
+    def _elapsed_total(now: float) -> float:
+        return max(0.001, now - overall_start_time)
+
+    def _live_scan_seconds(now: float) -> float:
+        measured = max(0.0, monitor.stats.file_scan_time)
+        if measured > 0:
+            return measured
+        return _elapsed_total(now)
 
     def _plan_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int):
         nonlocal plan_count, total_compressible_size, last_update_time, last_summary_update_time
@@ -67,7 +76,6 @@ def run_analysis_pipeline(
         backend._check_pause_stop()
 
         now = time.perf_counter()
-        check_elapsed = max(0.001, now - backend._check_phase_start)
 
         if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total_files:
             last_update_time = now
@@ -86,9 +94,9 @@ def run_analysis_pipeline(
                 directory=str(base_dir),
                 scope="current",
                 analysis_timing=build_live_analysis_timing(
-                    walk_seconds=discovery.walk_seconds,
+                    scan_seconds=_live_scan_seconds(now),
                     total_files=total_files,
-                    check_seconds=check_elapsed,
+                    total_seconds=_elapsed_total(now),
                 ),
             )
 
@@ -123,11 +131,11 @@ def run_analysis_pipeline(
                 directory=str(base_dir),
                 scope="current",
                 analysis_timing=build_live_analysis_timing(
-                    walk_seconds=discovery.walk_seconds,
+                    scan_seconds=_live_scan_seconds(now),
                     total_files=max(discovery.count, processed),
-                    check_seconds=max(0.0, monitor.stats.file_scan_time),
                     entropy_seconds=entropy_elapsed,
                     entropy_files=processed,
+                    total_seconds=_elapsed_total(now),
                 ),
             )
 
@@ -151,14 +159,18 @@ def run_analysis_pipeline(
     )
 
     total_files = discovery.count
-    walk_seconds = discovery.walk_seconds
+    analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)
 
     if total_files == 0:
         backend.last_analysis_plan = []
         backend.last_analysis_stats = stats
         backend.last_analysis_monitor = monitor
         monitor.end_operation()
-        backend.last_analysis_timing = build_analysis_timing(walk_seconds, 0, monitor)
+        backend.last_analysis_timing = build_analysis_timing(
+            monitor,
+            total_seconds=analysis_elapsed,
+            total_files=0,
+        )
         backend._send_folder_summary(
             stats,
             0,
@@ -167,6 +179,12 @@ def run_analysis_pipeline(
             scope="current",
             analysis_timing=backend.last_analysis_timing,
         )
+        if report_completion:
+            backend._send_progress(
+                _("Scanned in {elapsed:.1f}s").format(elapsed=analysis_elapsed),
+                100.0,
+                **progress_kwargs,
+            )
         return
 
     monitor.stats.total_files = total_files
@@ -177,12 +195,15 @@ def run_analysis_pipeline(
 
     apply_entropy_projection(stats, plan)
     monitor.end_operation()
-    backend.last_analysis_timing = build_analysis_timing(walk_seconds, total_files, monitor)
+    backend.last_analysis_timing = build_analysis_timing(
+        monitor,
+        total_seconds=analysis_elapsed,
+        total_files=total_files,
+    )
 
     if report_completion:
-        analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)
         backend._send_progress(
-            _("Analysis complete in {elapsed:.2f}s").format(elapsed=analysis_elapsed),
+            _("Scanned in {elapsed:.1f}s").format(elapsed=analysis_elapsed),
             100.0,
             **progress_kwargs,
         )

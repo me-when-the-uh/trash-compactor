@@ -1,7 +1,8 @@
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, Optional
 
 from ..config import DEFAULT_MIN_SAVINGS_PERCENT
-from ..file_utils import is_admin
+from ..drive_inspector import DRIVE_REMOTE, VolumeDetails, get_volume_details_fast
+from ..file_utils import describe_protected_path, is_admin, sanitize_path
 from ..i18n import _
 from ..one_click import resolve_targets
 from .message_types import (
@@ -35,17 +36,66 @@ def _reset_config(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
     return backend._current_config_response()
 
 
+def _cached_volume_details(backend: "GuiBackend", directory: str) -> VolumeDetails:
+    candidate = sanitize_path(directory)
+    if candidate == backend._cached_validation_path and backend._cached_volume_details is not None:
+        return backend._cached_volume_details
+
+    details = get_volume_details_fast(candidate)
+    backend._cached_validation_path = candidate
+    backend._cached_volume_details = details
+    return details
+
+
+def _validate_target_path(backend: "GuiBackend", directory: str) -> Optional[GuiResponse]:
+    candidate = sanitize_path(directory)
+    if not candidate:
+        return WarningResponse(_("Warning"), _("No folder selected"))
+
+    protection_reason = describe_protected_path(candidate)
+    if protection_reason:
+        return WarningResponse(_("Warning"), _("Cannot compress protected path: {reason}").format(reason=protection_reason))
+
+    details = _cached_volume_details(backend, candidate)
+    if details.anchor is None:
+        return WarningResponse(_("Warning"), _("Unable to resolve the target volume. Please verify the path."))
+
+    if details.drive_type == DRIVE_REMOTE:
+        return WarningResponse(_("Warning"), _("Network shares are not supported targets for compression."))
+
+    if details.filesystem and details.filesystem != "NTFS":
+        return WarningResponse(
+            _("Warning"),
+            _("Windows compression requires NTFS. Detected filesystem: {filesystem}").format(
+                filesystem=details.filesystem or "unknown"
+            ),
+        )
+
+    return None
+
+
 def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
     requested_path = backend._requested_path(request)
     if not requested_path and backend.last_analysis_plan is None and not backend.quick_analysis_results:
         return WarningResponse(_("Warning"), _("No folder selected"))
-    if requested_path and requested_path != backend.current_folder:
-        backend._clear_quick_analysis_results()
-        backend._clear_analysis_state()
+
+    if not backend.quick_analysis_results:
+        if requested_path:
+            validation = _validate_target_path(backend, requested_path)
+            if validation is not None:
+                return validation
+
+        if requested_path and requested_path != backend.current_folder:
+            backend._clear_quick_analysis_results()
+            backend._clear_analysis_state()
 
     if requested_path:
         backend.current_folder = requested_path
-    backend.min_savings = getattr(request, "min_savings", backend.min_savings)
+
+    min_savings = getattr(request, "min_savings", None)
+    if min_savings is not None:
+        backend.min_savings = min_savings
+
     if not backend.start_worker(backend._run_compression):
         return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
     return StateResponse("Scanning")
@@ -53,8 +103,10 @@ def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiRespons
 
 def _analyse_folder(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
     requested_path = backend._requested_path(request)
-    if not requested_path:
-        return WarningResponse(_("Warning"), _("No folder selected"))
+    validation = _validate_target_path(backend, requested_path)
+    if validation is not None:
+        return validation
+
     backend._clear_quick_analysis_results()
     if requested_path and requested_path != backend.current_folder:
         backend._clear_analysis_state()

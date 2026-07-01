@@ -53,15 +53,13 @@ def sample_directory_entropy(
             include_subdirectories=include_subdirectories,
         )
 
-    random.shuffle(files)
-
     sampled_files = 0
     sampled_bytes = 0
     weighted_entropy = 0.0
     lz4_certain_incompressible_files = 0
     total_budget = max_bytes
 
-    for file_path in files:
+    for file_path, file_size in files:
         remaining = total_budget - sampled_bytes
         if remaining <= 0:
             break
@@ -73,6 +71,7 @@ def sample_directory_entropy(
         file_entropy, file_bytes, lz4_certain = sample_file_entropy(
             file_path,
             byte_budget=per_file_budget,
+            file_size=file_size,
         )
         if file_bytes == 0:
             continue
@@ -108,13 +107,13 @@ def _reservoir_sample_files(
     max_files: int,
     include_subdirectories: bool,
     skip_root_files: bool,
-) -> tuple[list[Path], bool]:
+) -> tuple[list[tuple[Path, int]], bool]:
     if max_files <= 0:
         return [], False
 
     # Use a min-heap to keep the k items with the largest keys
-    # Heap elements: (key, path)
-    reservoir: list[tuple[float, Path]] = []
+    # Heap elements: (key, path, file_size)
+    reservoir: list[tuple[float, Path, int]] = []
     
     pending = deque([root])
     root_files_skipped = False
@@ -157,16 +156,16 @@ def _reservoir_sample_files(
                         file_path = Path(entry.path)
 
                         if len(reservoir) < max_files:
-                            heapq.heappush(reservoir, (key, file_path))
+                            heapq.heappush(reservoir, (key, file_path, file_size))
                         elif key > reservoir[0][0]:
-                            heapq.heapreplace(reservoir, (key, file_path))
+                            heapq.heapreplace(reservoir, (key, file_path, file_size))
                     except OSError:
                         continue
         except OSError as exc:
             logging.debug("Unable to inspect %s for entropy: %s", current, exc)
             continue
 
-    return [path for _, path in reservoir], root_files_skipped
+    return [(path, file_size) for _, path, file_size in reservoir], root_files_skipped
 
 
 def get_sample_window_count(file_size: int) -> int:
@@ -179,15 +178,21 @@ def get_sample_window_count(file_size: int) -> int:
     return int(ENTROPY_DYNAMIC_WINDOWS_MIN + ratio * (ENTROPY_DYNAMIC_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MIN))
 
 
-def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int, bool]:
+def sample_file_entropy(
+    path: Path,
+    *,
+    byte_budget: int,
+    file_size: Optional[int] = None,
+) -> tuple[float, int, bool]:
     if byte_budget <= 0:
         return 0.0, 0, False
 
-    try:
-        file_size = path.stat().st_size
-    except OSError as exc:
-        logging.debug("Unable to stat %s for entropy sampling: %s", path, exc)
-        return 0.0, 0, False
+    if file_size is None:
+        try:
+            file_size = path.stat().st_size
+        except OSError as exc:
+            logging.debug("Unable to stat %s for entropy sampling: %s", path, exc)
+            return 0.0, 0, False
 
     if file_size == 0:
         return 0.0, 0, False

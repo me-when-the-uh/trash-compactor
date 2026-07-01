@@ -337,7 +337,7 @@ def main() -> None:
                 sys.exit(1)
             args = interactive_configure(args)
             args.min_savings = config.clamp_savings_percent(args.min_savings)
-            if not args.directory:
+            if not getattr(args, "one_click", False) and not args.directory:
                 prompt_exit()
                 return
 
@@ -409,6 +409,7 @@ def main() -> None:
                 debug_scan_all=getattr(args, "debug_scan_all", False),
             )
     except KeyboardInterrupt:
+        discard_staged_incompressible_cache()
         print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
         sys.exit(130)
 

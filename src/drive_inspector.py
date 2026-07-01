@@ -115,7 +115,7 @@ def _drive_letter(drive_path: str) -> Optional[str]:
         drive_letter = drive_letter[:-1]
     return drive_letter or None
 
-def get_volume_details(path: str) -> VolumeDetails:
+def _volume_details_base(path: str) -> VolumeDetails:
     anchor = _volume_anchor(path)
     letter = _drive_letter(path)
     if not anchor:
@@ -127,6 +127,23 @@ def get_volume_details(path: str) -> VolumeDetails:
     if drive_type not in {DRIVE_UNKNOWN, DRIVE_NO_ROOT_DIR}:
         filesystem = _filesystem_name(anchor)
 
+    return VolumeDetails(anchor, letter, drive_type, filesystem, None)
+
+
+def get_volume_details_fast(path: str) -> VolumeDetails:
+    """Resolve drive type and filesystem without WMI/IOCTL rotational probes."""
+    return _volume_details_base(path)
+
+
+def get_volume_details(path: str) -> VolumeDetails:
+    details = _volume_details_base(path)
+    if details.anchor is None:
+        return details
+
+    anchor = details.anchor
+    letter = details.letter
+    drive_type = details.drive_type
+    filesystem = details.filesystem
     rotational = None
     if drive_type == DRIVE_FIXED and letter and len(letter) == 2 and letter[1] == ':':
         try:

@@ -25,6 +25,7 @@ class GuiDiscoveryStream:
         "_base_dir",
         "_stats",
         "_progress_kwargs",
+        "_overall_start",
         "count",
         "walk_seconds",
         "complete",
@@ -41,11 +42,13 @@ class GuiDiscoveryStream:
         base_dir: Path,
         stats: CompressionStats,
         progress_kwargs: dict[str, Any],
+        overall_start: float,
     ) -> None:
         self._backend = backend
         self._base_dir = base_dir
         self._stats = stats
         self._progress_kwargs = progress_kwargs
+        self._overall_start = overall_start
         self.count = 0
         self.walk_seconds = 0.0
         self.complete = False
@@ -122,8 +125,9 @@ class GuiDiscoveryStream:
                 ):
                     self._last_summary_update = now
                     timing = build_live_analysis_timing(
-                        walk_seconds=walk_elapsed,
+                        scan_seconds=walk_elapsed,
                         total_files=self.count,
+                        total_seconds=max(0.001, now - self._overall_start),
                     )
                     self._backend._send_folder_summary(
                         self._stats,

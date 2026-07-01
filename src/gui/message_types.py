@@ -72,7 +72,7 @@ class SelectFolderRequest(GuiRequest):
 class StartCompressionRequest(GuiRequest):
     type: str = field(init=False, default="StartCompression")
     path: str = ""
-    min_savings: float = 18.0
+    min_savings: Optional[float] = None
 
 
 @dataclass

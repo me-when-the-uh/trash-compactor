@@ -6,64 +6,65 @@ from ..timer import PerformanceMonitor
 
 def _timing_fields(
     *,
-    walk_seconds: float,
+    scan_seconds: float,
     total_files: int,
-    check_seconds: float = 0.0,
     entropy_seconds: float = 0.0,
     entropy_files: int = 0,
-    scan_rate: Optional[float] = None,
+    total_seconds: Optional[float] = None,
 ) -> dict:
-    walk_seconds = max(0.0, walk_seconds)
-    check_seconds = max(0.0, check_seconds)
+    scan_seconds = max(0.0, scan_seconds)
     entropy_seconds = max(0.0, entropy_seconds)
-    combined = walk_seconds + check_seconds
-    walk_rate = (total_files / walk_seconds) if walk_seconds > 0 else 0.0
-    check_rate = (total_files / check_seconds) if check_seconds > 0 and total_files > 0 else 0.0
-    if scan_rate is None:
-        scan_rate = (total_files / combined) if combined > 0 else 0.0
+    if total_seconds is None:
+        total_seconds = scan_seconds + entropy_seconds
+    total_seconds = max(0.0, total_seconds)
+    scan_rate = (total_files / scan_seconds) if scan_seconds > 0 else 0.0
     return {
-        "combined_scan_seconds": combined,
-        "walk_seconds": walk_seconds,
-        "walk_rate": walk_rate,
-        "check_seconds": check_seconds,
-        "check_rate": check_rate,
+        "scan_seconds": scan_seconds,
         "scan_rate": scan_rate,
         "entropy_seconds": entropy_seconds,
         "entropy_rate": (entropy_files / entropy_seconds) if entropy_seconds > 0 else 0.0,
+        "total_seconds": total_seconds,
+        "total_files": total_files,
+        "entropy_files": entropy_files,
     }
 
 
 def build_live_analysis_timing(
     *,
-    walk_seconds: float,
+    scan_seconds: float,
     total_files: int,
-    check_seconds: float = 0.0,
     entropy_seconds: float = 0.0,
     entropy_files: int = 0,
+    total_seconds: Optional[float] = None,
 ) -> dict:
     return _timing_fields(
-        walk_seconds=walk_seconds,
+        scan_seconds=scan_seconds,
         total_files=total_files,
-        check_seconds=check_seconds,
         entropy_seconds=entropy_seconds,
         entropy_files=entropy_files,
+        total_seconds=total_seconds,
     )
 
 
 def build_analysis_timing(
-    walk_seconds: float,
-    candidate_files: int,
     monitor: PerformanceMonitor,
+    *,
+    total_seconds: Optional[float] = None,
+    total_files: Optional[int] = None,
 ) -> dict:
-    walk_seconds = max(0.0, walk_seconds)
-    walk_rate = (candidate_files / walk_seconds) if walk_seconds > 0 else 0.0
+    files = total_files if total_files is not None else monitor.stats.total_files
+    scan_seconds = max(0.0, monitor.stats.file_scan_time)
+    entropy_seconds = max(0.0, monitor.stats.entropy_analysis_time)
+    if total_seconds is None:
+        total_seconds = max(0.0, monitor.stats.total_time)
+    if total_seconds <= 0:
+        total_seconds = scan_seconds + entropy_seconds
     return _timing_fields(
-        walk_seconds=walk_seconds,
-        total_files=candidate_files,
-        check_seconds=max(0.0, monitor.stats.file_scan_time),
-        entropy_seconds=max(0.0, monitor.stats.entropy_analysis_time),
+        scan_seconds=scan_seconds,
+        total_files=files,
+        entropy_seconds=entropy_seconds,
         entropy_files=monitor.stats.files_analyzed_for_entropy,
-        scan_rate=walk_rate,
+        total_seconds=total_seconds,
     )
 
 
@@ -85,6 +86,7 @@ def accumulate_stats(target: CompressionStats, source: CompressionStats) -> None
     target.entropy_projected_compressed_bytes_conservative += (
         source.entropy_projected_compressed_bytes_conservative or source.total_compressed_size
     )
+    target.lz4_certain_incompressible_files += source.lz4_certain_incompressible_files
 
 
 def make_stats_summary(
@@ -149,6 +151,7 @@ def make_stats_summary(
         "min_savings_percent": min_savings_percent,
         "potential_savings_bytes": potential_savings_bytes,
         "analysis_timing": analysis_timing,
+        "lz4_certain_incompressible_files": stats.lz4_certain_incompressible_files,
         "compressed": {
             "count": compressed_count,
             "logical_size": compressed_logical_size,
