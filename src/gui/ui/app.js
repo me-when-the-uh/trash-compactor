@@ -341,11 +341,17 @@ var Gui = (function() {
 		directory_summary_history.push(payload);
 	}
 
+	function _sort_directory_summary_history() {
+		directory_summary_history.sort(function(a, b) {
+			var aSize = (a.data && a.data.logical_size) || 0;
+			var bSize = (b.data && b.data.logical_size) || 0;
+			return bSize - aSize;
+		});
+	}
+
 	function _flush_queued_updates() {
-		if (status_queue) {
-			Gui.set_status(status_queue.status, status_queue.pct, status_queue.quick_history, status_queue.final);
-			status_queue = null;
-		}
+		var activateQuickHistory = false;
+
 		if (current_summary_queue) {
 			current_summary_state = current_summary_queue.data;
 			current_summary_directory = current_summary_queue.directory || "";
@@ -359,6 +365,18 @@ var Gui = (function() {
 		if (directory_summary_queue) {
 			_upsert_directory_summary(directory_summary_queue);
 			directory_summary_queue = null;
+		}
+		if (status_queue) {
+			activateQuickHistory = status_queue.quick_history;
+			Gui.set_status(status_queue.status, status_queue.pct, status_queue.final);
+			status_queue = null;
+		}
+		if (activateQuickHistory) {
+			quick_history_mode = true;
+			if (directory_summary_history.length) {
+				_sort_directory_summary_history();
+				directory_summary_index = 0;
+			}
 		}
 		Gui.render_summaries();
 	}
@@ -654,15 +672,9 @@ var Gui = (function() {
 			}
 		},
 
-		set_status: function(status, pct, quick_history, final) {
+		set_status: function(status, pct, final) {
 			$("#Activity_Text").text(status);
 			Gui.set_progress(pct, final);
-			if (quick_history) {
-				quick_history_mode = true;
-				if (directory_summary_history.length) {
-					directory_summary_index = directory_summary_history.length - 1;
-				}
-			}
 		},
 
 		scanning: function() {

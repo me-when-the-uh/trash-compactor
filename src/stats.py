@@ -279,6 +279,30 @@ class CompressionStats:
         return 'generic'
 
 
+def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int, str]]) -> None:
+    from .config import DRY_RUN_CONSERVATIVE_FACTORS
+
+    stats.entropy_projected_original_bytes = stats.total_original_size
+    entropy_map = {Path(record.path): record for record in stats.entropy_samples}
+
+    projected_lzx = 0.0
+    projected_xpress = 0.0
+    for path_str, size, algo in plan:
+        record = entropy_map.get(Path(path_str).parent)
+        if record:
+            factor = max(0.0, record.estimated_savings / 100.0)
+            compressed = size * (1.0 - factor)
+            projected_lzx += compressed
+            projected_xpress += compressed * DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.06)
+        else:
+            projected_lzx += size
+            projected_xpress += size
+
+    skipped = stats.total_compressed_size
+    stats.entropy_projected_compressed_bytes = int(round(projected_lzx + skipped))
+    stats.entropy_projected_compressed_bytes_conservative = int(round(projected_xpress + skipped))
+
+
 def _format_sample_bytes(value: int) -> str:
     if value >= 1024 * 1024:
         return f"{value / (1024 * 1024):.1f} MB"

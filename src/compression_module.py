@@ -11,13 +11,12 @@ from .compression.compression_executor import execute_compression_plan
 from .compression.compression_planner import CountingDirEntryIter, PlanEntry, iter_files, plan_compression
 from .config import (
     DEFAULT_MIN_SAVINGS_PERCENT,
-    DRY_RUN_CONSERVATIVE_FACTORS,
     clamp_savings_percent,
     savings_from_entropy,
 )
 from .i18n import _
 from .skip_logic import commit_incompressible_cache, log_directory_skips, maybe_skip_directory
-from .stats import CompressionStats, EntropySampleRecord, ProgressTimer
+from .stats import CompressionStats, EntropySampleRecord, ProgressTimer, apply_entropy_projection
 from .timer import PerformanceMonitor
 from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
 
@@ -343,32 +342,7 @@ def entropy_dry_run(
         debug_scan_all=debug_scan_all,
     )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
+    apply_entropy_projection(stats, plan)
 
-    stats.entropy_projected_original_bytes = stats.total_original_size
-    
-    entropy_map = {Path(r.path): r for r in stats.entropy_samples}
-    
-    projected_compressed_lzx = 0.0
-    projected_compressed_xpress = 0.0
-    
-    for path_str, size, algo in plan:
-        parent = Path(path_str).parent
-        record = entropy_map.get(parent)
-        
-        if record:
-            savings_factor = max(0.0, record.estimated_savings / 100.0)
-            compressed_size = size * (1.0 - savings_factor)
-            projected_compressed_lzx += compressed_size
-            conservative_factor = DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.06)
-            projected_compressed_xpress += compressed_size * conservative_factor
-        else:
-            # Fallback if no entropy record found (e.g. sampling failed or skipped)
-            projected_compressed_lzx += size
-            projected_compressed_xpress += size
-
-    skipped_size = stats.total_compressed_size
-    stats.entropy_projected_compressed_bytes = int(round(projected_compressed_lzx + skipped_size))
-    stats.entropy_projected_compressed_bytes_conservative = int(round(projected_compressed_xpress + skipped_size))
-    
     monitor.end_operation()
     return stats, monitor, plan
