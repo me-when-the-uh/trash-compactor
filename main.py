@@ -290,6 +290,15 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
 
 def main() -> None:
+    if os.getenv("TRASH_COMPACTOR_DIAGNOSTIC", "").strip().lower() in {"1", "true", "yes"}:
+        from src.compression.file_scan import fast_walk_available
+
+        print(
+            f"[diag] frozen={getattr(sys, 'frozen', False)} "
+            f"meipass={getattr(sys, '_MEIPASS', '')!r} "
+            f"fast_walk={fast_walk_available()}",
+            flush=True,
+        )
     override_lang = _detect_language_override(sys.argv[1:])
     load_translations(override_lang)
     

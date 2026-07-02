@@ -1,7 +1,7 @@
 from typing import Optional
 
-UI_STATUS_INTERVAL_SECONDS = 0.15
-UI_SUMMARY_INTERVAL_SECONDS = 0.15
+UI_STATUS_INTERVAL_SECONDS = 0.10
+UI_SUMMARY_INTERVAL_SECONDS = 0.10
 SCAN_STOP_CHECK_EVERY_FILES = 64
 PLAN_PROGRESS_GRANULARITY = 32
 ENTROPY_PROGRESS_GRANULARITY = 8
@@ -12,13 +12,13 @@ _PROGRESS_SCAN_END = 100.0 / 3.0
 _PROGRESS_ENTROPY_END = 100.0
 
 
-def scan_phase_progress_pct(file_count: int) -> float:
+def scan_progress_percent(file_count: int) -> float:
     if file_count <= 0:
         return 0.0
     return (file_count / _PROGRESS_SCAN_BASELINE_FILES) * _PROGRESS_SCAN_END
 
 
-def entropy_phase_progress_pct(processed: int, total: int) -> float:
+def entropy_progress_percent(processed: int, total: int) -> float:
     if total:
         span = _PROGRESS_ENTROPY_END - _PROGRESS_SCAN_END
         return _PROGRESS_SCAN_END + (processed / total) * span

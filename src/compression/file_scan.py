@@ -1,16 +1,43 @@
 import functools
+import logging
 import os
 import stat
+from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from queue import Queue
+from threading import Thread
+from typing import Callable, Iterable, Optional
 
+from ..config import DEFAULT_EXCLUDE_DIRECTORIES, MIN_COMPRESSIBLE_SIZE, SKIP_EXTENSIONS
 from ..i18n import _
-from ..file_utils import CompressionDecision, should_compress_file
+from ..file_utils import CompressionDecision, _normalize_for_compare, should_compress_file
 from ..skip_logic import maybe_skip_directory
 from ..stats import CompressionStats
 from ..workers import scan_worker_count
+
+
+def _use_fast_walk() -> bool:
+    value = os.getenv("TRASH_COMPACTOR_USE_FAST_WALK", "1").strip().lower()
+    return value not in {"0", "false", "no", "off"}
+
+
+def fast_walk_available() -> bool:
+    if not _use_fast_walk():
+        return False
+    try:
+        import fast_walk
+
+        if not callable(getattr(fast_walk, "walk_files", None)):
+            raise ImportError("fast_walk.walk_files is missing")
+    except Exception as exc:
+        logging.warning("fast_walk is unavailable, falling back to Python walker: %s", exc)
+        return False
+    return True
+
+
+_FAST_SCAN_CHUNK = 2048
 
 
 class CountingDirEntryIter:
@@ -71,6 +98,15 @@ def iter_files(
             _walk_skipped_inline(root, skipped_file_callback)
         return
 
+    if fast_walk_available():
+        excluded = [_normalize_for_compare(path) for path in DEFAULT_EXCLUDE_DIRECTORIES]
+        yield from _iter_fast_walk(
+            os.fspath(root),
+            excluded,
+            scan_worker_count(),
+        )
+        return
+
     stack: list[str] = [os.fspath(root)]
 
     while stack:
@@ -127,6 +163,42 @@ class FileScanInput:
 _FileScanInput = FileScanInput
 
 
+def _iter_fast_walk(
+    root: str,
+    excluded: list[str],
+    workers: int,
+) -> Iterator[FileScanInput]:
+    import fast_walk
+
+    sentinel = object()
+    pending: Queue[object] = Queue()
+
+    def _producer() -> None:
+        try:
+            for batch in fast_walk.walk_files(root, excluded, workers):
+                for path_str, size, attributes in batch:
+                    pending.put(
+                        FileScanInput(path_str, int(size), int(attributes)),
+                    )
+        finally:
+            pending.put(sentinel)
+
+    Thread(target=_producer, daemon=True).start()
+
+    while True:
+        item = pending.get()
+        if item is sentinel:
+            return
+        yield item
+
+
+def _file_suffix_lower(path: str) -> str:
+    dot = path.rfind(".")
+    if dot == -1:
+        return ""
+    return path[dot:].lower()
+
+
 def _scan_path(
     scan_input: _FileScanInput,
     debug_scan_all: bool = False,
@@ -150,6 +222,36 @@ def _scan_path(
         )
 
 
+def _scan_path_fast(scan_input: _FileScanInput, debug_scan_all: bool = False) -> ScanPayload:
+    path = scan_input.path
+    size = scan_input.file_size
+
+    if not debug_scan_all:
+        suffix = _file_suffix_lower(path)
+        if suffix in SKIP_EXTENSIONS:
+            return ScanPayload(
+                path,
+                size,
+                CompressionDecision.deny(
+                    f"Skipped due to extension {suffix}",
+                    category="extension",
+                ),
+            )
+
+    if size < MIN_COMPRESSIBLE_SIZE:
+        return ScanPayload(
+            path,
+            size,
+            CompressionDecision.deny(
+                f"File too small ({size} bytes)",
+                size,
+                category="too_small",
+            ),
+        )
+
+    return ScanPayload(path, size, CompressionDecision.allow(size))
+
+
 def _scan_checks_compressed_state() -> bool:
     value = os.getenv("TRASH_COMPACTOR_FAST_SCAN", "1").strip().lower()
     return value in {"0", "false", "no", "off"}
@@ -159,10 +261,23 @@ def iter_scanned_files(files: Iterable[_FileScanInput], debug_scan_all: bool = F
     workers = scan_worker_count()
     check_already_compressed = _scan_checks_compressed_state()
 
+    if not check_already_compressed:
+        mapper = functools.partial(_scan_path_fast, debug_scan_all=debug_scan_all)
+        chunk: list[_FileScanInput] = []
+        for scan_input in files:
+            chunk.append(scan_input)
+            if len(chunk) >= _FAST_SCAN_CHUNK:
+                for item in chunk:
+                    yield mapper(item)
+                chunk = []
+        for item in chunk:
+            yield mapper(item)
+        return
+
     mapper = functools.partial(
         _scan_path,
         debug_scan_all=debug_scan_all,
-        check_already_compressed=check_already_compressed,
+        check_already_compressed=True,
     )
 
     if workers <= 1:

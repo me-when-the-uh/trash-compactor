@@ -12,8 +12,8 @@ from ..progress import (
     PLAN_PROGRESS_GRANULARITY,
     UI_STATUS_INTERVAL_SECONDS,
     UI_SUMMARY_INTERVAL_SECONDS,
-    entropy_phase_progress_pct,
-    scan_phase_progress_pct,
+    entropy_progress_percent,
+    scan_progress_percent,
 )
 from ..summary import build_analysis_timing, build_live_analysis_timing
 
@@ -46,13 +46,11 @@ def run_analysis_pipeline(
     backend._send_progress(_("Scanning directory..."), 0.0, **progress_kwargs)
 
     discovery = GuiDiscoveryStream(backend, base_dir, stats, progress_kwargs, overall_start_time)
+    discovery.prefill_walk()
 
     plan_count = 0
     total_compressible_size = 0
-    backend._check_phase_start = time.perf_counter()
     entropy_phase_start: Optional[float] = None
-    last_update_time = backend._check_phase_start
-    last_summary_update_time = backend._check_phase_start
 
     def _elapsed_total(now: float) -> float:
         return max(0.001, now - overall_start_time)
@@ -118,7 +116,7 @@ def run_analysis_pipeline(
                     processed=processed,
                     total=total,
                 ),
-                entropy_phase_progress_pct(processed, total),
+                entropy_progress_percent(processed, total),
                 **progress_kwargs,
             )
 
@@ -139,10 +137,13 @@ def run_analysis_pipeline(
                 ),
             )
 
+    backend._check_phase_start = time.perf_counter()
+    last_update_time = backend._check_phase_start
+    last_summary_update_time = backend._check_phase_start
     discovery.enter_check_phase()
     backend._send_progress(
         _("Analyzing files..."),
-        scan_phase_progress_pct(discovery.count),
+        scan_progress_percent(discovery.count),
         **progress_kwargs,
     )
 

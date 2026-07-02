@@ -56,11 +56,10 @@ Note: For Option 2, ensure Git and Python 3.11 or 3.12 are installed on your sys
 Optional: compile the app yourself with PyInstaller (recommended spec file):
     ```powershell
     python -m pip install -r requirements.txt
-    python -m PyInstaller --clean --noconfirm trash-compactor-next.spec
+    python -m PyInstaller --clean --noconfirm trash-compactor.spec
     ```
-  The target machine also needs the [Microsoft WebView2 runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
+  The development machine also needs the [Microsoft WebView2 runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/).
 
-  `trash-compactor.spec` builds a `trash-compactor.exe` variant; `trash-compactor-next.spec` builds `trash-compactor-next.exe` with the same GUI bundle and webview hidden imports. UPX compression is disabled in both specs because it can break pywebview; you can enable it manually if you accept that risk.
 
 ## Usage
 

@@ -20,7 +20,7 @@ from .message_types import (
 from .pipelines.analysis import run_analysis_pipeline
 from .pipelines.compression import run_compression_pipeline
 from .pipelines.quick import run_quick_compression_pipeline
-from .progress import scale_quick_progress, scan_phase_progress_pct
+from .progress import scale_quick_progress, scan_progress_percent
 from .summary import make_stats_summary
 from .webview_server import GuiServer, create_gui_app
 
@@ -189,7 +189,7 @@ class GuiBackend:
             status += " " + _("(Scanning more files...)")
         self._send_progress(
             status,
-            scan_phase_progress_pct(total),
+            scan_progress_percent(total),
             quick_dir_index=quick_dir_index,
             quick_dir_total=quick_dir_total,
         )
