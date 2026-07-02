@@ -2,17 +2,24 @@ import logging
 import os
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterable, Optional
 
 from ..i18n import _
-from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy, SKIP_EXTENSIONS, ENTROPY_MAX_FILE_BUDGET
-from ..file_utils import CompressionDecision
+from ..config import savings_from_entropy, ENTROPY_MAX_FILE_BUDGET
 from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, get_incompressible_cache, sample_directory_entropy
-from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
+from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
 from .entropy import sample_file_entropy
-from .file_scan import CountingDirEntryIter, FileScanInput, iter_files, iter_scanned_files  # noqa: F401
+from .file_scan import (
+    CAT_ALREADY_COMPRESSED,
+    CAT_DEBUG_EXT,
+    CAT_ELIGIBLE,
+    CAT_ERROR,
+    CAT_EXTENSION,
+    CountingDirEntryIter,
+    iter_files,
+)  # noqa: F401
 
 PlanEntry = tuple[str, int, str]
 
@@ -32,15 +39,14 @@ def _format_size(num_bytes: int) -> str:
 
 
 def plan_compression(
-    files: Iterable["FileScanInput"],
+    files: Iterable,
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     *,
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int, bool, Optional[str], int], None]] = None,
-    file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
+    progress_callback: Optional[Callable[[str, int, bool, Optional[str], int], None]] = None,
     apply_entropy_filter: bool = True,
     entropy_progress_callback: Optional[Callable[[Path, int, int], None]] = None,
     debug_scan_all: bool = False,
@@ -48,64 +54,58 @@ def plan_compression(
     candidates: list[PlanEntry] = []
     with monitor.time_file_scan():
         processed = 0
-        for payload in iter_scanned_files(files, debug_scan_all):
+        bulk_skips = SkipBulkLedger()
+        use_bulk_skips = verbosity < 4
+        for path, size, _attributes, algo, category, hint in files:
             processed += 1
-            path_str = payload.path
-            decision = payload.decision
 
-            if decision is None:
-                reason = payload.error or "Error processing file"
-                file_path = Path(path_str)
+            if category == CAT_ERROR:
+                reason = _("Error processing {file_path}").format(file_path=path)
                 stats.errors.append(reason)
-                stats.record_file_skip(
-                    file_path,
-                    reason,
-                    payload.file_size,
-                    payload.file_size,
-                    category='error',
-                )
+                if use_bulk_skips:
+                    bulk_skips.add("error", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, category="error")
                 logging.error(reason)
                 if progress_callback:
-                    progress_callback(file_path, processed, False, reason, payload.file_size)
+                    progress_callback(path, processed, False, reason, size)
                 continue
 
-            file_size = payload.file_size
-            file_path = Path(path_str)
-            if file_observer:
-                file_observer(file_path, file_size, decision)
-            stats.total_original_size += file_size
+            stats.total_original_size += size
+            stats.total_on_disk_size += hint
 
-            if decision.should_compress:
-                if debug_scan_all and os.path.splitext(path_str)[1].lower() in SKIP_EXTENSIONS:
-                    entropy_sum, sampled_bytes, _ = sample_file_entropy(file_path, byte_budget=ENTROPY_MAX_FILE_BUDGET)
-                    if sampled_bytes > 0:
-                        average_entropy = entropy_sum / sampled_bytes
-                        savings = savings_from_entropy(average_entropy)
-                        if savings >= min_savings_percent:
-                            projected_size = int(file_size * (1 - savings / 100))
-                            print(
-                                f"\n[DEBUG] File {file_path.name} has potential savings: {savings:.1f}% "
-                                f"({_format_size(file_size)} -> {_format_size(projected_size)})"
-                            )
-
-                algorithm = COMPRESSION_ALGORITHMS[get_size_category(file_size)]
-                candidates.append((path_str, file_size, algorithm))
+            if category == CAT_ELIGIBLE or category == CAT_DEBUG_EXT:
+                candidates.append((path, size, algo))
+                if category == CAT_DEBUG_EXT:
+                    _debug_extension_probe(path, size, min_savings_percent)
                 if progress_callback:
-                    progress_callback(file_path, processed, True, None, file_size)
+                    progress_callback(path, processed, True, None, size)
+            elif category == CAT_ALREADY_COMPRESSED:
+                if use_bulk_skips:
+                    bulk_skips.add("already_compressed", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, already_compressed=True, category="already_compressed")
+                    logging.debug("Skipping %s: already compressed", path)
+                if progress_callback:
+                    progress_callback(path, processed, False, _("File is already compressed"), size)
+            elif category == CAT_EXTENSION:
+                if use_bulk_skips:
+                    bulk_skips.add("extension", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, category="extension")
+                if progress_callback:
+                    progress_callback(path, processed, False, _("Skipped due to extension"), size)
             else:
-                reason = decision.reason
-                resolved_size = decision.size_hint or file_size
-                stats.record_file_skip(
-                    file_path,
-                    reason,
-                    resolved_size,
-                    file_size,
-                    already_compressed=decision.already_compressed,
-                    category=decision.category,
-                )
-                logging.debug("Skipping %s: %s", file_path, reason)
+                if use_bulk_skips:
+                    bulk_skips.add("too_small", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, category="too_small")
+                    logging.debug("Skipping %s: file too small", path)
                 if progress_callback:
-                    progress_callback(file_path, processed, False, reason, file_size)
+                    progress_callback(path, processed, False, _("File too small"), size)
+
+        if use_bulk_skips:
+            stats.record_bulk_skips(bulk_skips)
 
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():
@@ -122,13 +122,19 @@ def plan_compression(
     return candidates
 
 
-def get_size_category(file_size: int) -> str:
-    from ..config import SIZE_THRESHOLDS
-    from bisect import bisect_right
-
-    breaks, labels = zip(*SIZE_THRESHOLDS)
-    index = bisect_right(breaks, file_size)
-    return labels[index] if index < len(labels) else 'large'
+def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float) -> None:
+    entropy_sum, sampled_bytes, _ = sample_file_entropy(
+        Path(path), byte_budget=ENTROPY_MAX_FILE_BUDGET, file_size=file_size
+    )
+    if sampled_bytes <= 0:
+        return
+    savings = savings_from_entropy(entropy_sum / sampled_bytes)
+    if savings >= min_savings_percent:
+        projected = int(file_size * (1 - savings / 100))
+        print(
+            f"\n[DEBUG] File {os.path.basename(path)} has potential savings: {savings:.1f}% "
+            f"({_format_size(file_size)} -> {_format_size(projected)})"
+        )
 
 
 def _filter_high_entropy_directories(

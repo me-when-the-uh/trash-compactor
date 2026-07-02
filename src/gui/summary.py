@@ -106,7 +106,12 @@ def make_stats_summary(
     excluded_logical_size = max(0, stats.total_skipped_size - already_compressed_logical_size)
 
     if is_analysis:
-        current_on_disk_size = already_compressed_physical_size + excluded_logical_size + total_compressible_size
+        if stats.total_on_disk_size > 0:
+            current_on_disk_size = stats.total_on_disk_size
+        else:
+            current_on_disk_size = (
+                already_compressed_physical_size + excluded_logical_size + total_compressible_size
+            )
 
         projected_compressible_size = total_compressible_size
         if stats.entropy_projected_compressed_bytes_conservative > 0:
@@ -115,7 +120,13 @@ def make_stats_summary(
                 stats.entropy_projected_compressed_bytes_conservative - stats.total_skipped_physical_size,
             )
 
-        projected_on_disk_size = already_compressed_physical_size + excluded_logical_size + projected_compressible_size
+        if stats.total_on_disk_size > 0:
+            logical_savings = max(0, total_compressible_size - projected_compressible_size)
+            projected_on_disk_size = max(0, current_on_disk_size - logical_savings)
+        else:
+            projected_on_disk_size = (
+                already_compressed_physical_size + excluded_logical_size + projected_compressible_size
+            )
         physical_size = projected_on_disk_size
         potential_savings_bytes = max(0, current_on_disk_size - projected_on_disk_size)
         compressed_count = already_compressed_files

@@ -57,7 +57,7 @@ def create_compression_plan(
     interactive_output = verbosity_level == 0
 
     discovered = CountingDirEntryIter(
-        iter_files(base_dir, stats, verbosity_level, min_savings_percent, collect_entropy=False)
+        iter_files(base_dir, stats, verbosity_level, min_savings_percent, debug_scan_all=debug_scan_all)
     )
 
     timer: Optional[ProgressTimer] = None

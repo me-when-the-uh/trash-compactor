@@ -61,7 +61,7 @@ def run_analysis_pipeline(
             return measured
         return _elapsed_total(now)
 
-    def _plan_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int):
+    def _plan_progress(path: str, processed: int, should_compress: bool, reason: Optional[str], size: int):
         nonlocal plan_count, total_compressible_size, last_update_time, last_summary_update_time
         if should_compress:
             plan_count += 1

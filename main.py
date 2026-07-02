@@ -21,7 +21,7 @@ from src.skip_logic import discard_staged_incompressible_cache, log_directory_sk
 from src.i18n import _, load_translations
 from pathlib import Path
 
-VERSION = "0.7.0"
+VERSION = "0.7.0-beta"
 BUILD_DATE = "who cares"
 
 
