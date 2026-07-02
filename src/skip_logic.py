@@ -41,17 +41,20 @@ def _relative_to_base(path: Path, base: Path) -> str:
         return str(path)
 
 
-def evaluate_entropy_directory(
+def entropy_records_from_probe(
     directory: Path,
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
+    average_entropy: float,
+    sampled_files: int,
+    sampled_bytes: int,
+    lz4_certain_files: int,
 ) -> tuple[Optional[DirectorySkipRecord], Optional[EntropySampleRecord]]:
     if directory == base_dir:
         return None, None
 
-    average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(directory)
-    if average_entropy is None or sampled_files == 0 or sampled_bytes < 1024:
+    if average_entropy < 0 or sampled_files == 0 or sampled_bytes < 1024:
         return None, None
 
     estimated_savings = savings_from_entropy(average_entropy)
@@ -73,7 +76,7 @@ def evaluate_entropy_directory(
         sampled_files=sampled_files,
         sampled_bytes=sampled_bytes,
         lz4_certain_files=lz4_certain_files,
-        total_bytes=0,  # Will be filled later if needed
+        total_bytes=0,
     )
 
     if estimated_savings >= min_savings_percent:
@@ -99,6 +102,28 @@ def evaluate_entropy_directory(
         sampled_bytes=sampled_bytes,
     )
     return skip_record, sample_record
+
+
+def evaluate_entropy_directory(
+    directory: Path,
+    base_dir: Path,
+    min_savings_percent: float,
+    verbosity: int,
+) -> tuple[Optional[DirectorySkipRecord], Optional[EntropySampleRecord]]:
+    average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(directory)
+    if average_entropy is None:
+        return None, None
+
+    return entropy_records_from_probe(
+        directory,
+        base_dir,
+        min_savings_percent,
+        verbosity,
+        average_entropy,
+        sampled_files,
+        sampled_bytes,
+        lz4_certain_files,
+    )
 
 
 def maybe_skip_directory(

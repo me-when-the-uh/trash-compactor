@@ -1,3 +1,5 @@
+mod entropy;
+
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::IntoPyObject;
@@ -319,5 +321,6 @@ fn walk_and_filter(
 fn fast_walk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<WalkIter>()?;
     m.add_function(wrap_pyfunction!(walk_and_filter, m)?)?;
+    entropy::register_entropy_module(m)?;
     Ok(())
 }

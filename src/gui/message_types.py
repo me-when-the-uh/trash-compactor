@@ -116,7 +116,7 @@ class GetProgressUpdateRequest(GuiRequest):
 class SaveConfigRequest(GuiRequest):
     type: str = field(init=False, default="SaveConfig")
     decimal: bool = False
-    min_savings: float = 18.0
+    min_savings: float = 15.0
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
@@ -142,7 +142,7 @@ class OpenUrlRequest(GuiRequest):
 class ConfigResponse(GuiResponse):
     type: str = field(init=False, default="Config")
     decimal: bool = False
-    min_savings: float = 18.0
+    min_savings: float = 15.0
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
@@ -222,7 +222,7 @@ def parse_request(data: str) -> Optional[GuiRequest]:
         elif req_type == "StartCompression":
             return StartCompressionRequest(
                 path=obj.get("path", ""),
-                min_savings=obj.get("min_savings", 18.0),
+                min_savings=obj.get("min_savings", 15.0),
             )
         elif req_type == "PauseCompression":
             return PauseCompressionRequest()
@@ -243,7 +243,7 @@ def parse_request(data: str) -> Optional[GuiRequest]:
         elif req_type == "SaveConfig":
             return SaveConfigRequest(
                 decimal=obj.get("decimal", False),
-                min_savings=float(obj.get("min_savings", 18.0)),
+                min_savings=float(obj.get("min_savings", 15.0)),
                 no_lzx=obj.get("no_lzx", False),
                 force_lzx=obj.get("force_lzx", False),
                 single_worker=obj.get("single_worker", False),

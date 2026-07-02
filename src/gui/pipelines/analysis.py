@@ -55,11 +55,16 @@ def run_analysis_pipeline(
     def _elapsed_total(now: float) -> float:
         return max(0.001, now - overall_start_time)
 
-    def _live_scan_seconds(now: float) -> float:
-        measured = max(0.0, monitor.stats.file_scan_time)
-        if measured > 0:
-            return measured
+    def _scan_seconds_at(now: float) -> float:
+        if entropy_phase_start is not None:
+            return max(0.001, entropy_phase_start - overall_start_time)
         return _elapsed_total(now)
+
+    def _final_scan_seconds() -> float:
+        if entropy_phase_start is not None:
+            return max(0.001, entropy_phase_start - overall_start_time)
+        entropy_seconds = max(0.0, monitor.stats.entropy_analysis_time)
+        return max(0.001, analysis_elapsed - entropy_seconds)
 
     def _plan_progress(path: str, processed: int, should_compress: bool, reason: Optional[str], size: int):
         nonlocal plan_count, total_compressible_size, last_update_time, last_summary_update_time
@@ -92,33 +97,28 @@ def run_analysis_pipeline(
                 directory=str(base_dir),
                 scope="current",
                 analysis_timing=build_live_analysis_timing(
-                    scan_seconds=_live_scan_seconds(now),
+                    scan_seconds=_scan_seconds_at(now),
                     total_files=total_files,
                     total_seconds=_elapsed_total(now),
                 ),
             )
 
-    def _entropy_progress(path: Path, processed: int, total: int):
+    def _entropy_progress(
+        path: Path,
+        processed: int,
+        total: int,
+        dir_sampled_files: int = 0,
+    ):
         nonlocal entropy_phase_start, last_update_time, last_summary_update_time
-        if processed % ENTROPY_PROGRESS_GRANULARITY != 0 and processed != total:
-            return
+        if dir_sampled_files:
+            monitor.stats.files_analyzed_for_entropy += dir_sampled_files
+        monitor.stats.directories_analyzed_for_entropy = processed
 
         backend._check_pause_stop()
         now = time.perf_counter()
         if entropy_phase_start is None:
             entropy_phase_start = now
         entropy_elapsed = max(0.001, now - entropy_phase_start)
-
-        if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total:
-            last_update_time = now
-            backend._send_progress(
-                _("Sampling entropy... {processed}/{total}").format(
-                    processed=processed,
-                    total=total,
-                ),
-                entropy_progress_percent(processed, total),
-                **progress_kwargs,
-            )
 
         if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total:
             last_summary_update_time = now
@@ -129,12 +129,30 @@ def run_analysis_pipeline(
                 directory=str(base_dir),
                 scope="current",
                 analysis_timing=build_live_analysis_timing(
-                    scan_seconds=_live_scan_seconds(now),
-                    total_files=max(discovery.count, processed),
+                    scan_seconds=_scan_seconds_at(now),
+                    total_files=discovery.count,
                     entropy_seconds=entropy_elapsed,
-                    entropy_files=processed,
+                    entropy_directories=processed,
+                    entropy_files=monitor.stats.files_analyzed_for_entropy,
                     total_seconds=_elapsed_total(now),
                 ),
+            )
+
+        entropy_granularity = (
+            1 if total <= ENTROPY_PROGRESS_GRANULARITY else ENTROPY_PROGRESS_GRANULARITY
+        )
+        if processed % entropy_granularity != 0 and processed != total:
+            return
+
+        if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total:
+            last_update_time = now
+            backend._send_progress(
+                _("Sampling entropy... {processed}/{total}").format(
+                    processed=processed,
+                    total=total,
+                ),
+                entropy_progress_percent(processed, total),
+                **progress_kwargs,
             )
 
     backend._check_phase_start = time.perf_counter()
@@ -171,6 +189,7 @@ def run_analysis_pipeline(
             monitor,
             total_seconds=analysis_elapsed,
             total_files=0,
+            scan_seconds=analysis_elapsed,
         )
         backend._send_folder_summary(
             stats,
@@ -200,6 +219,7 @@ def run_analysis_pipeline(
         monitor,
         total_seconds=analysis_elapsed,
         total_files=total_files,
+        scan_seconds=_final_scan_seconds(),
     )
 
     if report_completion:

@@ -50,6 +50,7 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
     total_scan_seconds = 0.0
     total_entropy_seconds = 0.0
     total_scanned_files = 0
+    total_entropy_directories = 0
     total_entropy_files = 0
 
     quick_start_time = time.perf_counter()
@@ -100,6 +101,9 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
             total_scan_seconds += float(current_timing.get("scan_seconds", 0.0) or 0.0)
             total_entropy_seconds += float(current_timing.get("entropy_seconds", 0.0) or 0.0)
             total_scanned_files += int(getattr(current_monitor.stats, "total_files", 0) or 0)
+            total_entropy_directories += int(
+                getattr(current_monitor.stats, "directories_analyzed_for_entropy", 0) or 0
+            )
             total_entropy_files += int(getattr(current_monitor.stats, "files_analyzed_for_entropy", 0) or 0)
 
             quick_elapsed = max(0.001, time.perf_counter() - quick_start_time)
@@ -112,6 +116,7 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
                     scan_seconds=total_scan_seconds,
                     total_files=total_scanned_files,
                     entropy_seconds=total_entropy_seconds,
+                    entropy_directories=total_entropy_directories,
                     entropy_files=total_entropy_files,
                     total_seconds=quick_elapsed,
                 ),
@@ -129,6 +134,14 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
 
         backend.quick_analysis_results = quick_results
         quick_elapsed = max(0.001, time.perf_counter() - quick_start_time)
+        backend.last_analysis_timing = build_live_analysis_timing(
+            scan_seconds=total_scan_seconds,
+            total_files=total_scanned_files,
+            entropy_seconds=total_entropy_seconds,
+            entropy_directories=total_entropy_directories,
+            entropy_files=total_entropy_files,
+            total_seconds=quick_elapsed,
+        )
         backend._send_progress(
             _("Scanned in {elapsed:.1f}s").format(elapsed=quick_elapsed),
             100.0,

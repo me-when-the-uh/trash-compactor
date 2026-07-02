@@ -21,7 +21,7 @@ from src.skip_logic import discard_staged_incompressible_cache, log_directory_sk
 from src.i18n import _, load_translations
 from pathlib import Path
 
-VERSION = "0.7.0-beta"
+VERSION = "0.7.0"
 BUILD_DATE = "who cares"
 
 
@@ -293,10 +293,19 @@ def main() -> None:
     if os.getenv("TRASH_COMPACTOR_DIAGNOSTIC", "").strip().lower() in {"1", "true", "yes"}:
         from src.compression.file_scan import fast_walk_available
 
+        probe_available = False
+        if fast_walk_available():
+            try:
+                import fast_walk
+
+                probe_available = callable(getattr(fast_walk, "probe_directories_parallel", None))
+            except Exception:
+                probe_available = False
         print(
             f"[diag] frozen={getattr(sys, 'frozen', False)} "
             f"meipass={getattr(sys, '_MEIPASS', '')!r} "
-            f"fast_walk={fast_walk_available()}",
+            f"fast_walk={fast_walk_available()} "
+            f"probe_directories_parallel={probe_available}",
             flush=True,
         )
     override_lang = _detect_language_override(sys.argv[1:])

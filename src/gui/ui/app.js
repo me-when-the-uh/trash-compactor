@@ -320,7 +320,7 @@ var Gui = (function() {
 	var status_queue = null;
 	var current_summary_queue = null;
 	var total_summary_queue = null;
-	var directory_summary_queue = null;
+	var directory_summary_pending = [];
 	var directory_summary_history = [];
 	var current_summary_state = null;
 	var total_summary_state = null;
@@ -333,7 +333,7 @@ var Gui = (function() {
 	var ignore_config_changes = false;
 	var default_lzx_help = "";
 	var compactos_active = false;
-	var last_analysis_timing = null;
+	var total_analysis_timing = null;
 	var last_lz4_certain_files = 0;
 
 	function _upsert_directory_summary(payload) {
@@ -368,9 +368,9 @@ var Gui = (function() {
 			total_summary_directory = total_summary_queue.directory || "";
 			total_summary_queue = null;
 		}
-		if (directory_summary_queue) {
-			_upsert_directory_summary(directory_summary_queue);
-			directory_summary_queue = null;
+		if (directory_summary_pending.length) {
+			directory_summary_pending.forEach(_upsert_directory_summary);
+			directory_summary_pending = [];
 		}
 		if (status_queue) {
 			activateQuickHistory = status_queue.quick_history;
@@ -540,7 +540,7 @@ var Gui = (function() {
 			if (scope === "total") {
 				total_summary_queue = payload;
 			} else if (scope === "directory") {
-				directory_summary_queue = payload;
+				directory_summary_pending.push(payload);
 			} else if (scope === "current") {
 				current_summary_queue = payload;
 			} else {
@@ -755,8 +755,8 @@ var Gui = (function() {
 			$("#Button_Stop").hide();
 			$("#Button_Analyse").show();
 			$("#Analysis").show();
-			if (last_analysis_timing) {
-				Gui.set_analysis_timing(last_analysis_timing, last_lz4_certain_files);
+			if (total_analysis_timing) {
+				Gui.set_analysis_timing(total_analysis_timing, last_lz4_certain_files);
 			}
 
 			if ($("#File_Count_Compressible").text() != "0") {
@@ -767,12 +767,12 @@ var Gui = (function() {
 		},
 
 		reset_folder_summary: function() {
-			last_analysis_timing = null;
+			total_analysis_timing = null;
 			last_lz4_certain_files = 0;
 			$("#Analysis_Timing").text("");
 			current_summary_queue = null;
 			total_summary_queue = null;
-			directory_summary_queue = null;
+			directory_summary_pending = [];
 			directory_summary_history = [];
 			current_summary_state = null;
 			total_summary_state = null;
@@ -860,16 +860,16 @@ var Gui = (function() {
 
 		set_analysis_timing: function(timing, lz4CertainFiles) {
 			if (timing) {
-				last_analysis_timing = timing;
+				total_analysis_timing = timing;
 				if (lz4CertainFiles != null) {
 					last_lz4_certain_files = lz4CertainFiles;
 				}
-			} else if (!last_analysis_timing) {
+			} else if (!total_analysis_timing) {
 				$("#Analysis_Timing").text("");
 				return;
 			}
 
-			timing = timing || last_analysis_timing;
+			timing = timing || total_analysis_timing;
 			lz4CertainFiles = lz4CertainFiles != null ? lz4CertainFiles : last_lz4_certain_files;
 
 			var scanSeconds = timing.scan_seconds;
@@ -882,7 +882,7 @@ var Gui = (function() {
 			}
 
 			var timingText = I18n.t(
-				"Scan {scan_seconds}s @ {scan_rate}/s",
+				"Scan {scan_seconds}s @ {scan_rate} files/s",
 				{
 					scan_seconds: Util.format_number(scanSeconds, 1),
 					scan_rate: Util.format_number(timing.scan_rate || 0, 0)
@@ -890,7 +890,7 @@ var Gui = (function() {
 			);
 			if (timing.entropy_seconds > 0) {
 				timingText += "\n" + I18n.t(
-					"Entropy {entropy_seconds}s @ {entropy_rate}/s",
+					"Entropy {entropy_seconds}s @ {entropy_rate} dirs/s",
 					{
 						entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 1),
 						entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
@@ -989,19 +989,13 @@ var Gui = (function() {
 		},
 
 		set_current_folder_summary: function(data, directory) {
-			if (data.analysis_timing) {
-				Gui.set_analysis_timing(
-					data.analysis_timing,
-					data.lz4_certain_incompressible_files || 0
-				);
-			}
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;
 			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
 			var currentOnDisk = data.current_on_disk_size != null ? data.current_on_disk_size : logicalSize;
 			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
-			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 18);
+			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
 			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
 
 			$("#Current_Directory_Name").text(directory || I18n.t("Current Directory"));

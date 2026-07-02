@@ -92,7 +92,7 @@ class GuiDiscoveryStream:
             if now - self._last_summary_update > UI_SUMMARY_INTERVAL_SECONDS:
                 self._last_summary_update = now
                 timing = build_live_analysis_timing(
-                    scan_seconds=walk_elapsed,
+                    scan_seconds=max(0.001, now - self._overall_start),
                     total_files=self.count,
                     total_seconds=max(0.001, now - self._overall_start),
                 )

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
-- GUI Compress now respects the Min Savings % from Settings (was resetting to 18%)
+- GUI Compress now respects the Min Savings % from Settings (was resetting to 15%)
 - Quick-compression results no longer wiped when Compress is clicked after browsing a folder first
 - CLI 1-click mode works again without pywebview; invalid-path + `1` no longer hangs in a loop
 - Re-analyse in the GUI is instant again (removed slow per-click drive inspection)

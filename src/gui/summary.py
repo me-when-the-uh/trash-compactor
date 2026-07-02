@@ -9,6 +9,7 @@ def _timing_fields(
     scan_seconds: float,
     total_files: int,
     entropy_seconds: float = 0.0,
+    entropy_directories: int = 0,
     entropy_files: int = 0,
     total_seconds: Optional[float] = None,
 ) -> dict:
@@ -22,9 +23,10 @@ def _timing_fields(
         "scan_seconds": scan_seconds,
         "scan_rate": scan_rate,
         "entropy_seconds": entropy_seconds,
-        "entropy_rate": (entropy_files / entropy_seconds) if entropy_seconds > 0 else 0.0,
+        "entropy_rate": (entropy_directories / entropy_seconds) if entropy_seconds > 0 else 0.0,
         "total_seconds": total_seconds,
         "total_files": total_files,
+        "entropy_directories": entropy_directories,
         "entropy_files": entropy_files,
     }
 
@@ -34,6 +36,7 @@ def build_live_analysis_timing(
     scan_seconds: float,
     total_files: int,
     entropy_seconds: float = 0.0,
+    entropy_directories: int = 0,
     entropy_files: int = 0,
     total_seconds: Optional[float] = None,
 ) -> dict:
@@ -41,6 +44,7 @@ def build_live_analysis_timing(
         scan_seconds=scan_seconds,
         total_files=total_files,
         entropy_seconds=entropy_seconds,
+        entropy_directories=entropy_directories,
         entropy_files=entropy_files,
         total_seconds=total_seconds,
     )
@@ -51,9 +55,11 @@ def build_analysis_timing(
     *,
     total_seconds: Optional[float] = None,
     total_files: Optional[int] = None,
+    scan_seconds: Optional[float] = None,
 ) -> dict:
     files = total_files if total_files is not None else monitor.stats.total_files
-    scan_seconds = max(0.0, monitor.stats.file_scan_time)
+    if scan_seconds is None:
+        scan_seconds = max(0.0, monitor.stats.file_scan_time)
     entropy_seconds = max(0.0, monitor.stats.entropy_analysis_time)
     if total_seconds is None:
         total_seconds = max(0.0, monitor.stats.total_time)
@@ -63,6 +69,7 @@ def build_analysis_timing(
         scan_seconds=scan_seconds,
         total_files=files,
         entropy_seconds=entropy_seconds,
+        entropy_directories=monitor.stats.directories_analyzed_for_entropy,
         entropy_files=monitor.stats.files_analyzed_for_entropy,
         total_seconds=total_seconds,
     )

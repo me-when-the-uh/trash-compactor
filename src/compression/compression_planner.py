@@ -1,12 +1,17 @@
 import logging
 import os
-from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from ..i18n import _
-from ..config import savings_from_entropy, ENTROPY_MAX_FILE_BUDGET
-from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, get_incompressible_cache, sample_directory_entropy
+from ..config import ENTROPY_MAX_BYTES, ENTROPY_MAX_FILE_BUDGET, ENTROPY_MAX_FILES, savings_from_entropy
+from ..skip_logic import (
+    append_directory_skip_record,
+    entropy_records_from_probe,
+    evaluate_entropy_directory,
+    get_incompressible_cache,
+    sample_directory_entropy,
+)
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
@@ -244,6 +249,9 @@ def _filter_high_entropy_directories(
         if directory != base_dir and not _has_skipped_ancestor(directory, base_dir, skipped_directories)
     ]
 
+    if progress_callback and directories_to_evaluate:
+        progress_callback(base_dir, 0, len(directories_to_evaluate), 0)
+
     entropy_records, sample_records = evaluate_directories_parallel(
         directories_to_evaluate,
         base_dir,
@@ -252,7 +260,7 @@ def _filter_high_entropy_directories(
         progress_callback=progress_callback,
     )
 
-    if monitor:
+    if monitor and not progress_callback:
         for record in sample_records:
             monitor.stats.files_analyzed_for_entropy += record.sampled_files
 
@@ -351,7 +359,7 @@ def evaluate_directories_parallel(
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int, int], None]] = None,
+    progress_callback: Optional[Callable[..., None]] = None,
 ) -> tuple[dict[Path, DirectorySkipRecord], list[EntropySampleRecord]]:
     directory_list = list(directories)
     if not directory_list:
@@ -361,11 +369,11 @@ def evaluate_directories_parallel(
     processed_count = 0
     total_count = len(directory_list)
 
-    def _on_complete(directory: Path) -> None:
+    def _on_complete(directory: Path, dir_sampled_files: int = 0) -> None:
         nonlocal processed_count
         processed_count += 1
         if progress_callback:
-            progress_callback(directory, processed_count, total_count)
+            progress_callback(directory, processed_count, total_count, dir_sampled_files)
 
     skip_results: dict[Path, DirectorySkipRecord] = {}
     sample_results: list[EntropySampleRecord] = []
@@ -374,61 +382,54 @@ def evaluate_directories_parallel(
     if worker_count <= 1 or len(directory_list) < serial_threshold:
         for directory in directory_list:
             skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
-            _on_complete(directory)
+            sampled_files = sample_record.sampled_files if sample_record else 0
+            _on_complete(directory, sampled_files)
             if skip_record:
                 skip_results[directory] = skip_record
             if sample_record:
                 sample_results.append(sample_record)
         return skip_results, sample_results
 
-    in_flight_limit = max(worker_count * 4, worker_count + 1)
+    import fast_walk
 
-    from ..file_utils import hide_console_window
+    rust_progress = None
+    if progress_callback:
 
-    with ProcessPoolExecutor(
-        max_workers=worker_count,
-        initializer=hide_console_window,
-    ) as executor:
-        pending: dict = {}
-        remaining = iter(directory_list)
+        def _rust_progress(
+            directory: str,
+            processed: int,
+            total: int,
+            dir_sampled_files: int = 0,
+        ) -> None:
+            progress_callback(Path(directory), processed, total, dir_sampled_files)
 
-        def _submit_next() -> bool:
-            try:
-                directory = next(remaining)
-            except StopIteration:
-                return False
-            future = executor.submit(
-                evaluate_entropy_directory,
-                directory,
-                base_dir,
-                min_savings_percent,
-                verbosity,
-            )
-            pending[future] = directory
-            return True
+        rust_progress = _rust_progress
 
-        for _ in range(min(in_flight_limit, len(directory_list))):
-            if not _submit_next():
-                break
+    raw_results = fast_walk.probe_directories_parallel(
+        [str(directory) for directory in directory_list],
+        ENTROPY_MAX_FILES,
+        ENTROPY_MAX_BYTES,
+        ENTROPY_MAX_FILE_BUDGET,
+        True,
+        worker_count,
+        rust_progress,
+    )
 
-        while pending:
-            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                directory = pending.pop(future)
-                _on_complete(directory)
-
-                try:
-                    skip_record, sample_record = future.result()
-                except Exception as exc:
-                    logging.debug("Entropy sampling failed for %s: %s", directory, exc, exc_info=True)
-                    continue
-
-                if skip_record:
-                    skip_results[directory] = skip_record
-                if sample_record:
-                    sample_results.append(sample_record)
-
-            while len(pending) < in_flight_limit and _submit_next():
-                pass
+    for result in raw_results:
+        directory = Path(result.dir)
+        skip_record, sample_record = entropy_records_from_probe(
+            directory,
+            base_dir,
+            min_savings_percent,
+            verbosity,
+            result.average_entropy,
+            result.sampled_files,
+            result.sampled_bytes,
+            result.lz4_certain,
+        )
+        if skip_record:
+            skip_results[directory] = skip_record
+        if sample_record:
+            sample_results.append(sample_record)
 
     return skip_results, sample_results

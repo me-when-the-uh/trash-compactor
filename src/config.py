@@ -13,7 +13,7 @@ _ARCHIVES = ('.zip', '.rar', '.7z', '.gz', '.xz', '.bz2')
 _DISK_IMAGES = ('.squashfs', '.appimage', '.vdi', '.vmdk', '.vhd', '.vhdx', '.qcow2', '.qed', '.vpc', '.hdd', '.iso')
 _IMAGES = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.heic', '.heif', '.avif', '.jxl')
 _VIDEO = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.m4v', '.hevc', '.h264', '.h265', '.vp8', '.vp9', '.av1', '.wmv', '.flv', '.3gp')
-_AUDIO = ('.mp3', '.aac', '.ogg', '.m4a', '.opus', '.flac', '.wma', '.ac3', '.dts', '.alac', '.ape', '.vgz', '.vgm')
+_AUDIO = ('.mp3', '.aac', '.ogg', '.m4a', '.opus', '.flac', '.wma', '.ac3', '.dts', '.alac', '.ape', '.vgz')
 _ML = ('.gguf', '.h5', '.pb', '.tflite', '.safetensors', '.torch', '.pt')
 _OFFICE = ('.docx', '.xlsx', '.pptx', '.odt', '.ods', '.pdf')
 _DATABASES = ('.mdf', '.ldf', '.sqlite', '.sqlite3', '.db', '.db3', '.mdb', '.accdb', '.pst', '.ost', '.edb')
@@ -33,7 +33,7 @@ SKIP_EXTENSIONS: Final[Set[str]] = _flatten((
 
 MIN_SAVINGS_PERCENT: Final[float] = 0.0
 MAX_SAVINGS_PERCENT: Final[float] = 90.0
-DEFAULT_MIN_SAVINGS_PERCENT: Final[float] = 18.0
+DEFAULT_MIN_SAVINGS_PERCENT: Final[float] = 15.0
 
 
 def clamp_savings_percent(value: float) -> float:
@@ -60,6 +60,23 @@ ENTROPY_DYNAMIC_WINDOWS_MAX: Final[int] = 20
 ENTROPY_TARGET_WINDOW_SIZE: Final[int] = 16 * 1024
 
 ENTROPY_MAX_FILE_BUDGET: Final[int] = ENTROPY_DYNAMIC_WINDOWS_MAX * ENTROPY_TARGET_WINDOW_SIZE
+
+
+def _entropy_env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+ENTROPY_MAX_FILES: Final[int] = _entropy_env_int("TRASH_COMPACTOR_ENTROPY_MAX_FILES", 50)
+ENTROPY_MAX_BYTES: Final[int] = _entropy_env_int(
+    "TRASH_COMPACTOR_ENTROPY_MAX_BYTES",
+    8 * 1024 * 1024,
+)
 
 MIN_COMPRESSIBLE_SIZE: Final[int] = 8 * 1024  # 8KB minimum
 SIZE_THRESHOLDS: Final[Tuple[Tuple[int, str], ...]] = (

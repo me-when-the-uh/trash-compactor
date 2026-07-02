@@ -15,7 +15,9 @@ from ..config import (
     ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE,
     ENTROPY_DYNAMIC_WINDOWS_MIN,
     ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE,
+    ENTROPY_MAX_BYTES,
     ENTROPY_MAX_FILE_BUDGET,
+    ENTROPY_MAX_FILES,
     ENTROPY_TARGET_WINDOW_SIZE,
 )
 
@@ -24,9 +26,9 @@ _LZ4_INCOMPRESSIBLE_THRESHOLD = 0.95
 
 def sample_directory_entropy(
     path: Path,
-    max_files: int = 45,
+    max_files: int = ENTROPY_MAX_FILES,
     chunk_size: Optional[int] = None,
-    max_bytes: int = 4 * 1024 * 1024,
+    max_bytes: int = ENTROPY_MAX_BYTES,
     *,
     skip_root_files: bool = False,
     include_subdirectories: bool = True,

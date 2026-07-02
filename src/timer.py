@@ -16,6 +16,7 @@ class TimingStats:
     files_compressed: int = 0
     files_skipped: int = 0
     files_analyzed_for_entropy: int = 0
+    directories_analyzed_for_entropy: int = 0
 
 
     @property

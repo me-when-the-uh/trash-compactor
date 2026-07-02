@@ -178,12 +178,9 @@ class GuiBackend:
         quick_dir_index: Optional[int] = None,
         quick_dir_total: Optional[int] = None,
     ) -> None:
-        check_elapsed = max(0.001, time.perf_counter() - self._check_phase_start)
-        check_rate = processed / check_elapsed if processed else 0.0
-        status = _("Analyzing... {processed}/{total} ({rate:.0f} files/s)").format(
+        status = _("Analysing... {processed}/{total}").format(
             processed=processed,
             total=total,
-            rate=check_rate,
         )
         if scanning_more:
             status += " " + _("(Scanning more files...)")

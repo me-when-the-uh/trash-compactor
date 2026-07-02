@@ -101,7 +101,7 @@ class GuiApi:
             config = kwargs
         req = SaveConfigRequest(
             decimal=config.get("decimal", False),
-            min_savings=float(config.get("min_savings", 18.0)),
+            min_savings=float(config.get("min_savings", 15.0)),
             no_lzx=config.get("no_lzx", False),
             force_lzx=config.get("force_lzx", False),
             single_worker=config.get("single_worker", False)

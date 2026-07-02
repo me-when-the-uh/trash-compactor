@@ -128,7 +128,7 @@ HDDs read data sequentially and they can't handle the extreme I/O that the progr
 ### Additional Scripting Options
 
 - `-v`, or `--verbose`: Show exclusion decisions with entropy sampling (supports 4 levels of verbosity, up to `-vvvv` for debug logs)
-- `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 18%). Directories predicted to save less space are skipped automatically
+- `-m`, or `--min-savings <percent>`: Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically
 
 ### Incompressible Cache Database
 
