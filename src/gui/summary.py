@@ -89,9 +89,9 @@ def accumulate_stats(target: CompressionStats, source: CompressionStats) -> None
     target.skip_low_savings_files += source.skip_low_savings_files
     target.errors.extend(source.errors)
     target.entropy_projected_original_bytes += source.entropy_projected_original_bytes or source.total_original_size
-    target.entropy_projected_compressed_bytes += source.entropy_projected_compressed_bytes or source.total_compressed_size
-    target.entropy_projected_compressed_bytes_conservative += (
-        source.entropy_projected_compressed_bytes_conservative or source.total_compressed_size
+    target.entropy_projected_size += source.entropy_projected_size or source.total_compressed_size
+    target.entropy_projected_size_conservative += (
+        source.entropy_projected_size_conservative or source.total_compressed_size
     )
     target.lz4_certain_incompressible_files += source.lz4_certain_incompressible_files
 
@@ -104,6 +104,7 @@ def make_stats_summary(
     min_savings_percent: float,
     is_analysis: bool = True,
     analysis_timing: Optional[dict] = None,
+    lzx_enabled: bool = True,
 ) -> dict:
     already_compressed_files = max(0, stats.already_compressed_files)
     already_compressed_logical_size = max(0, stats.already_compressed_logical_size)
@@ -114,28 +115,33 @@ def make_stats_summary(
 
     if is_analysis:
         if stats.total_on_disk_size > 0:
-            current_on_disk_size = stats.total_on_disk_size
+            current_size_on_disk = stats.total_on_disk_size
         else:
-            current_on_disk_size = (
+            current_size_on_disk = (
                 already_compressed_physical_size + excluded_logical_size + total_compressible_size
             )
 
+        if lzx_enabled:
+            projected_compressed = stats.entropy_projected_size
+        else:
+            projected_compressed = stats.entropy_projected_size_conservative
+
         projected_compressible_size = total_compressible_size
-        if stats.entropy_projected_compressed_bytes_conservative > 0:
+        if projected_compressed > 0:
             projected_compressible_size = max(
                 0,
-                stats.entropy_projected_compressed_bytes_conservative - stats.total_skipped_physical_size,
+                projected_compressed - stats.total_skipped_physical_size,
             )
 
         if stats.total_on_disk_size > 0:
             logical_savings = max(0, total_compressible_size - projected_compressible_size)
-            projected_on_disk_size = max(0, current_on_disk_size - logical_savings)
+            projected_on_disk_size = max(0, current_size_on_disk - logical_savings)
         else:
             projected_on_disk_size = (
                 already_compressed_physical_size + excluded_logical_size + projected_compressible_size
             )
         physical_size = projected_on_disk_size
-        potential_savings_bytes = max(0, current_on_disk_size - projected_on_disk_size)
+        potential_savings_bytes = max(0, current_size_on_disk - projected_on_disk_size)
         compressed_count = already_compressed_files
         compressed_logical_size = already_compressed_logical_size
         compressed_physical_size = already_compressed_physical_size
@@ -143,10 +149,10 @@ def make_stats_summary(
         compressible_logical_size = total_compressible_size
         compressible_physical_size = projected_compressible_size
     else:
-        current_on_disk_size = max(0, stats.total_compressed_size)
-        projected_on_disk_size = current_on_disk_size
-        physical_size = current_on_disk_size
-        potential_savings_bytes = max(0, stats.total_original_size - current_on_disk_size)
+        current_size_on_disk = max(0, stats.total_compressed_size)
+        projected_on_disk_size = current_size_on_disk
+        physical_size = current_size_on_disk
+        potential_savings_bytes = max(0, stats.total_original_size - current_size_on_disk)
         compressed_count = already_compressed_files
         compressed_logical_size = already_compressed_logical_size
         compressed_physical_size = already_compressed_physical_size
@@ -157,13 +163,13 @@ def make_stats_summary(
         )
         compressible_physical_size = max(
             0,
-            current_on_disk_size - already_compressed_physical_size - excluded_logical_size,
+            current_size_on_disk - already_compressed_physical_size - excluded_logical_size,
         )
 
     return {
         "logical_size": stats.total_original_size,
         "physical_size": physical_size,
-        "current_on_disk_size": current_on_disk_size,
+        "current_size_on_disk": current_size_on_disk,
         "projected_on_disk_size": projected_on_disk_size,
         "is_analysis": is_analysis,
         "min_savings_percent": min_savings_percent,

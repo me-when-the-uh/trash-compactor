@@ -223,8 +223,8 @@ class CompressionStats:
     min_savings_percent: float = 0.0
     entropy_report_threshold_bytes: int = 0
     entropy_projected_original_bytes: int = 0
-    entropy_projected_compressed_bytes: int = 0
-    entropy_projected_compressed_bytes_conservative: int = 0
+    entropy_projected_size: int = 0
+    entropy_projected_size_conservative: int = 0
     lz4_certain_incompressible_files: int = 0
 
     def set_base_dir(self, base_dir: Path) -> None:
@@ -370,7 +370,10 @@ class CompressionStats:
 
 
 def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int, str]]) -> None:
-    from .config import DRY_RUN_CONSERVATIVE_FACTORS
+    from .config import DRY_RUN_CONSERVATIVE_FACTORS, SIZE_THRESHOLDS
+
+    # Files above the largest size threshold would use LZX when enabled.
+    lzx_size_threshold = SIZE_THRESHOLDS[-1][0]  # 1MB
 
     stats.entropy_projected_original_bytes = stats.total_original_size
     entropy_map = {Path(record.path): record for record in stats.entropy_samples}
@@ -381,16 +384,27 @@ def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int,
         record = entropy_map.get(Path(path_str).parent)
         if record:
             factor = max(0.0, record.estimated_savings / 100.0)
-            compressed = size * (1.0 - factor)
-            projected_lzx += compressed
-            projected_xpress += compressed * DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.06)
+            base_compressed = size * (1.0 - factor)
+
+            is_large_file = algo == 'LZX' or (algo == 'XPRESS16K' and size > lzx_size_threshold)
+
+            if is_large_file:
+                lzx_factor = DRY_RUN_CONSERVATIVE_FACTORS.get('LZX', 0.95)
+                xpress_factor = DRY_RUN_CONSERVATIVE_FACTORS.get('XPRESS16K', 1.0)
+                projected_lzx += base_compressed * lzx_factor
+                projected_xpress += base_compressed * xpress_factor
+            else:
+                # Non-large files: same factor for both projections.
+                algo_factor = DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.0)
+                projected_lzx += base_compressed * algo_factor
+                projected_xpress += base_compressed * algo_factor
         else:
             projected_lzx += size
             projected_xpress += size
 
     skipped = stats.total_compressed_size
-    stats.entropy_projected_compressed_bytes = int(round(projected_lzx + skipped))
-    stats.entropy_projected_compressed_bytes_conservative = int(round(projected_xpress + skipped))
+    stats.entropy_projected_size = int(round(projected_lzx + skipped))
+    stats.entropy_projected_size_conservative = int(round(projected_xpress + skipped))
 
 
 def _format_sample_bytes(value: int) -> str:
@@ -470,8 +484,8 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, v
     print_dry_run_summary(
         min_savings_percent=min_savings_percent,
         projected_original_bytes=stats.entropy_projected_original_bytes,
-        projected_compressed_lzx_bytes=stats.entropy_projected_compressed_bytes,
-        projected_compressed_xpress_bytes=stats.entropy_projected_compressed_bytes_conservative,
+        projected_compressed_lzx_bytes=stats.entropy_projected_size,
+        projected_compressed_xpress_bytes=stats.entropy_projected_size_conservative,
     )
 
 

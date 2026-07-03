@@ -2,11 +2,8 @@ use flate2::write::ZlibEncoder;
 use flate2::Compression;
 use memmap2::Mmap;
 use pyo3::prelude::*;
-use rand::Rng;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -15,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 const LZ4_INCOMPRESSIBLE_THRESHOLD: f64 = 0.95;
 
-const ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: u64 = 8 * 1024 * 1024;
+const ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: u64 = 2 * 1024 * 1024;
 const ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 const ENTROPY_BASE_SAMPLE_WINDOWS: u32 = 3;
 const ENTROPY_DYNAMIC_WINDOWS_MIN: u32 = 4;
@@ -300,31 +297,11 @@ fn reservoir_sample(files: &[(String, u64)], max_files: u32) -> Vec<(String, u64
         return Vec::new();
     }
 
-    let mut rng = rand::thread_rng();
-    let mut reservoir: BinaryHeap<Reverse<(ordered_float::OrderedFloat<f64>, usize)>> =
-        BinaryHeap::new();
-
-    for (idx, (_, size)) in files.iter().enumerate() {
-        let mut u: f64 = rng.gen();
-        while u == 0.0 {
-            u = rng.gen();
-        }
-        let key = u.ln() / *size as f64;
-
-        if reservoir.len() < max_files as usize {
-            reservoir.push(Reverse((ordered_float::OrderedFloat(key), idx)));
-        } else if let Some(Reverse((min_key, _))) = reservoir.peek() {
-            if key > min_key.0 {
-                reservoir.pop();
-                reservoir.push(Reverse((ordered_float::OrderedFloat(key), idx)));
-            }
-        }
-    }
-
-    reservoir
-        .into_iter()
-        .map(|Reverse((_, idx))| files[idx].clone())
-        .collect()
+    // Deterministic selection: sort by size descending, take top N.
+    let mut sorted: Vec<(String, u64)> = files.to_vec();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    sorted.truncate(max_files as usize);
+    sorted
 }
 
 fn build_probe_jobs(

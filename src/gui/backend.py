@@ -105,6 +105,7 @@ class GuiBackend:
                     min_savings_percent=self.min_savings,
                     is_analysis=is_analysis,
                     analysis_timing=analysis_timing,
+                    lzx_enabled=not self.no_lzx,
                 ),
                 directory=directory,
                 scope=scope,

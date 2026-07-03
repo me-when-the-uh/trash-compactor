@@ -908,7 +908,7 @@ var Gui = (function() {
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;
 			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
-			var currentOnDisk = data.current_on_disk_size != null ? data.current_on_disk_size : logicalSize;
+			var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
 			var currentDisplaySize = isAnalysis ? projectedOnDisk : currentOnDisk;
 			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
@@ -992,7 +992,7 @@ var Gui = (function() {
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;
 			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
-			var currentOnDisk = data.current_on_disk_size != null ? data.current_on_disk_size : logicalSize;
+			var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
 			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
 			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);

@@ -1,11 +1,8 @@
-import heapq
 import logging
-import math
 import os
-import random
 import zlib
 import lz4.block
-from collections import Counter, deque
+from collections import deque
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -113,13 +110,13 @@ def _reservoir_sample_files(
     if max_files <= 0:
         return [], False
 
-    # Use a min-heap to keep the k items with the largest keys
-    # Heap elements: (key, path, file_size)
-    reservoir: list[tuple[float, Path, int]] = []
-    
-    pending = deque([root])
+    # Deterministic selection: collect all files, sort by size descending,
+    # take the top N largest files.  This eliminates per-run randomness and
+    # biases toward the files that contribute most to compression.
+    files: list[tuple[int, Path]] = []
     root_files_skipped = False
 
+    pending = deque([root])
     while pending:
         current = pending.popleft()
         try:
@@ -146,28 +143,18 @@ def _reservoir_sample_files(
                         if file_size <= 0:
                             continue
 
-                        # Weighted reservoir sampling (Efraimidis-Spirakis)
-                        # Key = u^(1/w) -> log(Key) = log(u) / w
-                        # the intent is to keep items with largest keys.
-                        # u is random in (0, 1]
-                        u = random.random()
-                        while u == 0:
-                            u = random.random()
-
-                        key = math.log(u) / file_size
-                        file_path = Path(entry.path)
-
-                        if len(reservoir) < max_files:
-                            heapq.heappush(reservoir, (key, file_path, file_size))
-                        elif key > reservoir[0][0]:
-                            heapq.heapreplace(reservoir, (key, file_path, file_size))
+                        files.append((file_size, Path(entry.path)))
                     except OSError:
                         continue
         except OSError as exc:
             logging.debug("Unable to inspect %s for entropy: %s", current, exc)
             continue
 
-    return [(path, file_size) for _, path, file_size in reservoir], root_files_skipped
+    # Sort by size descending, take top N
+    files.sort(key=lambda x: (-x[0], str(x[1])))
+    selected = files[:max_files]
+
+    return [(path, size) for size, path in selected], root_files_skipped
 
 
 def get_sample_window_count(file_size: int) -> int:
@@ -317,7 +304,7 @@ def _compression_probe_entropy(sample: bytes) -> tuple[float, bool]:
     except Exception:
         pass  # Fall through to zlib
 
-    # zlib (DEFLATE = LZ77 + Huffman) matches NTFS compression algorithms,
+    # zlib matches NTFS compression algorithms,
     # giving accurate ratio estimates for LZX/XPRESS
     try:
         compressed = zlib.compress(sample, level=2)

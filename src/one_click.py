@@ -411,8 +411,8 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
         # Intentionally do not print per-directory performance summaries in 1-click mode.
 
         total_original += int(stats.entropy_projected_original_bytes or 0)
-        total_compressed_lzx += int(stats.entropy_projected_compressed_bytes or 0)
-        total_compressed_xpress += int(stats.entropy_projected_compressed_bytes_conservative or 0)
+        total_compressed_lzx += int(stats.entropy_projected_size or 0)
+        total_compressed_xpress += int(stats.entropy_projected_size_conservative or 0)
         total_timing.total_time += float(getattr(monitor.stats, 'total_time', 0.0) or 0.0)
         total_timing.file_scan_time += float(getattr(monitor.stats, 'file_scan_time', 0.0) or 0.0)
         total_timing.entropy_analysis_time += float(getattr(monitor.stats, 'entropy_analysis_time', 0.0) or 0.0)
