@@ -40,6 +40,7 @@ class GuiBackend:
         self.no_lzx = self.default_no_lzx
         self.force_lzx = False
         self.single_worker = False
+        self._user_overrode_single_worker = False  # set when user explicitly toggles/saves differing from auto-detect
         self.lzx_warning = _("It is recommended to disable LZX compression for this system.") if self.default_no_lzx else ""
 
         self.last_analysis_plan = None
@@ -59,6 +60,10 @@ class GuiBackend:
             single_worker=self.single_worker,
             lzx_warning=self.lzx_warning,
         )
+
+    def _mark_single_worker_override(self, value: bool) -> None:
+        self._user_overrode_single_worker = True
+        self.single_worker = value
 
     def _clear_analysis_state(self) -> None:
         self.last_analysis_plan = None

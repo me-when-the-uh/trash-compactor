@@ -54,6 +54,10 @@ class VolumeDetails:
     drive_type: int
     filesystem: Optional[str]
     rotational: Optional[bool]
+    media_type: Optional[int] = None  # MSFT_PhysicalDisk: 3=HDD, 4=SSD, 5=SCM, 0=unspec
+    spindle_speed: Optional[int] = None  # 0 for SSDs
+    bus_type: Optional[str] = None
+    detection_method: str = ''  # e.g. 'seek_penalty', 'msft_physical', 'powershell', 'metadata'
 
 def _volume_anchor(path: str) -> Optional[str]:
     if not path:
@@ -127,7 +131,7 @@ def _volume_details_base(path: str) -> VolumeDetails:
     if drive_type not in {DRIVE_UNKNOWN, DRIVE_NO_ROOT_DIR}:
         filesystem = _filesystem_name(anchor)
 
-    return VolumeDetails(anchor, letter, drive_type, filesystem, None)
+    return VolumeDetails(anchor, letter, drive_type, filesystem, None, None, None, None, '')
 
 
 def get_volume_details_fast(path: str) -> VolumeDetails:
@@ -141,20 +145,47 @@ def get_volume_details(path: str) -> VolumeDetails:
         return details
 
     anchor = details.anchor
-    letter = details.letter
+    letter = details.drive_letter
     drive_type = details.drive_type
     filesystem = details.filesystem
     rotational = None
+    media_type = None
+    spindle_speed = None
+    bus_type = None
+    detection_method = ''
     if drive_type == DRIVE_FIXED and letter and len(letter) == 2 and letter[1] == ':':
         try:
             inspector = DriveInspector(letter)
             rotational = inspector.seek_penalty()
+            if rotational is not None:
+                detection_method = 'seek_penalty'
             if rotational is None:
                 rotational = inspector.by_metadata()
-                if rotational is None:
-                    rotational = inspector.by_latency()
-                    if rotational is None:
-                        inspector.note_alignment()
+                if rotational is not None:
+                    detection_method = 'metadata'
+            if rotational is None:
+                rotational = inspector.by_latency()
+                if rotational is not None:
+                    detection_method = 'latency'
+            if rotational is None:
+                inspector.note_alignment()
+
+            # try modern MSFT_PhysicalDisk for authoritative media/spindle
+            mt, ss, bt, meth = inspector._msft_physical_disk_info()
+            if mt is not None:
+                media_type = mt
+                spindle_speed = ss
+                bus_type = bt
+                if meth:
+                    detection_method = meth if not detection_method else detection_method + '+' + meth
+            # fallback
+            if media_type is None:
+                mt2, ss2, bt2, meth2 = inspector._powershell_physical_disk_info()
+                if mt2 is not None:
+                    media_type = mt2
+                    spindle_speed = ss2
+                    bus_type = bt2
+                    detection_method = meth2 if not detection_method else detection_method + '+' + meth2
         except Exception as exc:
             logging.debug(
                 "Drive inspection skipped for %s (WMI unavailable or failed): %s",
@@ -162,7 +193,7 @@ def get_volume_details(path: str) -> VolumeDetails:
                 exc,
             )
 
-    return VolumeDetails(anchor, letter, drive_type, filesystem, rotational)
+    return VolumeDetails(anchor, letter, drive_type, filesystem, rotational, media_type, spindle_speed, bus_type, detection_method)
 
 def is_hard_drive(drive_path: str) -> bool:
     try:
@@ -179,6 +210,16 @@ def is_hard_drive(drive_path: str) -> bool:
         )
         return False
 
+    if details.media_type == 3:  # HDD
+        logging.debug("MSFT/Physical media_type=3 (HDD) for %s", details.drive_letter or drive_path)
+        return True
+    if details.media_type in (4, 5):  # SSD or SCM
+        return False
+    if details.spindle_speed is not None and details.spindle_speed > 0:
+        return True
+    if details.spindle_speed == 0:
+        return False
+
     if details.rotational is True:
         return True
 
@@ -186,8 +227,9 @@ def is_hard_drive(drive_path: str) -> bool:
         return False
 
     logging.debug(
-        "Unable to definitively identify drive %s as HDD, assuming SSD/flash",
+        "Unable to definitively identify drive %s as HDD, assuming SSD/flash (method=%s)",
         details.drive_letter or drive_path,
+        details.detection_method or 'none',
     )
     return False
 
@@ -365,3 +407,86 @@ class DriveInspector:
                     logging.debug("Drive %s has aligned sectors, common in HDDs", self.drive_letter)
             except (TypeError, ZeroDivisionError):
                 logging.debug("Error calculating sector alignment for drive %s", self.drive_letter)
+
+    def _msft_physical_disk_info(self) -> tuple[Optional[int], Optional[int], Optional[str], str]:
+        """Query MSFT_PhysicalDisk via WMI (root\\Microsoft\\Windows\\Storage) for MediaType/SpindleSpeed.
+        Returns (media_type, spindle_speed, bus_type, method) or (None,...)."""
+        if self.conn is None:
+            return None, None, None, ''
+        disk_number = self._physical_disk_number()
+        if disk_number is None:
+            return None, None, None, ''
+        try:
+            try:
+                storage_conn = wmi.WMI(namespace=r'root\Microsoft\Windows\Storage')
+            except Exception:
+                storage_conn = self.conn  # may not have class, will fail gracefully
+            for pd in storage_conn.MSFT_PhysicalDisk():
+                try:
+                    # DeviceId or FriendlyName may contain number; match by number in DeviceId
+                    dev = getattr(pd, 'DeviceId', '') or ''
+                    if str(disk_number) in str(dev):
+                        mt = getattr(pd, 'MediaType', None)
+                        ss = getattr(pd, 'SpindleSpeed', None)
+                        bt = getattr(pd, 'BusType', None)
+                        try:
+                            mt = int(mt) if mt is not None else None
+                        except (TypeError, ValueError):
+                            pass
+                        try:
+                            ss = int(ss) if ss is not None else None
+                        except (TypeError, ValueError):
+                            pass
+                        logging.debug("MSFT_PhysicalDisk for %s: MediaType=%s Spindle=%s Bus=%s", self.drive_letter, mt, ss, bt)
+                        if mt is not None or ss is not None:
+                            return mt, ss, (str(bt) if bt else None), 'msft_physical'
+                except Exception:
+                    continue
+        except Exception as exc:
+            logging.debug("MSFT_PhysicalDisk query failed: %s", exc)
+        return None, None, None, ''
+
+    def _powershell_physical_disk_info(self) -> tuple[Optional[int], Optional[int], Optional[str], str]:
+        """Fallback using built-in PowerShell Get-PhysicalDisk (no extra deps). Parses for matching disk number (or first if unknown)."""
+        import subprocess
+        disk_number = self._physical_disk_number()
+        try:
+            if disk_number is not None:
+                ps_cmd = [
+                    'powershell', '-NoProfile', '-Command',
+                    f'Get-PhysicalDisk | Where-Object {{ $_.DeviceId -eq {disk_number} -or $_.FriendlyName -match "{disk_number}" }} | Select-Object FriendlyName,MediaType,BusType,SpindleSpeed,DeviceId | ConvertTo-Json -Compress'
+                ]
+            else:
+                ps_cmd = ['powershell', '-NoProfile', '-Command', 'Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType,SpindleSpeed,DeviceId | ConvertTo-Json -Compress']
+            cf = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=5, creationflags=cf)
+            out = (res.stdout or '').strip()
+            if out and out != 'null':
+                import json
+                data = json.loads(out)
+                if isinstance(data, dict):
+                    data = [data]
+                for item in data:
+                    dev = str(item.get('DeviceId', '') or item.get('FriendlyName', ''))
+                    match = (disk_number is None) or (str(disk_number) in dev)
+                    if match:
+                        mt = item.get('MediaType')
+                        ss = item.get('SpindleSpeed')
+                        bt = item.get('BusType')
+                        try:
+                            mt = int(mt) if mt is not None else None
+                        except Exception:
+                            mt_str = str(mt or '').upper()
+                            if 'HDD' in mt_str or 'HARD' in mt_str: mt=3
+                            elif 'SSD' in mt_str or 'SOLID' in mt_str: mt=4
+                            else: mt=None
+                        try:
+                            ss = int(ss) if ss is not None else None
+                        except Exception:
+                            pass
+                        logging.debug("PS Get-PhysicalDisk match for %s: mt=%s ss=%s", self.drive_letter, mt, ss)
+                        if mt is not None or ss is not None:
+                            return mt, ss, (str(bt) if bt else None), 'powershell'
+        except Exception as exc:
+            logging.debug("PowerShell physical disk probe failed: %s", exc)
+        return None, None, None, ''

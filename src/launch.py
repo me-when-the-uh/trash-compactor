@@ -139,8 +139,10 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
     if details.rotational is not True:
         if details.rotational is None:
             logging.debug(
-                _("Drive %s did not report seek penalty; treating as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag."),
+                _("Drive %s did not report seek penalty; treating as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag. method=%s media=%s"),
                 target_label,
+                getattr(details, 'detection_method', ''),
+                getattr(details, 'media_type', None),
             )
         if throttle_requested:
             set_worker_cap(1)

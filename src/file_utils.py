@@ -11,7 +11,7 @@ from typing import Optional
 
 from .i18n import _
 from .config import DEFAULT_EXCLUDE_DIRECTORIES, MIN_COMPRESSIBLE_SIZE, SIZE_THRESHOLDS, SKIP_EXTENSIONS
-from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, is_hard_drive, get_volume_details
+from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, get_volume_details
 
 
 def sanitize_path(path: str) -> str:

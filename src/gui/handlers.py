@@ -1,3 +1,4 @@
+import logging
 from typing import TYPE_CHECKING, Callable, Optional
 
 from ..config import DEFAULT_MIN_SAVINGS_PERCENT
@@ -23,7 +24,8 @@ def _save_config(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
     backend.decimal = getattr(request, "decimal", backend.decimal)
     backend.no_lzx = getattr(request, "no_lzx", backend.no_lzx)
     backend.force_lzx = getattr(request, "force_lzx", backend.force_lzx)
-    backend.single_worker = getattr(request, "single_worker", backend.single_worker)
+    sw = getattr(request, "single_worker", backend.single_worker)
+    backend._mark_single_worker_override(sw)
     return backend._current_config_response()
 
 
@@ -33,6 +35,7 @@ def _reset_config(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
     backend.no_lzx = backend.default_no_lzx
     backend.force_lzx = False
     backend.single_worker = False
+    backend._user_overrode_single_worker = False
     return backend._current_config_response()
 
 
@@ -45,6 +48,22 @@ def _cached_volume_details(backend: "GuiBackend", directory: str) -> VolumeDetai
     backend._cached_validation_path = candidate
     backend._cached_volume_details = details
     return details
+
+
+def _apply_drive_recommendation(backend: "GuiBackend", directory: str) -> None:
+    """If not user-overridden, auto-enable single_worker for detected HDD."""
+    from ..drive_inspector import get_volume_details, is_hard_drive
+    try:
+        fast = _cached_volume_details(backend, directory)
+        if fast.drive_type != DRIVE_REMOTE and fast.anchor:
+            # do full probe (may be cached in future)
+            full = get_volume_details(directory)
+            if is_hard_drive(directory) and not backend._user_overrode_single_worker:
+                if not backend.single_worker:
+                    backend.single_worker = True
+                    logging.info("Auto-enabled Slow HDD mode for detected hard drive: %s", directory)
+    except Exception as exc:
+        logging.debug("Drive recommendation skipped: %s", exc)
 
 
 def _validate_target_path(backend: "GuiBackend", directory: str) -> Optional[GuiResponse]:
@@ -91,6 +110,11 @@ def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiRespons
 
     if requested_path:
         backend.current_folder = requested_path
+        _apply_drive_recommendation(backend, requested_path)
+        try:
+            backend._send(backend._current_config_response())
+        except Exception:
+            pass
 
     min_savings = getattr(request, "min_savings", None)
     if min_savings is not None:
@@ -112,6 +136,11 @@ def _analyse_folder(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
         backend._clear_analysis_state()
 
     backend.current_folder = requested_path
+    _apply_drive_recommendation(backend, requested_path)
+    try:
+        backend._send(backend._current_config_response())
+    except Exception:
+        pass
     if not backend.start_worker(backend._run_analysis):
         return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
     return StateResponse("Scanning")

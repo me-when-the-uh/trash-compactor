@@ -422,7 +422,7 @@ var Gui = (function() {
 		},
 
 		localize: function() {
-			document.title = I18n.t("Trash Compactor GUI");
+			document.title = "Trash Compactor";
 			$("#Button_Page_Compress").html("⌛ " + I18n.t("Compress"));
 			$("#Button_Page_Settings").html("☸ " + I18n.t("Settings"));
 			$("#Button_Page_About").html("⌕ " + I18n.t("About"));
@@ -465,12 +465,11 @@ var Gui = (function() {
 			$("#SI_Units option[value='I']").text(I18n.t("Binary (MiB)"));
 			$("#SI_Units option[value='D']").text(I18n.t("Decimal (MB)"));
 			$("#Settings .setting-item:last-child .setting-help").text(I18n.t("Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves."));
-			$("#About h1").text(I18n.t("Trash Compactor GUI"));
 			$("#About p strong").text(I18n.t("Where we're going, we don't need backups!"));
 			$("#About p:nth-of-type(2)").html(I18n.t("Report problems to:") + " <a href=\"https://github.com/me-when-the-uh/trash-compactor\">https://github.com/me-when-the-uh/trash-compactor</a>.");
-			$("#About p:nth-of-type(4)").text(I18n.t("An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics."));
+			$("#About_Description").text(I18n.t("A (hopefully) easy-to-use graphical interface for Windows NTFS compression using entropy-based heuristics."));
 			$("#About p:nth-of-type(5)").text(I18n.t("For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea."));
-			$("#About p:nth-of-type(6)").text(I18n.t("Vibe-coded in Python with a webview-slopped GUI."));
+			$("#About p:nth-of-type(6)").text(I18n.t("Vibe-coded in Python and with Rust duct-taped to this hackjob."));
 			$("#About p:nth-of-type(7)").html(I18n.t("GUI adapted from") + " <a href=\"https://github.com/Freaky/Compactor\">Compactor</a>");
 		},
 

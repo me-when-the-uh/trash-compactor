@@ -190,7 +190,7 @@ class GuiServer:
 
         try:
             self.window = pywebview.create_window(
-                _("Trash Compactor GUI"),
+                "Trash Compactor",
                 html=html,
                 js_api=self.api,
                 width=880,

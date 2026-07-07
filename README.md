@@ -17,8 +17,8 @@ Compressing large directories to gain extra storage space will be so free and wi
   - Skips already-compressed files
   - Skips using LZX compression if the computer is identified as too slow to handle it without performance losses (taking care of users)
   - Detailed compression and file throughput stats
-  - GUI with progress bar, walk/check/entropy timing breakdown, and Defender performance notice
-  - Streaming file discovery to keep RAM usage low on large directory trees
+  - GUI with progress bar, scan/entropy timing breakdown, and Defender performance notice
+  - Native Rust scan and entropy engine (`fast_walk`) for high-throughput directory analysis
 
   ## Limitations
 
