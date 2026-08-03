@@ -12,13 +12,11 @@
 ```powershell
 cd fast_walk
 maturin build --release
+python -m pip install target\wheels\fast_walk-*.whl --force-reinstall
+cd ..
 ```
 
-This produces a `.pyd` file in `target/release/` that is bundled by PyInstaller.
-
-```powershell
-python main.py
-```
+The wheel install is **mandatory** for source runs: `fast_walk/__init__.py` in the repo re-exports the native module from site-packages and raises a clear error (with these build instructions) when the wheel is missing. The `__init__.py` also makes the package importable from a clean clone.
 
 ## What it does
 

@@ -5,12 +5,28 @@ from typing import Optional
 from .config import get_cpu_info
 
 _WORKER_CAP: ContextVar[Optional[int]] = ContextVar("worker_cap", default=None)
+_HDD_MODE: ContextVar[bool] = ContextVar("hdd_mode", default=False)
 
 
 def set_worker_cap(limit: Optional[int]) -> None:
     if limit is not None and limit < 1:
         raise ValueError("worker cap must be >= 1")
     _WORKER_CAP.set(limit)
+
+
+def set_hdd_mode(active: bool = True) -> None:
+    """Engage HDD-friendly settings: single worker everywhere.
+
+    Parallel reads on a spinning drive are random access - every seek costs
+    more IOPS than a sequential read saves, so scan, entropy, and compression
+    all run single-worker, with the walker visiting directories in discovery
+    order so the disk head moves forward instead of jumping.
+    """
+    _HDD_MODE.set(active)
+
+
+def hdd_mode() -> bool:
+    return _HDD_MODE.get()
 
 
 def _apply_worker_cap(default: int) -> int:
@@ -29,11 +45,15 @@ def _physical_core_baseline_workers() -> int:
 
 
 def entropy_worker_count() -> int:
+    if _HDD_MODE.get():
+        return 1
     default = _physical_core_baseline_workers()
     return _apply_worker_cap(default)
 
 
 def scan_worker_count() -> int:
+    if _HDD_MODE.get():
+        return 1
     default = _physical_core_baseline_workers()
     env_value = os.getenv("TRASH_COMPACTOR_SCAN_WORKERS")
     if env_value:
@@ -46,11 +66,15 @@ def scan_worker_count() -> int:
 
 
 def xp_worker_count() -> int:
+    if _HDD_MODE.get():
+        return 1
     default = _physical_core_baseline_workers()
     return _apply_worker_cap(default)
 
 
 def lzx_worker_count() -> int:
+    if _HDD_MODE.get():
+        return 1
     physical, logical = get_cpu_info()
     cores = physical or logical
     if not cores or cores <= 4:

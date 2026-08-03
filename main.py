@@ -14,15 +14,13 @@ from typing import Optional, Sequence
 from colorama import Fore, Style, init
 
 from src import config
-from src.console import EscapeExit, display_banner, prompt_exit, read_user_input
+from src.console import EscapeExit, attach_to_parent_console, display_banner, prompt_exit, read_user_input
 from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
-from src.file_utils import describe_protected_path, is_admin
+from src.file_utils import describe_protected_path, is_admin, validate_target_path
 from src.skip_logic import discard_staged_incompressible_cache, log_directory_skips
 from src.i18n import _, load_translations
+from src.version import BUILD_DATE, VERSION
 from pathlib import Path
-
-VERSION = "0.7.0"
-BUILD_DATE = "who cares"
 
 
 def setup_logging(verbosity: int) -> None:
@@ -136,6 +134,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=_("Analyse directory entropy without compressing files"),
     )
     parser.add_argument(
+        "-y",
+        "--yes",
+        "--no-prompt",
+        action="store_true",
+        dest="yes",
+        help=_("Proceed with compression after dry-run analysis without prompting"),
+    )
+    parser.add_argument(
         "-m",
         "--min-savings",
         type=float,
@@ -184,6 +190,9 @@ def run_compression(directory: str, verbosity: int, min_savings: float, debug_sc
     )
     print_compression_summary(stats)
     monitor.print_summary()
+    from src.launch import print_defrag_hint
+
+    print_defrag_hint(stats.compressed_files)
 
 
 def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[str, int, str]]]:
@@ -247,9 +256,9 @@ def _emit_verbosity_banner(level: int) -> None:
     if not level:
         return
     verbose_labels = {
-        1: _("Verbosity level 1: cache decisions and summary stats"),
+        1: _("Verbosity level 1: entropy decisions and summary stats"),
         2: _("Verbosity level 2: include stage-level progress and verification warnings"),
-        3: _("Verbosity level 3: extended diagnostics for skipped files"),
+        3: _("Verbosity level 3: extended diagnostics for skipped directories"),
     }
     label = verbose_labels.get(level, _("Verbosity level 4: full debug logging enabled"))
     print(Fore.BLUE + label + Style.RESET_ALL)
@@ -276,9 +285,9 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
     for key, value in vars(updated_args).items():
         setattr(args, key, value)
 
-    protection_reason = describe_protected_path(directory)
+    protection_reason = describe_protected_path(directory) or validate_target_path(directory)
     if protection_reason:
-        logging.error(_("Cannot compress protected path: %s"), protection_reason)
+        logging.error(_("Cannot compress target: %s"), protection_reason)
         if 'Windows' in protection_reason:
             logging.error(_("To compress Windows system files, use 'compact.exe /compactos:always' instead"))
         return None
@@ -289,15 +298,32 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
     return directory
 
 
-def main() -> None:
+def main() -> int:
+    override_lang = _detect_language_override(sys.argv[1:])
+    load_translations(override_lang)
+
+    # Console handling for the GUI-subsystem exe:
+    # - CLI mode (any argv): attach to the invoking terminal (cmd/PowerShell/
+    #   Windows Terminal) so output appears there and no second window spawns.
+    #   If there is no parent console (double-click), allocate one.
+    # - GUI mode (no argv): no console at all - Windows never allocated one.
+    is_cli_mode = len(sys.argv) > 1
+    if is_cli_mode:
+        if not attach_to_parent_console():
+            allocate_console()
+
+    args, interactive_launch = _prepare_arguments(sys.argv[1:])
+
     if os.getenv("TRASH_COMPACTOR_DIAGNOSTIC", "").strip().lower() in {"1", "true", "yes"}:
         from src.compression.file_scan import fast_walk_available
 
         probe_available = False
+        wheel_version = ""
         if fast_walk_available():
             try:
                 import fast_walk
 
+                wheel_version = getattr(fast_walk, "__version__", "")
                 probe_available = callable(getattr(fast_walk, "probe_directories_parallel", None))
             except Exception:
                 probe_available = False
@@ -305,16 +331,13 @@ def main() -> None:
             f"[diag] frozen={getattr(sys, 'frozen', False)} "
             f"meipass={getattr(sys, '_MEIPASS', '')!r} "
             f"fast_walk={fast_walk_available()} "
+            f"fast_walk_version={wheel_version or 'unknown'} "
             f"probe_directories_parallel={probe_available}",
             flush=True,
         )
-    override_lang = _detect_language_override(sys.argv[1:])
-    load_translations(override_lang)
-    
+
     init(autoreset=True)
     display_banner(VERSION, BUILD_DATE)
-
-    args, interactive_launch = _prepare_arguments(sys.argv[1:])
 
     if not _validate_modes(args):
         prompt_exit()
@@ -327,14 +350,13 @@ def main() -> None:
     if interactive_launch:
         try:
             from src.benchmark import run_benchmark
-            from src.file_utils import hide_console_window
 
             sink = io.StringIO()
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                 benchmark_ok = run_benchmark()
 
-            hide_console_window()
-
+            # GUI-subsystem exe: Windows never allocated a console, so there is
+            # no CLI window to hide. Just open the GUI.
             import webview  
             from src.gui.backend import run_gui
             run_gui(benchmark_ok=benchmark_ok)
@@ -357,7 +379,7 @@ def main() -> None:
             args.min_savings = config.clamp_savings_percent(args.min_savings)
             if not getattr(args, "one_click", False) and not args.directory:
                 prompt_exit()
-                return
+                return 1
 
     if getattr(args, 'one_click', False) and not args.directory:
         _apply_lzx_choice(args)
@@ -371,12 +393,12 @@ def main() -> None:
         )
         print(_("\nOperation completed."))
         prompt_exit()
-        return
+        return 0
 
     directory = _configure_runtime(args, interactive_launch)
     if directory is None:
         prompt_exit()
-        return
+        return 1
 
     try:
         if getattr(args, "dry_run", False):
@@ -387,37 +409,43 @@ def main() -> None:
                 debug_scan_all=getattr(args, "debug_scan_all", False),
             )
 
-            if plan:
+            proceed = getattr(args, "yes", False)
+            if plan and not proceed:
                 print()
                 try:
                     response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
                 except EscapeExit:
                     discard_staged_incompressible_cache()
                     print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-                    return
+                    return 130
                 except KeyboardInterrupt:
                     discard_staged_incompressible_cache()
                     print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-                    sys.exit(130)
+                    return 130
+                proceed = response in ('y', 'yes')
 
-                if response in ('y', 'yes'):
-                    print(_("\nStarting compression..."))
-                    monitor.start_operation()
-                    from src.compression_module import execute_compression_plan_wrapper
-                    from src.stats import print_compression_summary
+            if plan and proceed:
+                print(_("\nStarting compression..."))
+                monitor.start_operation()
+                from src.compression_module import execute_compression_plan_wrapper
+                from src.stats import print_compression_summary
 
-                    stats, monitor = execute_compression_plan_wrapper(
-                        stats,
-                        monitor,
-                        plan,
-                        verbosity_level=args.verbose,
-                        interactive_output=True,
-                        min_savings_percent=args.min_savings
-                    )
-                    print_compression_summary(stats)
-                    monitor.print_summary()
-                else:
-                    discard_staged_incompressible_cache()
+                stats, monitor = execute_compression_plan_wrapper(
+                    stats,
+                    monitor,
+                    plan,
+                    verbosity_level=args.verbose,
+                    interactive_output=True,
+                    min_savings_percent=args.min_savings
+                )
+                print_compression_summary(stats)
+                monitor.print_summary()
+                from src.launch import print_defrag_hint
+
+                print_defrag_hint(stats.compressed_files)
+            else:
+                discard_staged_incompressible_cache()
+                if plan:
                     print(_("Compression cancelled."))
         else:
             run_compression(
@@ -429,10 +457,14 @@ def main() -> None:
     except KeyboardInterrupt:
         discard_staged_incompressible_cache()
         print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-        sys.exit(130)
+        return 130
+    except Exception:
+        discard_staged_incompressible_cache()
+        raise
 
     print(_("\nOperation completed."))
     prompt_exit()
+    return 0
 
 
 if __name__ == "__main__":
@@ -440,4 +472,4 @@ if __name__ == "__main__":
 
     spawn_freeze_support()
     multiprocessing.freeze_support()
-    main()
+    sys.exit(main())

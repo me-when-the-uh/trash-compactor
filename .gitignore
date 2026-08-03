@@ -31,8 +31,6 @@ env/
 htmlcov/
 .coverage
 .pytest_cache/
-trash-compactor-user.spec
 
 # Rust build artifacts
 fast_walk/target
-fast_walk/Cargo.lock

@@ -54,8 +54,11 @@ def pick_directory_dialog() -> Optional[str]:
             startupinfo=startupinfo
         )
         path = result.stdout.strip()
+        if not path:
+            print(Fore.YELLOW + _("Folder picker returned no selection; you can type a path instead.") + Style.RESET_ALL)
         return path if path else None
     except FileNotFoundError:
+        print(Fore.YELLOW + _("PowerShell is required for the folder picker; type a path instead.") + Style.RESET_ALL)
         return None
 
 
@@ -176,14 +179,34 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
             return False
         throttle_requested = throttle_response in {"", "y", "yes"}
 
+    from .workers import set_hdd_mode, set_worker_cap
+    set_hdd_mode(True)
+    logging.info(_("HDD mode engaged for %s: sequential scan/entropy/compression, smaller batches."), target_label)
     if throttle_requested:
         set_worker_cap(1)
         logging.info(_("Single-worker mode engaged for %s due to HDD safeguards."), target_label)
         if not force_serial:
             print(Fore.YELLOW + _("Running sequentially to keep fragmentation in check.") + Style.RESET_ALL)
+    else:
+        print(Fore.YELLOW + _("HDD mode: scanning, entropy sampling, and compression all run sequentially so the disk head moves in order instead of jumping.") + Style.RESET_ALL)
 
     print(Fore.YELLOW + _("\nProceeding with compression on HDD. This may impact system performance.") + Style.RESET_ALL)
     return True
+
+
+def print_defrag_hint(compressed_files: int) -> None:
+    """Suggest defragmenting after compression on a spinning drive."""
+    from .workers import hdd_mode
+
+    if hdd_mode() and compressed_files > 0:
+        print(
+            Fore.YELLOW
+            + _(
+                "\nNTFS compression fragmented files on this hard drive. "
+                "Consider defragmenting the drive now: defrag.exe /C"
+            )
+            + Style.RESET_ALL
+        )
 
 
 def _print_interactive_status(state: LaunchState) -> None:
@@ -269,7 +292,9 @@ def _run_interactive_session(state: LaunchState) -> None:
         )
         print(_("Press '1' then Enter to compress necessary directories in one click."))
 
-        command = _read_interactive_command() or 's'
+        command = _read_interactive_command().strip()
+        if not command:
+            continue
         lowered = command.lower()
 
         if lowered == '1':
@@ -342,6 +367,12 @@ def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, N
             print(Fore.RED + _("Directory '{candidate}' does not exist.").format(candidate=candidate) + Style.RESET_ALL)
         else:
             print(Fore.RED + _("No directory provided.") + Style.RESET_ALL)
+
+        # Without a console there is no user to ask; fail instead of looping.
+        from .console import _interactive_console
+
+        if not _interactive_console():
+            return "", args
 
         # Force interactive mode if directory is missing/invalid
         args.directory = ""

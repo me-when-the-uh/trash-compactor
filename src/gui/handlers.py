@@ -2,8 +2,8 @@ import logging
 from typing import TYPE_CHECKING, Callable, Optional
 
 from ..config import DEFAULT_MIN_SAVINGS_PERCENT
-from ..drive_inspector import DRIVE_REMOTE, VolumeDetails, get_volume_details_fast
-from ..file_utils import describe_protected_path, is_admin, sanitize_path
+from ..drive_inspector import VolumeDetails, get_volume_details_fast
+from ..file_utils import is_admin, sanitize_path
 from ..i18n import _
 from ..one_click import resolve_targets
 from .message_types import (
@@ -30,11 +30,15 @@ def _save_config(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
 
 
 def _reset_config(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
+    from ..workers import set_hdd_mode
+
     backend.min_savings = DEFAULT_MIN_SAVINGS_PERCENT
     backend.decimal = False
     backend.no_lzx = backend.default_no_lzx
     backend.force_lzx = False
     backend.single_worker = False
+    backend.hdd_mode = False
+    set_hdd_mode(False)
     backend._user_overrode_single_worker = False
     return backend._current_config_response()
 
@@ -51,45 +55,35 @@ def _cached_volume_details(backend: "GuiBackend", directory: str) -> VolumeDetai
 
 
 def _apply_drive_recommendation(backend: "GuiBackend", directory: str) -> None:
-    """If not user-overridden, auto-enable single_worker for detected HDD."""
+    """If not user-overridden, auto-enable HDD mode for detected hard drives."""
     from ..drive_inspector import get_volume_details, is_hard_drive
+    from ..workers import set_hdd_mode
     try:
         fast = _cached_volume_details(backend, directory)
         if fast.drive_type != DRIVE_REMOTE and fast.anchor:
             # do full probe (may be cached in future)
             full = get_volume_details(directory)
             if is_hard_drive(directory) and not backend._user_overrode_single_worker:
+                set_hdd_mode(True)
+                backend.hdd_mode = True
                 if not backend.single_worker:
-                    backend.single_worker = True
-                    logging.info("Auto-enabled Slow HDD mode for detected hard drive: %s", directory)
+                    logging.info("Auto-enabled HDD mode (1-worker compression) for detected hard drive: %s", directory)
+            else:
+                set_hdd_mode(False)
+                backend.hdd_mode = False
     except Exception as exc:
         logging.debug("Drive recommendation skipped: %s", exc)
 
 
 def _validate_target_path(backend: "GuiBackend", directory: str) -> Optional[GuiResponse]:
-    candidate = sanitize_path(directory)
-    if not candidate:
-        return WarningResponse(_("Warning"), _("No folder selected"))
+    from ..file_utils import validate_target_path
 
-    protection_reason = describe_protected_path(candidate)
-    if protection_reason:
-        return WarningResponse(_("Warning"), _("Cannot compress protected path: {reason}").format(reason=protection_reason))
+    reason = validate_target_path(directory)
+    if reason:
+        return WarningResponse(_("Warning"), reason)
 
-    details = _cached_volume_details(backend, candidate)
-    if details.anchor is None:
-        return WarningResponse(_("Warning"), _("Unable to resolve the target volume. Please verify the path."))
-
-    if details.drive_type == DRIVE_REMOTE:
-        return WarningResponse(_("Warning"), _("Network shares are not supported targets for compression."))
-
-    if details.filesystem and details.filesystem != "NTFS":
-        return WarningResponse(
-            _("Warning"),
-            _("Windows compression requires NTFS. Detected filesystem: {filesystem}").format(
-                filesystem=details.filesystem or "unknown"
-            ),
-        )
-
+    # Prime the volume cache used by the drive recommendation.
+    _cached_volume_details(backend, directory)
     return None
 
 
@@ -178,10 +172,6 @@ def _stop(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
     return StateResponse("Stopped")
 
 
-def _progress_update(_backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
-    return StatusResponse("", None)
-
-
 _DISPATCH: dict[str, Callable[["GuiBackend", GuiRequest], GuiResponse]] = {
     "SaveConfig": _save_config,
     "ResetConfig": _reset_config,
@@ -192,7 +182,6 @@ _DISPATCH: dict[str, Callable[["GuiBackend", GuiRequest], GuiResponse]] = {
     "PauseCompression": _pause,
     "ResumeCompression": _resume,
     "StopCompression": _stop,
-    "GetProgressUpdate": _progress_update,
 }
 
 

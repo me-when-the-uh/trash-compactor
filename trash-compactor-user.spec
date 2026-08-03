@@ -51,40 +51,49 @@ _version_info = VSVersionInfo(
 )
 
 
-def _assert_fast_walk_bundled() -> None:
+def _fast_walk_bundle():
+    binaries = []
+    datas = []
     try:
         import fast_walk as module
 
         package_dir = Path(module.__file__).resolve().parent
-        if not any(package_dir.glob("fast_walk*.pyd")):
-            raise SystemExit(
-                "fast_walk .pyd not found. Build the wheel first:\n"
-                "  cd fast_walk && maturin build --release\n"
-                "  pip install target/wheels/fast_walk-*.whl --force-reinstall"
-            )
+        for artifact in package_dir.glob('fast_walk*.pyd'):
+            binaries.append((str(artifact), 'fast_walk'))
+        init_py = package_dir / '__init__.py'
+        if init_py.is_file():
+            datas.append((str(init_py), 'fast_walk'))
+        return binaries, datas
     except ImportError:
-        dll = Path("fast_walk/target/release/fast_walk.dll")
-        if not dll.is_file():
-            raise SystemExit(
-                "fast_walk is not installed and fast_walk/target/release/fast_walk.dll "
-                "is missing. Install the wheel before running PyInstaller."
-            )
+        pass
+
+    dll = Path('fast_walk/target/release/fast_walk.dll')
+    if dll.is_file():
+        binaries.append((str(dll), 'fast_walk'))
+    return binaries, datas
 
 
-_assert_fast_walk_bundled()
+_fast_walk_binaries, _fast_walk_datas = _fast_walk_bundle()
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[
-        ('locales', 'locales'),
-        ('src/gui/ui', 'src/gui/ui'),
+    binaries=_fast_walk_binaries,
+    datas=[('locales', 'locales'), *_fast_walk_datas],
+    hiddenimports=[
+        'fast_walk',
+        'webview',
+        'webview.platforms',
+        'webview.platforms.edgechromium',
+        'webview.http',
+        'bottle',
+        'proxy_tools',
+        'clr_loader',
+        'pythonnet',
     ],
-    hiddenimports=['fast_walk', 'fast_walk.fast_walk'],
-    hookspath=['hooks'],
+    hookspath=[],
     hooksconfig={},
-    runtime_hooks=['hooks/rthook_fast_walk.py'],
+    runtime_hooks=[],
     excludes=[],
     noarchive=False,
     optimize=0,
@@ -97,17 +106,12 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='trash-compactor',
+    name='trash-compactor-user',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
-    upx_exclude=[
-        'fast_walk*.pyd',
-        'python313.dll',
-        'vcruntime140.dll',
-        'vcruntime140_1.dll',
-    ],
+    upx=True,
+    upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,

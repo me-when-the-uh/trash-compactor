@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,13 +66,29 @@ def resolve_targets() -> OneClickTargets:
     return OneClickTargets(tuple(selected))
 
 
+def _compactos_log_path() -> Path:
+    import tempfile
+
+    return Path(tempfile.gettempdir()) / f"compactos_result_{os.getpid()}.txt"
+
+
+def _encoded_ps_command(script: str) -> str:
+    """Encode a PowerShell command as -EncodedCommand (base64 UTF-16LE).
+
+    Avoids quoting/injection issues when the script embeds paths derived from
+    environment variables (e.g. TMP).
+    """
+    import base64
+
+    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+
+
 def _spawn_compactos_window() -> None:
     """Spawn a visible CompactOS window (CLI fallback)."""
     if os.name != "nt":
         return
 
-    import tempfile
-    comp_log = Path(tempfile.gettempdir()) / "compactos_result.txt"
+    comp_log = _compactos_log_path()
     os.environ["COMPACTOS_LOG"] = str(comp_log)
 
     # Keep a separate window open so the user can see CompactOS output
@@ -89,8 +106,8 @@ def _spawn_compactos_window() -> None:
                 "-NoProfile",
                 "-ExecutionPolicy",
                 "Bypass",
-                "-Command",
-                ps_command,
+                "-EncodedCommand",
+                _encoded_ps_command(ps_command),
             ],
             creationflags=subprocess.CREATE_NEW_CONSOLE
         )
@@ -166,16 +183,19 @@ def _human_bytes(n: int) -> str:
     return f"{n} B"
 
 
+COMPACTOS_TIMEOUT_SECONDS = 2 * 60 * 60  # CompactOS can run for over an hour
+
+
 def run_compactos_hidden(
     progress_callback=None,
     line_callback=None,
+    timeout: int = COMPACTOS_TIMEOUT_SECONDS,
 ) -> tuple[bool, str, dict]:
     """Run compact.exe /compactos:always hidden (no visible window)."""
     if os.name != "nt":
         return False, "Not Windows"
 
-    import tempfile
-    comp_log = Path(tempfile.gettempdir()) / "compactos_result.txt"
+    comp_log = _compactos_log_path()
 
     ps_command = "compact.exe /compactos:always 2>&1"
 
@@ -197,23 +217,37 @@ def run_compactos_hidden(
             errors="replace",
         )
 
-        output_lines = []
+        output_lines: list[str] = []
+        timed_out = False
+
+        def _read_output() -> None:
+            for line in proc.stdout:
+                line = line.rstrip("\r\n")
+                if not line:
+                    continue
+                output_lines.append(line)
+                if line_callback:
+                    line_callback(line)
+                if progress_callback:
+                    progress_callback(line, None)
+
         if progress_callback:
             progress_callback(_("Compressing Windows binaries..."), None)
 
-        for line in proc.stdout:
-            line = line.rstrip("\r\n")
-            if not line:
-                continue
-            output_lines.append(line)
-            if line_callback:
-                line_callback(line)
-            if progress_callback:
-                progress_callback(line, None)
+        reader = threading.Thread(target=_read_output, daemon=True)
+        reader.start()
+        try:
+            proc.wait(timeout=max(0, timeout))
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            proc.kill()
+            proc.wait(timeout=5)
+        reader.join(timeout=5)
 
-        proc.wait()
         output = "\n".join(output_lines)
-        success = proc.returncode == 0
+        if timed_out:
+            output += _("\n[timed out after {seconds}s]").format(seconds=timeout)
+        success = not timed_out and proc.returncode == 0
         parsed = _parse_compactos_summary(output)
 
         if progress_callback:
@@ -324,34 +358,7 @@ def countdown_to_compress(seconds: int = 300) -> bool:
         time.sleep(0.1)
 
 
-# def _check_battery() -> bool:
-#     if os.name != "nt":
-#         return True
-#     import ctypes
-#     class SYSTEM_POWER_STATUS(ctypes.Structure):
-#         _fields_ = [
-#             ("ACLineStatus", ctypes.c_byte),
-#             ("BatteryFlag", ctypes.c_byte),
-#             ("BatteryLifePercent", ctypes.c_byte),
-#             ("SystemStatusFlag", ctypes.c_byte),
-#             ("BatteryLifeTime", ctypes.c_ulong),
-#             ("BatteryFullLifeTime", ctypes.c_ulong),
-#         ]
-#     status = SYSTEM_POWER_STATUS()
-#     if ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
-#         # 1 usually means AC power, 0 is battery, 255 is unknown
-#         return status.ACLineStatus != 0
-#     return True
-
-
 def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: bool = False) -> None:
-    # if not _check_battery():
-    #     print(Fore.YELLOW + _("Warning: Analyzing and compressing on battery power can rapidly drain it.") + Style.RESET_ALL)
-    #     if hasattr(sys.stdout, "isatty") and sys.stdout.isatty():
-    #         answer = input(_("Proceed anyway? [y/N]: ")).strip().lower()
-    #         if answer not in {"y", "yes"}:
-    #             return
-
     targets = resolve_targets()
 
     _clear_screen()

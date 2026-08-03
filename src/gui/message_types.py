@@ -64,11 +64,6 @@ class GuiResponse:
 
 
 @dataclass
-class SelectFolderRequest(GuiRequest):
-    type: str = field(init=False, default="SelectFolder")
-
-
-@dataclass
 class StartCompressionRequest(GuiRequest):
     type: str = field(init=False, default="StartCompression")
     path: str = ""
@@ -108,11 +103,6 @@ class StartQuickCompressionRequest(GuiRequest):
 
 
 @dataclass
-class GetProgressUpdateRequest(GuiRequest):
-    type: str = field(init=False, default="GetProgressUpdate")
-
-
-@dataclass
 class SaveConfigRequest(GuiRequest):
     type: str = field(init=False, default="SaveConfig")
     decimal: bool = False
@@ -128,17 +118,6 @@ class ResetConfigRequest(GuiRequest):
 
 
 @dataclass
-class ChooseFolderRequest(GuiRequest):
-    type: str = field(init=False, default="ChooseFolder")
-
-
-@dataclass
-class OpenUrlRequest(GuiRequest):
-    type: str = field(init=False, default="OpenUrl")
-    url: str = ""
-
-
-@dataclass
 class ConfigResponse(GuiResponse):
     type: str = field(init=False, default="Config")
     decimal: bool = False
@@ -146,13 +125,8 @@ class ConfigResponse(GuiResponse):
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
+    hdd_mode: bool = False
     lzx_warning: str = ""
-
-
-@dataclass
-class FolderResponse(GuiResponse):
-    type: str = field(init=False, default="Folder")
-    path: str = ""
 
 
 @dataclass
@@ -210,51 +184,3 @@ class WarningResponse(GuiResponse):
     title: str = ""
     message: str = ""
 
-
-def parse_request(data: str) -> Optional[GuiRequest]:
-    """Parse JSON request string into appropriate GuiRequest subclass."""
-    try:
-        obj = json.loads(data)
-        req_type = obj.get("type")
-
-        if req_type == "SelectFolder":
-            return SelectFolderRequest()
-        elif req_type == "StartCompression":
-            return StartCompressionRequest(
-                path=obj.get("path", ""),
-                min_savings=obj.get("min_savings", 15.0),
-            )
-        elif req_type == "PauseCompression":
-            return PauseCompressionRequest()
-        elif req_type == "ResumeCompression":
-            return ResumeCompressionRequest()
-        elif req_type == "StopCompression":
-            return StopCompressionRequest()
-        elif req_type == "AnalyseFolder":
-            return AnalyseFolderRequest(path=obj.get("path", ""))
-        elif req_type == "GetQuickCompressionTargets":
-            return GetQuickCompressionTargetsRequest()
-        elif req_type == "StartQuickCompression":
-            return StartQuickCompressionRequest(
-                compactos=obj.get("compactos", False),
-            )
-        elif req_type == "GetProgressUpdate":
-            return GetProgressUpdateRequest()
-        elif req_type == "SaveConfig":
-            return SaveConfigRequest(
-                decimal=obj.get("decimal", False),
-                min_savings=float(obj.get("min_savings", 15.0)),
-                no_lzx=obj.get("no_lzx", False),
-                force_lzx=obj.get("force_lzx", False),
-                single_worker=obj.get("single_worker", False),
-            )
-        elif req_type == "ResetConfig":
-            return ResetConfigRequest()
-        elif req_type == "ChooseFolder":
-            return ChooseFolderRequest()
-        elif req_type == "OpenUrl":
-            return OpenUrlRequest(url=obj.get("url", ""))
-    except Exception:
-        pass
-
-    return None

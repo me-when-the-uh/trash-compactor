@@ -17,14 +17,13 @@ except ImportError:
     pywebview = None
 
 from .message_types import (
-    GuiRequest, GuiResponse, parse_request,
-    ConfigResponse, FolderResponse, StatusResponse,
+    GuiRequest, GuiResponse,
+    ConfigResponse, StatusResponse,
     FolderSummaryResponse, ProgressUpdateResponse, StateResponse,
-    WarningResponse, SelectFolderRequest, StartCompressionRequest,
+    WarningResponse, StartCompressionRequest,
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
-    AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest, GetProgressUpdateRequest,
+    AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest,
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
-    ChooseFolderRequest, OpenUrlRequest
 )
 from ..i18n import _, get_current_locale, get_translations
 
@@ -88,11 +87,6 @@ class GuiApi:
     def start_quick_compression(self, compactos: bool = False) -> Dict[str, Any]:
         """Start the one-click compression pipeline."""
         req = StartQuickCompressionRequest(compactos=compactos)
-        return self.backend_handler(req)
-
-    def get_progress_update(self) -> Dict[str, Any]:
-        """Get current progress update."""
-        req = GetProgressUpdateRequest()
         return self.backend_handler(req)
 
     def save_config(self, config: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:

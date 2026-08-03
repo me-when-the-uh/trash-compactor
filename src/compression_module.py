@@ -15,7 +15,7 @@ from .config import (
     savings_from_entropy,
 )
 from .i18n import _
-from .skip_logic import commit_incompressible_cache, log_directory_skips, maybe_skip_directory
+from .skip_logic import commit_incompressible_cache, discard_staged_incompressible_cache, log_directory_skips, maybe_skip_directory
 from .stats import CompressionStats, EntropySampleRecord, ProgressTimer, apply_entropy_projection
 from .timer import PerformanceMonitor
 from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
@@ -265,6 +265,9 @@ def execute_compression_plan_wrapper(
                     _render_stage_statuses(force=True)
                 sys.stdout.write("\n")
                 sys.stdout.flush()
+    except Exception:
+        discard_staged_incompressible_cache()
+        raise
     finally:
         if stage_render_stop is not None:
             stage_render_stop.set()
@@ -303,7 +306,7 @@ def _plan_compression(
         timer.update(processed)
 
     entropy_started = False
-    def _entropy_callback_wrapper(path: Path, processed: int, total: int) -> None:
+    def _entropy_callback_wrapper(path: Path, processed: int, total: int, dir_sampled_files: int = 0) -> None:
         nonlocal entropy_started
         if not timer:
             return

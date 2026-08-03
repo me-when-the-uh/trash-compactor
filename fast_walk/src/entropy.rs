@@ -255,11 +255,21 @@ fn probe_file(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) 
     (weighted_entropy, sampled_bytes, lz4_certain)
 }
 
-fn collect_subtree_files(root: &Path, include_subdirectories: bool) -> Vec<(String, u64)> {
+fn collect_subtree_files(root: &Path, include_subdirectories: bool, breadth_first: bool) -> Vec<(String, u64)> {
     let mut files: Vec<(String, u64)> = Vec::new();
     let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
+    // FIFO walk for sequential (HDD) probing keeps the disk head moving in
+    // discovery order; LIFO is fine when probes run in parallel anyway.
+    let mut head = 0usize;
 
-    while let Some(dir) = pending.pop() {
+    while head < pending.len() {
+        let dir = if breadth_first {
+            let d = pending[head].clone();
+            head += 1;
+            d
+        } else {
+            pending.pop().unwrap()
+        };
         let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
@@ -338,9 +348,10 @@ fn prepare_directory_plan(
     chunk_size: u64,
     max_bytes: u64,
     include_subdirectories: bool,
+    breadth_first: bool,
 ) -> DirPlan {
     let root = Path::new(dir);
-    let files = collect_subtree_files(root, include_subdirectories);
+    let files = collect_subtree_files(root, include_subdirectories, breadth_first);
     let sampled_list = reservoir_sample(&files, max_files);
     let jobs = build_probe_jobs(&sampled_list, chunk_size, max_bytes);
     DirPlan {
@@ -445,6 +456,56 @@ pub fn probe_directories_parallel(
     let progress_lock = Arc::new(Mutex::new(()));
     let progress_interval = (total / 32).max(1);
 
+    // One worker = sequential probing in discovery order (HDD mode). Parallel
+    // probes would scatter the disk head across directories and files, which
+    // on a spinning drive costs far more IOPS than it gains.
+    if workers <= 1 {
+        let results: Vec<DirEntropyResult> = py.allow_threads(|| {
+            let mut results = Vec::with_capacity(total);
+            for (done, dir) in dirs.iter().enumerate() {
+                let plan = prepare_directory_plan(
+                    dir,
+                    max_files,
+                    chunk_size,
+                    max_bytes,
+                    include_subdirectories,
+                    true,
+                );
+                let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
+                for job in &plan.jobs {
+                    let (weighted_entropy, sampled_bytes, lz4_certain) =
+                        probe_file(&job.path, job.size, job.budget);
+                    outcomes.push(FileProbeOutcome {
+                        order: job.order,
+                        weighted_entropy,
+                        sampled_bytes,
+                        lz4_certain,
+                    });
+                }
+                let (average_entropy, sampled_files, sampled_bytes, lz4_certain) =
+                    aggregate_directory(&mut outcomes, max_bytes);
+                results.push(DirEntropyResult {
+                    dir: plan.dir.clone(),
+                    average_entropy,
+                    sampled_files,
+                    sampled_bytes,
+                    lz4_certain,
+                });
+                maybe_fire_progress(
+                    &callback,
+                    &plan.dir,
+                    done + 1,
+                    total,
+                    sampled_files,
+                    &progress_lock,
+                    progress_interval,
+                );
+            }
+            results
+        });
+        return Ok(results);
+    }
+
     let pool = ThreadPoolBuilder::new()
         .num_threads(workers.max(1))
         .build()
@@ -461,6 +522,7 @@ pub fn probe_directories_parallel(
                         chunk_size,
                         max_bytes,
                         include_subdirectories,
+                        false,
                     )
                 })
                 .collect();

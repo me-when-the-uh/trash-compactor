@@ -103,17 +103,23 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
         summary_fn=_summary,
     )
 
-    with monitor.time_compression():
-        execute_compression_plan(
-            plan,
-            stats,
-            monitor,
-            verbosity=0,
-            xp_workers=xp_worker_count(),
-            lzx_workers=lzx_worker_count(),
-            stage_callback=lambda _algo, _total: None,
-            progress_callback=_exec_progress,
-        )
+    try:
+        with monitor.time_compression():
+            execute_compression_plan(
+                plan,
+                stats,
+                monitor,
+                verbosity=0,
+                xp_workers=xp_worker_count(),
+                lzx_workers=lzx_worker_count(),
+                stage_callback=lambda _algo, _total: None,
+                progress_callback=_exec_progress,
+            )
+    except Exception:
+        from ...skip_logic import discard_staged_incompressible_cache
+
+        discard_staged_incompressible_cache()
+        raise
 
     commit_incompressible_cache()
     backend.last_analysis_plan = None
@@ -173,21 +179,37 @@ def _run_quick_compression_loop(
     compressed_count: list[int],
     exec_start_time: float,
 ) -> None:
-    for index, entry in enumerate(entries, start=1):
-        backend._check_pause_stop()
+    try:
+        for index, entry in enumerate(entries, start=1):
+            backend._check_pause_stop()
 
-        directory = str(entry.get("directory") or "")
-        plan = entry.get("plan") or []
-        stats = entry.get("stats")
-        monitor = entry.get("monitor")
+            directory = str(entry.get("directory") or "")
+            plan = entry.get("plan") or []
+            stats = entry.get("stats")
+            monitor = entry.get("monitor")
 
-        if not directory or stats is None or monitor is None:
-            continue
+            if not directory or stats is None or monitor is None:
+                continue
 
-        if not plan:
+            if not plan:
+                backend._send(
+                    StatusResponse(
+                        _("Quick compression: nothing to compress in {directory} ({index}/{total})").format(
+                            directory=directory,
+                            index=index,
+                            total=len(entries),
+                        ),
+                        None,
+                    )
+                )
+                continue
+
+            backend.current_folder = directory
+            directory_target_size = sum(item[1] for item in plan)
+            total_target_size += directory_target_size
             backend._send(
                 StatusResponse(
-                    _("Quick compression: nothing to compress in {directory} ({index}/{total})").format(
+                    _("Quick compression: compressing {directory} ({index}/{total})").format(
                         directory=directory,
                         index=index,
                         total=len(entries),
@@ -195,23 +217,44 @@ def _run_quick_compression_loop(
                     None,
                 )
             )
-            continue
 
-        backend.current_folder = directory
-        directory_target_size = sum(item[1] for item in plan)
-        total_target_size += directory_target_size
-        backend._send(
-            StatusResponse(
-                _("Quick compression: compressing {directory} ({index}/{total})").format(
+            def _summary() -> None:
+                backend._send_folder_summary(
+                    stats,
+                    len(plan),
+                    directory_target_size,
                     directory=directory,
-                    index=index,
-                    total=len(entries),
-                ),
-                None,
-            )
-        )
+                    scope="directory",
+                    is_analysis=False,
+                )
 
-        def _summary() -> None:
+            _exec_progress = _exec_progress_factory(
+                backend,
+                total=total_to_compress,
+                compressed_count=compressed_count,
+                exec_start_time=exec_start_time,
+                status_template=_("Quick compressing... {compressed}/{total} ({rate:.0f} files/s)"),
+                pct_fn=lambda n, t: (n / t) * 100.0,
+                summary_fn=_summary,
+                update_interval=0.0,
+                use_send_progress=True,
+            )
+
+            with monitor.time_compression():
+                execute_compression_plan(
+                    plan,
+                    stats,
+                    monitor,
+                    verbosity=0,
+                    xp_workers=xp_worker_count(),
+                    lzx_workers=lzx_worker_count(),
+                    stage_callback=lambda _algo, _total: None,
+                    progress_callback=_exec_progress,
+                )
+
+            from ..summary import accumulate_stats
+            accumulate_stats(total_stats, stats)
+
             backend._send_folder_summary(
                 stats,
                 len(plan),
@@ -220,50 +263,19 @@ def _run_quick_compression_loop(
                 scope="directory",
                 is_analysis=False,
             )
-
-        _exec_progress = _exec_progress_factory(
-            backend,
-            total=total_to_compress,
-            compressed_count=compressed_count,
-            exec_start_time=exec_start_time,
-            status_template=_("Quick compressing... {compressed}/{total} ({rate:.0f} files/s)"),
-            pct_fn=lambda n, t: (n / t) * 100.0,
-            summary_fn=_summary,
-            update_interval=0.0,
-            use_send_progress=True,
-        )
-
-        with monitor.time_compression():
-            execute_compression_plan(
-                plan,
-                stats,
-                monitor,
-                verbosity=0,
-                xp_workers=xp_worker_count(),
-                lzx_workers=lzx_worker_count(),
-                stage_callback=lambda _algo, _total: None,
-                progress_callback=_exec_progress,
+            backend._send_folder_summary(
+                total_stats,
+                total_stats.compressed_files,
+                total_target_size,
+                directory="Total",
+                scope="total",
+                is_analysis=False,
             )
+    except Exception:
+        from ...skip_logic import discard_staged_incompressible_cache
 
-        from ..summary import accumulate_stats
-        accumulate_stats(total_stats, stats)
-
-        backend._send_folder_summary(
-            stats,
-            len(plan),
-            directory_target_size,
-            directory=directory,
-            scope="directory",
-            is_analysis=False,
-        )
-        backend._send_folder_summary(
-            total_stats,
-            total_stats.compressed_files,
-            total_target_size,
-            directory="Total",
-            scope="total",
-            is_analysis=False,
-        )
+        discard_staged_incompressible_cache()
+        raise
 
     commit_incompressible_cache()
     backend.last_analysis_plan = None

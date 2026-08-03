@@ -10,11 +10,20 @@ from ..config import COMPRESSION_ALGORITHMS
 from ..file_utils import is_file_compressed
 from ..stats import CompressionStats
 from ..timer import PerformanceMonitor
+from ..workers import hdd_mode
 
 _BATCH_SIZE = 100
+_HDD_BATCH_SIZE = 25
 _MAX_COMMAND_CHARS = 4000
+_HDD_MAX_COMMAND_CHARS = 1500
 _COMPACT_TIMEOUT_SECONDS = 600
 _SINGLE_FILE_TIMEOUT_SECONDS = 60
+
+
+def _batch_limits() -> tuple[int, int]:
+    if hdd_mode():
+        return _HDD_BATCH_SIZE, _HDD_MAX_COMMAND_CHARS
+    return _BATCH_SIZE, _MAX_COMMAND_CHARS
 
 
 def _compact_path(path_str: str) -> str:
@@ -81,10 +90,11 @@ def execute_compression_plan(
     def _chunk(entries: Sequence[tuple[str, int]], size: int) -> Iterator[list[tuple[str, int]]]:
         current = []
         current_length = 0
+        batch_size, max_chars = _batch_limits()
 
         for path_str, file_size in entries:
             path_length = len(_compact_path(path_str)) + 3  # for quotes and space
-            if current and (len(current) >= size or current_length + path_length > _MAX_COMMAND_CHARS):
+            if current and (len(current) >= batch_size or current_length + path_length > max_chars):
                 yield current
                 current = []
                 current_length = 0

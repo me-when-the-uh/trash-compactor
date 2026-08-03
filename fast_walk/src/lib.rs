@@ -91,26 +91,34 @@ fn normalize_for_compare(path: &str) -> String {
 struct ExclusionIndex {
     exact: HashSet<String>,
     prefixes: Vec<String>,
+    dotted: Vec<String>,
 }
 
 impl ExclusionIndex {
     fn new(excluded_dirs: Vec<String>) -> Self {
         let mut exact = HashSet::with_capacity(excluded_dirs.len());
         let mut prefixes = Vec::with_capacity(excluded_dirs.len());
+        let mut dotted = Vec::new();
 
         for dir in excluded_dirs {
             let norm = normalize_for_compare(&dir);
             exact.insert(norm.clone());
             prefixes.push(format!("{norm}{MAIN_SEPARATOR}"));
+            // Windows.old. entries form a dotted namespace: any name starting
+            // with "<root>\windows.old." is a stale Windows install.
+            if norm.ends_with(&format!("{MAIN_SEPARATOR_STR}windows.old.")) {
+                dotted.push(norm);
+            }
         }
 
-        Self { exact, prefixes }
+        Self { exact, prefixes, dotted }
     }
 
     fn contains_path(&self, path: &str) -> bool {
         let norm = normalize_for_compare(path);
         self.exact.contains(&norm)
             || self.prefixes.iter().any(|prefix| norm.starts_with(prefix))
+            || self.dotted.iter().any(|prefix| norm.starts_with(prefix))
     }
 }
 
@@ -203,6 +211,7 @@ fn worker_loop(
     breaks: Arc<Vec<u64>>,
     min_size: u64,
     ignore_ext: bool,
+    fifo: bool,
     tx: Sender<Vec<ScanTuple>>,
 ) {
     let mut local: Vec<ScanTuple> = Vec::with_capacity(BATCH_SIZE);
@@ -215,32 +224,60 @@ fn worker_loop(
             return;
         }
 
-        let dir = { stack.lock().unwrap().pop() };
+        // With a single worker (fifo=true, HDD mode) pop from the front so the
+        // disk head sweeps the tree in discovery order instead of jumping
+        // between sibling branches on every pop.
+        let dir = {
+            let mut stack = stack.lock().unwrap_or_else(|e| e.into_inner());
+            if fifo {
+                if stack.is_empty() {
+                    None
+                } else {
+                    Some(stack.remove(0))
+                }
+            } else {
+                stack.pop()
+            }
+        };
         let Some(dir) = dir else {
             std::thread::yield_now();
             continue;
         };
 
-        let mut subdirs: Vec<PathBuf> = Vec::new();
-        scan_dir(
-            &dir,
-            &exclusions,
-            &skip_ext,
-            ignore_ext,
-            min_size,
-            &breaks,
-            &mut local,
-            &mut subdirs,
-        );
+        // A panic inside scan_dir (e.g. a poisoned lock) must not kill the
+        // walk: catch it, still decrement pending, and keep going. Dropping
+        // this worker would leave pending > 0 forever and hang the iterator.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut subdirs: Vec<PathBuf> = Vec::new();
+            scan_dir(
+                &dir,
+                &exclusions,
+                &skip_ext,
+                ignore_ext,
+                min_size,
+                &breaks,
+                &mut local,
+                &mut subdirs,
+            );
+            subdirs
+        }));
 
-        if local.len() >= BATCH_SIZE {
-            let _ = tx.send(std::mem::take(&mut local));
-        }
+        match result {
+            Ok(subdirs) => {
+                if local.len() >= BATCH_SIZE {
+                    let _ = tx.send(std::mem::take(&mut local));
+                }
 
-        if !subdirs.is_empty() {
-            let n = subdirs.len();
-            stack.lock().unwrap().extend(subdirs);
-            pending.fetch_add(n, Ordering::Release);
+                if !subdirs.is_empty() {
+                    let n = subdirs.len();
+                    stack.lock().unwrap_or_else(|e| e.into_inner()).extend(subdirs);
+                    pending.fetch_add(n, Ordering::Release);
+                }
+            }
+            Err(_) => {
+                // Swallow the panic; remaining directories on the stack are
+                // still processed by other workers.
+            }
         }
         pending.fetch_sub(1, Ordering::Release);
     }
@@ -290,6 +327,7 @@ fn walk_and_filter(
     let skip_ext = Arc::new(skip_ext);
     let breaks = Arc::new(size_breaks);
     let threads = workers.max(1);
+    let fifo = threads == 1;
 
     thread::spawn(move || {
         let Ok(pool) = ThreadPoolBuilder::new().num_threads(threads).build() else {
@@ -308,7 +346,7 @@ fn walk_and_filter(
                 let skip_ext = Arc::clone(&skip_ext);
                 let breaks = Arc::clone(&breaks);
                 s.spawn(move |_| {
-                    worker_loop(stack, pending, exclusions, skip_ext, breaks, min_size, ignore_extensions, tx);
+                    worker_loop(stack, pending, exclusions, skip_ext, breaks, min_size, ignore_extensions, fifo, tx);
                 });
             }
         });
@@ -321,6 +359,7 @@ fn walk_and_filter(
 fn fast_walk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<WalkIter>()?;
     m.add_function(wrap_pyfunction!(walk_and_filter, m)?)?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     entropy::register_entropy_module(m)?;
     Ok(())
 }

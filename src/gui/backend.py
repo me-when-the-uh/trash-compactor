@@ -40,6 +40,7 @@ class GuiBackend:
         self.no_lzx = self.default_no_lzx
         self.force_lzx = False
         self.single_worker = False
+        self.hdd_mode = False
         self._user_overrode_single_worker = False  # set when user explicitly toggles/saves differing from auto-detect
         self.lzx_warning = _("It is recommended to disable LZX compression for this system.") if self.default_no_lzx else ""
 
@@ -58,6 +59,7 @@ class GuiBackend:
             no_lzx=self.no_lzx,
             force_lzx=self.force_lzx,
             single_worker=self.single_worker,
+            hdd_mode=self.hdd_mode,
             lzx_warning=self.lzx_warning,
         )
 
@@ -79,9 +81,10 @@ class GuiBackend:
 
     def _configure_worker_environment(self) -> None:
         from ..launch import configure_lzx
-        from ..workers import set_worker_cap
+        from ..workers import set_hdd_mode, set_worker_cap
 
         set_worker_cap(1 if self.single_worker else None)
+        set_hdd_mode(self.hdd_mode)
         configure_lzx(
             choice_enabled=not self.no_lzx,
             force_lzx=self.force_lzx,

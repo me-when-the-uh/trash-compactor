@@ -34,6 +34,7 @@ def run_analysis_pipeline(
         "quick_dir_total": quick_dir_total,
     }
 
+    backend._clear_analysis_state()
     base_dir = Path(backend.current_folder).resolve()
     stats = CompressionStats()
     stats.set_base_dir(base_dir)

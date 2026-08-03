@@ -86,21 +86,82 @@ SIZE_THRESHOLDS: Final[Tuple[Tuple[int, str], ...]] = (
 )
 
 
-def _default_excluded_directories() -> Tuple[str, ...]:
+def _fixed_drive_roots() -> Tuple[str, ...]:
+    """Return 'X:\\' roots of all fixed (non-removable) drives.
+
+    Uses ctypes GetLogicalDrives + GetDriveTypeW (no extra dependencies).
+    Falls back to the system drive only when the API is unavailable.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        _get_drive_type = kernel32.GetDriveTypeW
+        _get_drive_type.argtypes = [wintypes.LPCWSTR]
+        _get_drive_type.restype = wintypes.UINT
+        _logical_drives = kernel32.GetLogicalDrives
+        _logical_drives.restype = wintypes.DWORD
+
+        DRIVE_FIXED = 3
+        bitmask = _logical_drives()
+        roots: list[str] = []
+        for index in range(26):
+            if bitmask & (1 << index):
+                root = f"{chr(ord('A') + index)}:\\"
+                if _get_drive_type(root) == DRIVE_FIXED:
+                    roots.append(root)
+        if roots:
+            return tuple(roots)
+    except Exception:
+        pass
+
+    # Fallback: only the system drive.
     system_drive = os.environ.get('SystemDrive', 'C:')
-    drive_root = system_drive if system_drive.endswith(('\\', '/')) else f"{system_drive}\\"
+    return (system_drive if system_drive.endswith(('\\', '/')) else f"{system_drive}\\",)
 
-    def _drive_path(segment: str) -> str:
-        return os.path.join(drive_root, segment)
 
-    entries = [
-        os.environ.get('SystemRoot') or _drive_path('Windows'),
-        _drive_path('$Recycle.Bin'),
-        _drive_path('System Volume Information'),
-        _drive_path('Recovery'),
-        _drive_path('PerfLogs'),
-        _drive_path('Windows.old'),
-    ]
+def _default_excluded_directories() -> Tuple[str, ...]:
+    system_root = os.environ.get('SystemRoot') or ''
+    system_root_norm = os.path.normcase(os.path.normpath(system_root)) if system_root else ''
+
+    def _drive_path(root: str, segment: str) -> str:
+        return os.path.join(root, segment)
+
+    entries: list[str] = []
+
+    for drive_root in _fixed_drive_roots():
+        # The active Windows install may live on any fixed drive; always exclude
+        # it, even if SystemDrive does not point at it.
+        windows_root = _drive_path(drive_root, 'Windows')
+        if not system_root_norm or os.path.normcase(os.path.normpath(windows_root)) == system_root_norm:
+            entries.append(windows_root)
+
+        # Stale installs: Windows.old is always protected at the drive root, and
+        # Windows.old.NNN (e.g. Windows.old.000) via the dotted-prefix entry.
+        # Nonexistent entries are harmless; matching is a prefix check.
+        entries.append(_drive_path(drive_root, 'Windows.old'))
+        entries.append(_drive_path(drive_root, 'Windows.old.'))
+        try:
+            with os.scandir(drive_root) as it:
+                for entry in it:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    name = entry.name
+                    if name.lower().startswith('windows.old') and (
+                        len(name) == len('windows.old') or name[len('windows.old')] == '.'
+                    ):
+                        entries.append(entry.path)
+        except OSError:
+            pass
+
+        # Always-protected system directories on every fixed drive.
+        for segment in ('$Recycle.Bin', 'System Volume Information', 'Recovery', 'PerfLogs'):
+            entries.append(_drive_path(drive_root, segment))
+
+    if not entries:
+        # Absolute fallback: protect the system root even if drive probing failed.
+        entries.append(os.environ.get('SystemRoot') or system_root)
 
     seen: set[str] = set()
     cleaned: list[str] = []

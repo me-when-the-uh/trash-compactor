@@ -27,21 +27,6 @@ def is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
-def hide_console_window() -> None:
-    """Hide or detach the console without affecting a parent process console."""
-    try:
-        import multiprocessing
-
-        if multiprocessing.current_process().name != "MainProcess":
-            ctypes.windll.kernel32.FreeConsole()
-            return
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
-    except (AttributeError, OSError):
-        pass
-
-
 def _normalize_for_compare(path: str | Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(path)))
     if len(normalized) == 2 and normalized[1] == ':':
@@ -61,6 +46,9 @@ def _match_exclusion(normalized: str) -> tuple[bool, Optional[str]]:
             return True, _("Protected system directory ({display})").format(display=display)
         prefix = excluded_norm + os.sep
         if normalized.startswith(prefix):
+            return True, _("Within protected system directory ({display})").format(display=display)
+        # Dotted namespace prefix (e.g. C:\Windows.old.000 under Windows.old.).
+        if excluded_norm.endswith(os.sep + "windows.old.") and normalized.startswith(excluded_norm):
             return True, _("Within protected system directory ({display})").format(display=display)
     return False, None
 
@@ -151,6 +139,37 @@ def get_protection_reason(path: str | Path) -> Optional[str]:
 
 def describe_protected_path(directory: str) -> Optional[str]:
     return get_protection_reason(directory)
+
+
+def validate_target_path(directory: str) -> Optional[str]:
+    """Return a reason the target cannot be compressed, or None if it can.
+
+    Covers the structural checks shared by the CLI and GUI: protected system
+    paths, unresolvable volumes, network shares, and non-NTFS filesystems.
+    """
+    candidate = sanitize_path(directory)
+    if not candidate:
+        return _("No folder selected")
+
+    protection_reason = describe_protected_path(candidate)
+    if protection_reason:
+        return _("Cannot compress protected path: {reason}").format(reason=protection_reason)
+
+    from .drive_inspector import get_volume_details_fast
+
+    details = get_volume_details_fast(candidate)
+    if details.anchor is None:
+        return _("Unable to resolve the target volume. Please verify the path.")
+
+    if details.drive_type == DRIVE_REMOTE:
+        return _("Network shares are not supported targets for compression.")
+
+    if details.filesystem and details.filesystem != "NTFS":
+        return _(
+            "Windows compression requires NTFS. Detected filesystem: {filesystem}"
+        ).format(filesystem=details.filesystem or "unknown")
+
+    return None
 
 
 def is_file_compressed(

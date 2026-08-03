@@ -235,10 +235,6 @@
 
 		stop: function() {
 			pywebview.api.stop_compression().then(_dispatch_if_message);
-		},
-
-		get_progress: function() {
-			pywebview.api.get_progress_update().then(_dispatch_if_message);
 		}
 	};
 })();
@@ -669,8 +665,8 @@ var Gui = (function() {
 			$("#Button_Quick_Start").prop("disabled", false);
 		},
 
-                set_min_savings: function(min_savings) {
-				$("#Min_Savings").val(min_savings != null ? min_savings : 18);
+		set_min_savings: function(min_savings) {
+				$("#Min_Savings").val(min_savings != null ? min_savings : 15);
 		},
 
 		set_folder: function(folder) {
@@ -911,7 +907,7 @@ var Gui = (function() {
 			var currentDisplaySize = isAnalysis ? projectedOnDisk : currentOnDisk;
 			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
-			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 18);
+			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
 			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
 
 			$("#Size_Logical").text(Util.bytes_to_human(data.logical_size));

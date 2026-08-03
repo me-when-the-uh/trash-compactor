@@ -2,23 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [v0.7.0] - 2026-08-03
 
-### Fixed
-- GUI Compress now respects the Min Savings % from Settings (was resetting to 15%)
-- Quick-compression results no longer wiped when Compress is clicked after browsing a folder first
-- CLI 1-click mode works again without pywebview; invalid-path + `1` no longer hangs in a loop
-- Re-analyse in the GUI is instant again (removed slow per-click drive inspection)
-- Folder picker errors are shown in the GUI instead of failing silently
-- Incompressible cache matches paths regardless of letter case (`C:\Games` vs `c:\games`)
-- CompactOS summary parsing works better on non-English Windows installs
+### Added
+- HDD mode: a gentler single-worker pipeline for spinning drives with a defrag hint after the run
+- Deterministic CLI exit codes and a `-y` flag for scripted dry-runs
+- Shared path validation for CLI and GUI before any scanning begins
 
 ### Changed
-- GUI blocks analysis/compression on protected, network, or non-NTFS paths with a clear warning
-- Stuck `compact.exe` fallbacks time out after 60s per file instead of 600s
-- Quick-mode CompactOS no longer blocks the UI after analysis finishes
+- Incompressible cache is now bound to the volume and re-validated against directory changes
+- No-compress zones now cover all fixed NTFS drives, not just the system drive
+- CompactOS runs get a timeout and safer log handling
+- Dead code removed; build date and version now come from a single source
 
-## [v0.7.0] - 2026-06-29
+### Fixed
+- Program no longer closes the console it's launched from
+- Crash on non-interactive CLI runs
+- Stale cache entries persisting after interrupted runs
+- Empty interactive input and folder-picker errors now handled gracefully
+- GUI no longer flashes a "Stopped" state after a completed run
+
+## [v0.7.0-beta] - 2026-06-29
 ### Added
 - Progress bar for GUI mode
 

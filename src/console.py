@@ -1,6 +1,9 @@
+import os
 import sys
 from colorama import Fore, Style
 from .i18n import _
+
+_ATTACH_PARENT_PROCESS = 0xFFFFFFFF
 
 
 BANNER = r"""
@@ -71,6 +74,8 @@ def _read_msvcrt_input(prompt: str) -> str:
 
 
 def read_user_input(prompt: str) -> str:
+    if not _interactive_console():
+        return input(prompt)
     try:
         return _read_msvcrt_input(prompt)
     except ImportError:
@@ -82,7 +87,141 @@ def display_banner(version: str, build_date: str) -> None:
     print(Fore.GREEN + _("Version: {version}    Build Date: {build_date}\n").format(version=version, build_date=build_date))
 
 
+def _interactive_console() -> bool:
+    """True when stdin is attached to a real interactive console.
+
+    sys.stdin.isatty() alone is unreliable on Windows (NUL reports True), so
+    probe the console handle directly with GetConsoleMode.
+    """
+    try:
+        if not sys.stdin.isatty():
+            return False
+        if os.name != "nt":
+            return True
+    except (AttributeError, ValueError):
+        return False
+
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = wintypes.DWORD()
+        ok = kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+        return bool(ok)
+    except Exception:
+        return False
+
+
+def _std_handle_valid() -> bool:
+    """True when stdout is a real non-console handle (file/pipe redirect)."""
+    if os.name != "nt" or sys.stdout is None:
+        try:
+            return sys.stdout is not None and sys.stdout.fileno() >= 0
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    import ctypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+        if not handle or handle == ctypes.c_void_p(-1).value:
+            return False
+        file_type = kernel32.GetFileType(handle)
+        # FILE_TYPE_CHAR (2) = console or NUL; treat NUL as not a redirect.
+        # FILE_TYPE_DISK (1) / FILE_TYPE_PIPE (3) = genuine redirection.
+        if file_type in (1, 3):
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def attach_to_parent_console() -> bool:
+    """Attach to the parent process console (cmd/PowerShell/terminal).
+
+    Called from CLI mode when running as a GUI-subsystem exe: Windows does
+    not allocate a console of our own, so we take the parent's instead of
+    spawning a second window. Returns True on success (or when stdin was
+    already a real console, e.g. running from python).
+
+    Redirected std handles (e.g. `exe ... > out.txt`) are preserved as-is;
+    only missing/console-less handles are rebound to the attached console.
+    """
+    if _interactive_console():
+        return True
+    if os.name != "nt":
+        return True
+
+    stdout_redirected = _std_handle_valid()
+
+    import ctypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not kernel32.AttachConsole(_ATTACH_PARENT_PROCESS):
+            # Already attached or no parent console (double-click). ERROR_INVALID_HANDLE (6)
+            # means we already have one.
+            err = ctypes.get_last_error()
+            if err == 6:
+                return True
+            return False
+
+        # Rebind handles that were not redirected by the parent so print/input
+        # go to the attached console device.
+        if not stdout_redirected:
+            try:
+                stdin_fd = os.open("CONIN$", os.O_RDWR)
+                stdout_fd = os.open("CONOUT$", os.O_WRONLY)
+                stderr_fd = os.open("CONOUT$", os.O_WRONLY)
+                sys.stdin = os.fdopen(stdin_fd, "r", encoding="utf-8", errors="replace")
+                sys.stdout = os.fdopen(stdout_fd, "w", encoding="utf-8", errors="replace")
+                sys.stderr = os.fdopen(stderr_fd, "w", encoding="utf-8", errors="replace")
+            except OSError:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+def allocate_console() -> bool:
+    """Allocate a fresh console window (double-clicked CLI fallback).
+
+    Returns True when a console is now available, either because one was
+    allocated or because stdin was already interactive.
+    """
+    if _interactive_console():
+        return True
+    if os.name != "nt":
+        return True
+
+    import ctypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if not kernel32.AllocConsole():
+            return False
+        try:
+            stdin_fd = os.open("CONIN$", os.O_RDWR)
+            stdout_fd = os.open("CONOUT$", os.O_WRONLY)
+            stderr_fd = os.open("CONOUT$", os.O_WRONLY)
+            sys.stdin = os.fdopen(stdin_fd, "r", encoding="utf-8", errors="replace")
+            sys.stdout = os.fdopen(stdout_fd, "w", encoding="utf-8", errors="replace")
+            sys.stderr = os.fdopen(stderr_fd, "w", encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+        return True
+    except Exception:
+        return False
+
+
 def prompt_exit() -> None:
+    # Skip the keypress wait when stdin is not interactive (piped/scripted runs).
+    if not _interactive_console():
+        return
+
     try:
         import msvcrt
     except ImportError:
