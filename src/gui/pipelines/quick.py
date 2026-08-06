@@ -69,12 +69,21 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
                 quick_dir_index=index,
                 quick_dir_total=len(targets),
             )
-            run_analysis_pipeline(
-                backend,
-                report_completion=False,
-                quick_dir_index=index,
-                quick_dir_total=len(targets),
-            )
+            try:
+                run_analysis_pipeline(
+                    backend,
+                    report_completion=False,
+                    quick_dir_index=index,
+                    quick_dir_total=len(targets),
+                )
+            except Exception as exc:
+                backend._send(
+                    WarningResponse(
+                        _("Warning"),
+                        _("Analysis failed for {directory}: {exc}").format(directory=directory, exc=exc),
+                    )
+                )
+                continue
 
             current_stats = backend.last_analysis_stats
             current_plan = backend.last_analysis_plan or []
@@ -83,7 +92,6 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
 
             if current_stats is None or current_monitor is None:
                 continue
-
             current_plan_size = sum(item[1] for item in current_plan)
             quick_results.append(
                 {

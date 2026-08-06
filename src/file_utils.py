@@ -66,6 +66,9 @@ def get_ntfs_compressed_size(file_path: str | Path) -> int:
     high = wintypes.DWORD()
     low = _GET_COMPRESSED_FILE_SIZE(str(file_path), ctypes.byref(high))
     if low == 0xFFFFFFFF:
+        # GetCompressedFileSizeW returns INVALID_FILE_SIZE (0xFFFFFFFF) as the
+        # low DWORD for both failure AND for legitimate sizes >= 4 GiB where
+        # the high DWORD is non-zero. This right here is the correct error identifier
         error = ctypes.get_last_error()
         if error:
             raise ctypes.WinError(error)

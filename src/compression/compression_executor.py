@@ -87,7 +87,7 @@ def execute_compression_plan(
     stats_lock = threading.Lock()
     progress_lock = threading.Lock()
 
-    def _chunk(entries: Sequence[tuple[str, int]], size: int) -> Iterator[list[tuple[str, int]]]:
+    def _chunk(entries: Sequence[tuple[str, int]]) -> Iterator[list[tuple[str, int]]]:
         current = []
         current_length = 0
         batch_size, max_chars = _batch_limits()
@@ -186,7 +186,7 @@ def execute_compression_plan(
 
     for algorithm, entries in grouped.items():
         workers = lzx_workers if algorithm == 'LZX' else xp_workers
-        batches = list(_chunk(entries, _BATCH_SIZE))
+        batches = list(_chunk(entries))
 
         if stage_callback:
             try:

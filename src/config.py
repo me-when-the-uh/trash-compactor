@@ -50,18 +50,6 @@ def savings_from_entropy(entropy: float) -> float:
     return max(0.0, (1 - entropy / 8.0) * 100.0)
 
 
-ENTROPY_SKIP_THRESHOLD: Final[float] = entropy_from_savings(DEFAULT_MIN_SAVINGS_PERCENT)
-
-ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: Final[int] = 2 * 1024 * 1024  # 2MB
-ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: Final[int] = 100 * 1024 * 1024 # 100MB
-ENTROPY_BASE_SAMPLE_WINDOWS: Final[int] = 3
-ENTROPY_DYNAMIC_WINDOWS_MIN: Final[int] = 4
-ENTROPY_DYNAMIC_WINDOWS_MAX: Final[int] = 20
-ENTROPY_TARGET_WINDOW_SIZE: Final[int] = 16 * 1024
-
-ENTROPY_MAX_FILE_BUDGET: Final[int] = ENTROPY_DYNAMIC_WINDOWS_MAX * ENTROPY_TARGET_WINDOW_SIZE
-
-
 def _entropy_env_int(name: str, default: int) -> int:
     raw = os.getenv(name, "").strip()
     if not raw:
@@ -70,6 +58,18 @@ def _entropy_env_int(name: str, default: int) -> int:
         return max(1, int(raw))
     except ValueError:
         return default
+
+
+ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: Final[int] = 2 * 1024 * 1024  # 2MB
+ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: Final[int] = 100 * 1024 * 1024 # 100MB
+ENTROPY_BASE_SAMPLE_WINDOWS: Final[int] = 3
+ENTROPY_DYNAMIC_WINDOWS_MIN: Final[int] = 4
+ENTROPY_DYNAMIC_WINDOWS_MAX: Final[int] = 20
+ENTROPY_HUGE_WINDOWS_FILE_SIZE: Final[int] = 256 * 1024 * 1024  # 256MB
+ENTROPY_HUGE_WINDOWS_MAX: Final[int] = 40
+ENTROPY_TARGET_WINDOW_SIZE: Final[int] = _entropy_env_int("TRASH_COMPACTOR_ENTROPY_SAMPLE_WINDOW_SIZE", 16 * 1024)
+
+ENTROPY_MAX_FILE_BUDGET: Final[int] = ENTROPY_DYNAMIC_WINDOWS_MAX * ENTROPY_TARGET_WINDOW_SIZE
 
 
 ENTROPY_MAX_FILES: Final[int] = _entropy_env_int("TRASH_COMPACTOR_ENTROPY_MAX_FILES", 50)
@@ -197,5 +197,5 @@ DRY_RUN_CONSERVATIVE_FACTORS: Final[dict[str, float]] = {
     'XPRESS4K': 1.05,
     'XPRESS8K': 1.02,
     'XPRESS16K': 1.0,
-    'LZX': 0.95,
+    'LZX': 0.90,
 }

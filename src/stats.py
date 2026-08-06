@@ -195,6 +195,8 @@ class EntropySampleRecord:
     sampled_bytes: int
     total_bytes: int
     lz4_certain_files: int = 0
+    sampled_paths: List[str] = field(default_factory=list)
+    lz4_certain_paths: List[str] = field(default_factory=list)
 
 
 @dataclass

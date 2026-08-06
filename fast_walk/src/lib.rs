@@ -7,7 +7,7 @@ use rayon::ThreadPoolBuilder;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR, MAIN_SEPARATOR_STR};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -213,10 +213,16 @@ fn worker_loop(
     ignore_ext: bool,
     fifo: bool,
     tx: Sender<Vec<ScanTuple>>,
+    cancelled: Arc<AtomicBool>,
 ) {
     let mut local: Vec<ScanTuple> = Vec::with_capacity(BATCH_SIZE);
 
     loop {
+        // The Python consumer dropped the iterator (Stop/GUI cancel): exit
+        // early instead of walking the rest of the tree pointlessly.
+        if cancelled.load(Ordering::Acquire) {
+            return;
+        }
         if pending.load(Ordering::Acquire) == 0 {
             if !local.is_empty() {
                 let _ = tx.send(std::mem::take(&mut local));
@@ -286,6 +292,16 @@ fn worker_loop(
 #[pyclass(unsendable)]
 struct WalkIter {
     receiver: Receiver<Vec<ScanTuple>>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Drop for WalkIter {
+    fn drop(&mut self) {
+        // When cancelled via GUI, workers are to be stopped at next loop check,
+        // leaving the receiver non-empty while the walk thread winds down deadlocks
+        self.cancelled.store(true, Ordering::Release);
+        while self.receiver.recv().is_ok() {}
+    }
 }
 
 #[pymethods]
@@ -328,8 +344,10 @@ fn walk_and_filter(
     let breaks = Arc::new(size_breaks);
     let threads = workers.max(1);
     let fifo = threads == 1;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_thread = Arc::clone(&cancelled);
 
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let Ok(pool) = ThreadPoolBuilder::new().num_threads(threads).build() else {
             return;
         };
@@ -345,14 +363,16 @@ fn walk_and_filter(
                 let exclusions = Arc::clone(&exclusions);
                 let skip_ext = Arc::clone(&skip_ext);
                 let breaks = Arc::clone(&breaks);
+                let cancelled = Arc::clone(&cancelled_thread);
                 s.spawn(move |_| {
-                    worker_loop(stack, pending, exclusions, skip_ext, breaks, min_size, ignore_extensions, fifo, tx);
+                    worker_loop(stack, pending, exclusions, skip_ext, breaks, min_size, ignore_extensions, fifo, tx, cancelled);
                 });
             }
         });
     });
 
-    Ok(WalkIter { receiver: rx })
+    let _ = handle;  // detached; WalkIter::drop drains the channel to join
+    Ok(WalkIter { receiver: rx, cancelled })
 }
 
 #[pymodule]

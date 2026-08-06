@@ -103,7 +103,9 @@ def configure_lzx(
 
 
 def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
-    details = get_volume_details(directory)
+    from .drive_inspector import get_volume_details_fast
+
+    details = get_volume_details_fast(directory)
     throttle_requested = force_serial  # Carry over manual single-worker overrides
     target_label = details.drive_letter or directory
 
@@ -138,6 +140,9 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
             set_worker_cap(1)
             logging.info(_("Single-worker mode honored even though the drive is not fixed media."))
         return True
+
+    # Only fixed drives need the full probe (seek penalty / media type)
+    details = get_volume_details(directory)
 
     if details.rotational is not True:
         if details.rotational is None:

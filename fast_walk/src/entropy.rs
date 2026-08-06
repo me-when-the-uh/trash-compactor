@@ -14,9 +14,11 @@ const LZ4_INCOMPRESSIBLE_THRESHOLD: f64 = 0.95;
 
 const ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: u64 = 2 * 1024 * 1024;
 const ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+const ENTROPY_HUGE_WINDOWS_FILE_SIZE: u64 = 256 * 1024 * 1024;
 const ENTROPY_BASE_SAMPLE_WINDOWS: u32 = 3;
 const ENTROPY_DYNAMIC_WINDOWS_MIN: u32 = 4;
 const ENTROPY_DYNAMIC_WINDOWS_MAX: u32 = 20;
+const ENTROPY_HUGE_WINDOWS_MAX: u32 = 40;
 const ENTROPY_TARGET_WINDOW_SIZE: u64 = 16 * 1024;
 
 #[pyclass]
@@ -32,6 +34,10 @@ pub struct DirEntropyResult {
     pub sampled_bytes: u64,
     #[pyo3(get)]
     pub lz4_certain: u32,
+    #[pyo3(get)]
+    pub sampled_paths: Vec<String>,
+    #[pyo3(get)]
+    pub lz4_certain_paths: Vec<String>,
 }
 
 struct FileProbeJob {
@@ -48,6 +54,8 @@ struct DirPlan {
 
 struct FileProbeOutcome {
     order: u32,
+    path: String,
+    file_size: u64,
     weighted_entropy: f64,
     sampled_bytes: u64,
     lz4_certain: bool,
@@ -57,13 +65,25 @@ fn get_sample_window_count(file_size: u64) -> u32 {
     if file_size <= ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE {
         return ENTROPY_BASE_SAMPLE_WINDOWS;
     }
-    if file_size >= ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE {
-        return ENTROPY_DYNAMIC_WINDOWS_MAX;
+    if file_size >= ENTROPY_HUGE_WINDOWS_FILE_SIZE {
+        return ENTROPY_HUGE_WINDOWS_MAX;
     }
+
+    if file_size >= ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE {
+        let ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE) as f64
+            / (ENTROPY_HUGE_WINDOWS_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE) as f64;
+        return ENTROPY_DYNAMIC_WINDOWS_MAX
+            + (ratio * (ENTROPY_HUGE_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MAX) as f64) as u32;
+    }
+
     let ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE) as f64
         / (ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE) as f64;
     ENTROPY_DYNAMIC_WINDOWS_MIN
         + (ratio * (ENTROPY_DYNAMIC_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MIN) as f64) as u32
+}
+
+fn get_file_probe_budget(file_size: u64) -> u64 {
+    get_sample_window_count(file_size) as u64 * ENTROPY_TARGET_WINDOW_SIZE
 }
 
 fn derive_window_size(byte_budget: u64, num_windows: u32) -> u64 {
@@ -199,6 +219,14 @@ fn probe_file(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) 
         return (0.0, 0, false);
     }
 
+    // A panic (e.g. an lz4/mmap edge case) must not poison the rayon batch:
+    // degrade to "no sample" so the directory is just skipped by the entropy
+    // gate, exactly like a file that failed to open.
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe_file_inner(path, file_size, byte_budget)))
+        .unwrap_or((0.0, 0, false))
+}
+
+fn probe_file_inner(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) {
     let num_windows = get_sample_window_count(file_size);
     let window_size = derive_window_size(byte_budget, num_windows);
     let windows = plan_sample_windows(file_size, window_size, num_windows);
@@ -256,10 +284,15 @@ fn probe_file(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) 
 }
 
 fn collect_subtree_files(root: &Path, include_subdirectories: bool, breadth_first: bool) -> Vec<(String, u64)> {
+    // Parallel walk for the multi-worker case for SSDs
+    if !breadth_first && include_subdirectories {
+        return collect_subtree_files_parallel(root);
+    }
+
     let mut files: Vec<(String, u64)> = Vec::new();
     let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
     // FIFO walk for sequential (HDD) probing keeps the disk head moving in
-    // discovery order; LIFO is fine when probes run in parallel anyway.
+    // discovery order
     let mut head = 0usize;
 
     while head < pending.len() {
@@ -302,16 +335,93 @@ fn collect_subtree_files(root: &Path, include_subdirectories: bool, breadth_firs
     files
 }
 
+fn collect_subtree_files_parallel(root: &Path) -> Vec<(String, u64)> {
+    use std::sync::Mutex;
+
+    let stack: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(vec![root.to_path_buf()]));
+    let pending = Arc::new(AtomicUsize::new(1));
+    let files: Arc<Mutex<Vec<(String, u64)>>> = Arc::new(Mutex::new(Vec::new()));
+
+    rayon::scope(|s| {
+        for _ in 0..rayon::current_num_threads().max(1) {
+            let stack = Arc::clone(&stack);
+            let pending = Arc::clone(&pending);
+            let files = Arc::clone(&files);
+            s.spawn(move |_| {
+                let mut local: Vec<(String, u64)> = Vec::new();
+                loop {
+                    if pending.load(Ordering::Acquire) == 0 {
+                        if !local.is_empty() {
+                            files.lock().unwrap_or_else(|e| e.into_inner()).append(&mut local);
+                        }
+                        return;
+                    }
+
+                    let dir = {
+                        let mut stack = stack.lock().unwrap_or_else(|e| e.into_inner());
+                        stack.pop()
+                    };
+                    let Some(dir) = dir else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+
+                    let Ok(entries) = std::fs::read_dir(&dir) else {
+                        pending.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    };
+
+                    let mut new_dirs: Vec<PathBuf> = Vec::new();
+                    for entry in entries.flatten() {
+                        let Ok(metadata) = entry.metadata() else {
+                            continue;
+                        };
+                        if metadata.is_dir() {
+                            new_dirs.push(entry.path());
+                            continue;
+                        }
+                        if !metadata.is_file() {
+                            continue;
+                        }
+                        let size = metadata.len();
+                        if size == 0 {
+                            continue;
+                        }
+                        local.push((entry.path().to_string_lossy().into_owned(), size));
+                    }
+
+                    if !new_dirs.is_empty() {
+                        pending.fetch_add(new_dirs.len(), Ordering::AcqRel);
+                        stack.lock().unwrap_or_else(|e| e.into_inner()).extend(new_dirs);
+                    }
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                }
+            });
+        }
+    });
+
+    Arc::try_unwrap(files).ok().and_then(|m| m.into_inner().ok()).unwrap_or_default()
+}
+
 fn reservoir_sample(files: &[(String, u64)], max_files: u32) -> Vec<(String, u64)> {
     if max_files == 0 || files.is_empty() {
         return Vec::new();
     }
 
-    // Deterministic selection: sort by size descending, take top N.
     let mut sorted: Vec<(String, u64)> = files.to_vec();
     sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    sorted.truncate(max_files as usize);
-    sorted
+    if sorted.len() <= max_files as usize {
+        return sorted;
+    }
+
+    let strata = (max_files / 5).max(1) as usize;
+    let top_k = (max_files as usize).saturating_sub(strata);
+    let mut selected = sorted[..top_k].to_vec();
+    let remainder = &sorted[top_k..];
+    for j in 0..strata {
+        selected.push(remainder[(j as f64 * remainder.len() as f64 / strata as f64) as usize].clone());
+    }
+    selected
 }
 
 fn build_probe_jobs(
@@ -326,7 +436,8 @@ fn build_probe_jobs(
         if remaining == 0 {
             break;
         }
-        let budget = chunk_size.min(remaining);
+        let per_file = get_file_probe_budget(*size);
+        let budget = per_file.min(chunk_size.max(per_file)).min(remaining);
         if budget == 0 {
             break;
         }
@@ -336,7 +447,7 @@ fn build_probe_jobs(
             budget,
             order: order as u32,
         });
-        remaining = remaining.saturating_sub(budget);
+        remaining = remaining.saturating_sub(budget.min(*size));
     }
 
     jobs
@@ -363,13 +474,16 @@ fn prepare_directory_plan(
 fn aggregate_directory(
     outcomes: &mut [FileProbeOutcome],
     max_bytes: u64,
-) -> (f64, u32, u64, u32) {
+) -> (f64, u32, u64, u32, Vec<String>, Vec<String>) {
     outcomes.sort_unstable_by_key(|o| o.order);
 
     let mut sampled_files = 0u32;
     let mut sampled_bytes = 0u64;
-    let mut weighted_entropy = 0.0f64;
+    let mut size_weighted_entropy = 0.0f64;
+    let mut size_total = 0u64;
     let mut lz4_certain_files = 0u32;
+    let mut sampled_paths: Vec<String> = Vec::new();
+    let mut lz4_certain_paths: Vec<String> = Vec::new();
 
     for outcome in outcomes.iter() {
         if sampled_bytes >= max_bytes {
@@ -381,9 +495,13 @@ fn aggregate_directory(
 
         sampled_files += 1;
         sampled_bytes += outcome.sampled_bytes;
-        weighted_entropy += outcome.weighted_entropy;
+        size_weighted_entropy += (outcome.weighted_entropy / outcome.sampled_bytes as f64)
+            * outcome.file_size as f64;
+        size_total += outcome.file_size;
+        sampled_paths.push(outcome.path.clone());
         if outcome.lz4_certain {
             lz4_certain_files += 1;
+            lz4_certain_paths.push(outcome.path.clone());
         }
 
         if sampled_bytes >= max_bytes {
@@ -391,16 +509,25 @@ fn aggregate_directory(
         }
     }
 
-    if sampled_bytes == 0 {
-        return (-1.0, sampled_files, sampled_bytes, lz4_certain_files);
+    if size_total == 0 {
+        return (
+            -1.0,
+            sampled_files,
+            sampled_bytes,
+            lz4_certain_files,
+            sampled_paths,
+            lz4_certain_paths,
+        );
     }
 
-    let average_entropy = weighted_entropy / sampled_bytes as f64;
+    let average_entropy = size_weighted_entropy / size_total as f64;
     (
         average_entropy,
         sampled_files,
         sampled_bytes,
         lz4_certain_files,
+        sampled_paths,
+        lz4_certain_paths,
     )
 }
 
@@ -477,12 +604,14 @@ pub fn probe_directories_parallel(
                         probe_file(&job.path, job.size, job.budget);
                     outcomes.push(FileProbeOutcome {
                         order: job.order,
+                        path: job.path.clone(),
+                        file_size: job.size,
                         weighted_entropy,
                         sampled_bytes,
                         lz4_certain,
                     });
                 }
-                let (average_entropy, sampled_files, sampled_bytes, lz4_certain) =
+                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths) =
                     aggregate_directory(&mut outcomes, max_bytes);
                 results.push(DirEntropyResult {
                     dir: plan.dir.clone(),
@@ -490,6 +619,8 @@ pub fn probe_directories_parallel(
                     sampled_files,
                     sampled_bytes,
                     lz4_certain,
+                    sampled_paths,
+                    lz4_certain_paths,
                 });
                 maybe_fire_progress(
                     &callback,
@@ -513,104 +644,52 @@ pub fn probe_directories_parallel(
 
     let results: Vec<DirEntropyResult> = py.allow_threads(|| {
         pool.install(|| {
-            let plans: Vec<DirPlan> = dirs
-                .par_iter()
-                .map(|dir| {
-                    prepare_directory_plan(
-                        dir,
-                        max_files,
-                        chunk_size,
-                        max_bytes,
-                        include_subdirectories,
-                        false,
-                    )
-                })
-                .collect();
-
-            let mut flat_jobs: Vec<(usize, FileProbeJob)> = Vec::new();
-            for (dir_index, plan) in plans.iter().enumerate() {
-                for job in &plan.jobs {
-                    flat_jobs.push((
-                        dir_index,
-                        FileProbeJob {
-                            path: job.path.clone(),
-                            size: job.size,
-                            budget: job.budget,
-                            order: job.order,
-                        },
-                    ));
-                }
-            }
-
-            let jobs_per_dir: Vec<usize> = plans.iter().map(|plan| plan.jobs.len()).collect();
-            let grouped: Vec<Arc<Mutex<Vec<FileProbeOutcome>>>> = (0..plans.len())
-                .map(|_| Arc::new(Mutex::new(Vec::new())))
-                .collect();
-            let result_slots: Vec<Arc<Mutex<Option<DirEntropyResult>>>> = (0..plans.len())
+            let result_slots: Vec<Arc<Mutex<Option<DirEntropyResult>>>> = (0..dirs.len())
                 .map(|_| Arc::new(Mutex::new(None)))
                 .collect();
             let dirs_completed = Arc::new(AtomicUsize::new(0));
 
-            for (dir_index, plan) in plans.iter().enumerate() {
-                if plan.jobs.is_empty() {
-                    let (average_entropy, sampled_files, sampled_bytes, lz4_certain) =
-                        aggregate_directory(&mut Vec::new(), max_bytes);
-                    *result_slots[dir_index].lock().unwrap_or_else(|e| e.into_inner()) =
-                        Some(DirEntropyResult {
-                            dir: plan.dir.clone(),
-                            average_entropy,
-                            sampled_files,
-                            sampled_bytes,
-                            lz4_certain,
-                        });
-                    let done = dirs_completed.fetch_add(1, Ordering::Relaxed) + 1;
-                    maybe_fire_progress(
-                        &callback,
-                        &plan.dir,
-                        done,
-                        total,
-                        sampled_files,
-                        &progress_lock,
-                        progress_interval,
-                    );
-                }
-            }
+            dirs.par_iter().enumerate().for_each(|(dir_index, dir)| {
+                let plan = prepare_directory_plan(
+                    dir,
+                    max_files,
+                    chunk_size,
+                    max_bytes,
+                    include_subdirectories,
+                    false,
+                );
 
-            flat_jobs.par_iter().for_each(|(dir_index, job)| {
-                let (weighted_entropy, sampled_bytes, lz4_certain) =
-                    probe_file(&job.path, job.size, job.budget);
-                let outcome = FileProbeOutcome {
-                    order: job.order,
-                    weighted_entropy,
-                    sampled_bytes,
-                    lz4_certain,
-                };
-
-                let mut outcomes = grouped[*dir_index]
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
-                outcomes.push(outcome);
-                if outcomes.len() != jobs_per_dir[*dir_index] {
-                    return;
+                let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
+                for job in &plan.jobs {
+                    let (weighted_entropy, sampled_bytes, lz4_certain) =
+                        probe_file(&job.path, job.size, job.budget);
+                    outcomes.push(FileProbeOutcome {
+                        order: job.order,
+                        path: job.path.clone(),
+                        file_size: job.size,
+                        weighted_entropy,
+                        sampled_bytes,
+                        lz4_certain,
+                    });
                 }
 
-                let (average_entropy, sampled_files, sampled_bytes, lz4_certain) =
+                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths) =
                     aggregate_directory(&mut outcomes, max_bytes);
-                let plan_dir = plans[*dir_index].dir.clone();
-                *result_slots[*dir_index].lock().unwrap_or_else(|e| e.into_inner()) =
+                *result_slots[dir_index].lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(DirEntropyResult {
-                        dir: plan_dir.clone(),
+                        dir: plan.dir.clone(),
                         average_entropy,
                         sampled_files,
                         sampled_bytes,
                         lz4_certain,
+                        sampled_paths,
+                        lz4_certain_paths,
                     });
-                drop(outcomes);
 
                 let done = dirs_completed.fetch_add(1, Ordering::Relaxed) + 1;
                 maybe_fire_progress(
                     &callback,
-                    &plan_dir,
+                    &plan.dir,
                     done,
                     total,
                     sampled_files,

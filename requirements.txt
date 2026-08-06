@@ -1,17 +1,12 @@
 altgraph==0.17.5
 colorama==0.4.6
-gitignore_parser==0.1.13
-lxml==6.1.1
 lz4==4.4.5
-Markdown==3.10.2
 maturin>=1.4,<2
 packaging==26.2
 pefile==2024.8.26
 psutil==7.2.2
 pyinstaller==6.21.0
 pyinstaller-hooks-contrib==2026.6
-pypdf==6.13.2
-python-docx==1.2.0
 pywin32-ctypes==0.2.3
 pywebview==6.2.1
 setuptools==82.0.1

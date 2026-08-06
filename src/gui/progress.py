@@ -7,15 +7,15 @@ PLAN_PROGRESS_GRANULARITY = 32
 ENTROPY_PROGRESS_GRANULARITY = 8
 COMPRESSION_PROGRESS_GRANULARITY = 4
 _PROGRESS_MARGIN_OF_ERROR = -1.0
-_PROGRESS_SCAN_BASELINE_FILES = 100_000 # May overflow above 33% if there are too many files
-_PROGRESS_SCAN_END = 100.0 / 3.0 # Tracked until 33%
+_PROGRESS_SCAN_BASELINE_FILES = 100_000  # Nominal tree size for the scan phase
+_PROGRESS_SCAN_END = 100.0 / 3.0  # Scan is tracked until 33%
 _PROGRESS_ENTROPY_END = 100.0
 
 
 def scan_progress_percent(file_count: int) -> float:
     if file_count <= 0:
         return 0.0
-    return (file_count / _PROGRESS_SCAN_BASELINE_FILES) * _PROGRESS_SCAN_END
+    return min((file_count / _PROGRESS_SCAN_BASELINE_FILES) * _PROGRESS_SCAN_END, _PROGRESS_SCAN_END)
 
 
 def entropy_progress_percent(processed: int, total: int) -> float:

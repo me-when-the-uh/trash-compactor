@@ -509,7 +509,7 @@ var Gui = (function() {
 				}
 			});
 
-			setInterval(_flush_queued_updates, 100);
+			setInterval(_flush_queued_updates, 125);
 			Gui.apply_boot_config();
 			Gui.request_initial_config();
 		},
@@ -599,6 +599,7 @@ var Gui = (function() {
 				decimal: $("#SI_Units").val() == "D",
 				min_savings: parseFloat($("#Min_Savings").val()),
 				no_lzx: $("#No_LZX").is(":checked"),
+				force_lzx: !$("#No_LZX").is(":checked"),
 				single_worker: $("#Single_Worker").is(":checked")
 			};
 		},

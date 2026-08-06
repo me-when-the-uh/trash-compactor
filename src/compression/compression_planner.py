@@ -4,18 +4,23 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from ..i18n import _
-from ..config import ENTROPY_MAX_BYTES, ENTROPY_MAX_FILE_BUDGET, ENTROPY_MAX_FILES, savings_from_entropy
+from ..config import (
+    COMPRESSION_ALGORITHMS,
+    ENTROPY_MAX_BYTES,
+    ENTROPY_MAX_FILE_BUDGET,
+    ENTROPY_MAX_FILES,
+    savings_from_entropy,
+)
 from ..skip_logic import (
     append_directory_skip_record,
     entropy_records_from_probe,
     evaluate_entropy_directory,
     get_incompressible_cache,
-    sample_directory_entropy,
 )
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
-from .entropy import sample_file_entropy
+from .entropy import _select_sample_files, get_file_probe_budget, sample_file_entropy
 from .file_scan import (
     CAT_ALREADY_COMPRESSED,
     CAT_DEBUG_EXT,
@@ -124,12 +129,22 @@ def plan_compression(
                 verbosity=verbosity,
                 progress_callback=entropy_progress_callback,
             )
+
+    if COMPRESSION_ALGORITHMS.get('large') == 'XPRESS16K':
+        # LZX is disabled (benchmark or explicit toggle): the walker still
+        # tagged large files as LZX, so downgrade them here. The executor and
+        # the projection both read the plan's algo, so this is the single
+        # place that must agree with configure_lzx().
+        candidates = [
+            (path_str, size, 'XPRESS16K' if algo == 'LZX' else algo)
+            for path_str, size, algo in candidates
+        ]
     return candidates
 
 
 def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float) -> None:
     entropy_sum, sampled_bytes, _ = sample_file_entropy(
-        Path(path), byte_budget=ENTROPY_MAX_FILE_BUDGET, file_size=file_size
+        Path(path), byte_budget=get_file_probe_budget(file_size), file_size=file_size
     )
     if sampled_bytes <= 0:
         return
@@ -140,6 +155,118 @@ def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float
             f"\n[DEBUG] File {os.path.basename(path)} has potential savings: {savings:.1f}% "
             f"({_format_size(file_size)} -> {_format_size(projected)})"
         )
+
+
+def _probe_file_list(files: list[tuple[Path, int]]) -> tuple[Optional[float], int, int, int, list[str], list[str]]:
+    """Aggregate entropy over a pre-collected list of (path, size) files.
+
+    Mirrors ``sample_directory_entropy``'s aggregation but skips the tree walk;
+    the caller already collected the files (with ``skip_root_files=False``, so
+    root-level files are included).
+    """
+    if not files:
+        return None, 0, 0, 0, [], []
+
+    sampled_files = 0
+    sampled_bytes = 0
+    size_weighted_entropy = 0.0
+    size_total = 0
+    lz4_certain = 0
+    sampled_paths: list[str] = []
+    lz4_certain_paths: list[str] = []
+    remaining = ENTROPY_MAX_BYTES
+
+    for path, file_size in files:
+        if remaining <= 0:
+            break
+        per_file_budget = min(get_file_probe_budget(file_size), remaining)
+        if per_file_budget <= 0:
+            break
+        file_entropy, file_bytes, lz4_flag = sample_file_entropy(
+            path, byte_budget=per_file_budget, file_size=file_size
+        )
+        if file_bytes == 0:
+            continue
+        sampled_files += 1
+        sampled_bytes += file_bytes
+        size_weighted_entropy += (file_entropy / file_bytes) * file_size
+        size_total += file_size
+        sampled_paths.append(str(path))
+        if lz4_flag:
+            lz4_certain += 1
+            lz4_certain_paths.append(str(path))
+        remaining -= file_bytes
+
+    if size_total == 0:
+        return None, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths
+    return size_weighted_entropy / size_total, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths
+
+
+def _filter_certainly_incompressible_files(
+    candidates: list[PlanEntry],
+    stats: CompressionStats,
+    already_sampled: Optional[set[str]] = None,
+) -> list[PlanEntry]:
+    """Drop files that are certainly incompressible.
+
+    Probes surviving candidates per directory (largest first, bounded by
+    ENTROPY_MAX_BYTES) and skips only files where every sampled window hit the
+    LZ4 gate. Files already measured by the directory pass (``already_sampled``)
+    are not re-probed; their LZ4 verdicts were recorded in the sample records
+    and are applied here directly.
+    """
+    by_dir: dict[str, list[tuple[int, int, str]]] = {}
+    order: list[str] = []
+    for index, (path_str, file_size, algorithm) in enumerate(candidates):
+        parent_dir = os.path.dirname(path_str)
+        if parent_dir not in by_dir:
+            by_dir[parent_dir] = []
+            order.append(parent_dir)
+        by_dir[parent_dir].append((index, file_size, algorithm))
+
+    hit_paths: set[str] = {
+        path
+        for record in stats.entropy_samples
+        for path in record.lz4_certain_paths
+    }
+    for parent_dir in order:
+        entries = sorted(by_dir[parent_dir], key=lambda item: item[1], reverse=True)
+        remaining = ENTROPY_MAX_BYTES
+        for index, file_size, _algorithm in entries:
+            path_str = candidates[index][0]
+            if already_sampled and path_str in already_sampled:
+                continue
+            if remaining <= 0:
+                break
+            _file_entropy, file_bytes, lz4_certain = sample_file_entropy(
+                Path(path_str),
+                byte_budget=get_file_probe_budget(file_size),
+                file_size=file_size,
+            )
+            if file_bytes == 0:
+                continue
+            remaining -= file_bytes
+            if lz4_certain:
+                hit_paths.add(path_str)
+
+    if not hit_paths:
+        return candidates
+
+    filtered: list[PlanEntry] = []
+    for path_str, file_size, algorithm in candidates:
+        if path_str in hit_paths:
+            stats.record_file_skip(
+                Path(path_str),
+                _("File is certainly incompressible (LZ4 gate)"),
+                file_size,
+                file_size,
+                category='high_entropy',
+            )
+            logging.debug("Skipping %s: certainly incompressible (LZ4 gate)", path_str)
+            continue
+        filtered.append((path_str, file_size, algorithm))
+
+    return filtered
 
 
 def _filter_high_entropy_directories(
@@ -161,53 +288,58 @@ def _filter_high_entropy_directories(
     directories = {Path(path_str) for path_str in directory_paths}
 
     root_skip_record: Optional[DirectorySkipRecord] = None
+    root_files: Optional[list[tuple[Path, int]]] = None
     if any(os.path.dirname(path_str) == base_dir_str for path_str, _, _ in candidates):
-        average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(
+        root_files, root_skipped = _select_sample_files(
             base_dir,
+            max_files=ENTROPY_MAX_FILES,
             include_subdirectories=False,
+            skip_root_files=False,
         )
-        if monitor and sampled_files > 0:
-            monitor.stats.files_analyzed_for_entropy += sampled_files
+        root_entropy, root_files_sampled, root_bytes_sampled, root_lz4, root_sampled_paths, root_lz4_paths = _probe_file_list(root_files or [])
+        if monitor and root_files_sampled > 0:
+            monitor.stats.files_analyzed_for_entropy += root_files_sampled
 
-        if average_entropy is not None and sampled_files > 0 and sampled_bytes >= 1024:
-            estimated_savings = savings_from_entropy(average_entropy)
+        if root_entropy is not None and root_files_sampled > 0 and root_bytes_sampled >= 1024:
+            estimated_savings = savings_from_entropy(root_entropy)
             logging.debug(
                 "Root entropy sample for %s: %.2f bits/byte (~%.1f%% savings) across %s files (%s bytes)",
                 base_dir,
-                average_entropy,
+                root_entropy,
                 estimated_savings,
-                sampled_files,
-                sampled_bytes,
+                root_files_sampled,
+                root_bytes_sampled,
             )
 
             from ..skip_logic import _relative_to_base
             root_sample = EntropySampleRecord(
                 path=str(base_dir),
                 relative_path=_relative_to_base(base_dir, base_dir),
-                average_entropy=average_entropy,
+                average_entropy=root_entropy,
                 estimated_savings=estimated_savings,
-                sampled_files=sampled_files,
-                sampled_bytes=sampled_bytes,
-                lz4_certain_files=lz4_certain_files,
+                sampled_files=root_files_sampled,
+                sampled_bytes=root_bytes_sampled,
+                lz4_certain_files=root_lz4,
                 total_bytes=0,
+                sampled_paths=root_sampled_paths,
+                lz4_certain_paths=root_lz4_paths,
             )
             stats.entropy_samples.append(root_sample)
             stats.entropy_directories_sampled += 1
-            stats.lz4_certain_incompressible_files += lz4_certain_files
+            stats.lz4_certain_incompressible_files += root_lz4
             if estimated_savings < min_savings_percent:
                 stats.entropy_directories_below_threshold += 1
 
-            if estimated_savings < min_savings_percent:
                 reason = f"High entropy (est. {estimated_savings:.1f}% savings)"
                 root_skip_record = DirectorySkipRecord(
                     path=str(base_dir),
                     relative_path='.',
                     reason=reason,
                     category='high_entropy',
-                    average_entropy=average_entropy,
+                    average_entropy=root_entropy,
                     estimated_savings=estimated_savings,
-                    sampled_files=sampled_files,
-                    sampled_bytes=sampled_bytes,
+                    sampled_files=root_files_sampled,
+                    sampled_bytes=root_bytes_sampled,
                 )
                 append_directory_skip_record(stats, root_skip_record)
                 if verbosity >= 2:
@@ -218,6 +350,10 @@ def _filter_high_entropy_directories(
                     )
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
+    # A high-entropy root means the whole subtree is high-entropy: seed the
+    # root's skip record so the ancestor walk cascades it to subdirectories
+    if root_skip_record is not None:
+        skipped_directories[base_dir] = root_skip_record
 
     cache = get_incompressible_cache()
     sorted_directories = sorted(directories, key=lambda item: (len(item.parts), str(item).casefold()))
@@ -281,9 +417,6 @@ def _filter_high_entropy_directories(
             skipped_directories[directory] = record
             cache.add(directory)
 
-    if not skipped_directories and root_skip_record is None:
-        return candidates
-
     filtered: list[PlanEntry] = []
     for path_str, file_size, algorithm in candidates:
         parent_str = os.path.dirname(path_str)
@@ -311,7 +444,13 @@ def _filter_high_entropy_directories(
             continue
         filtered.append((path_str, file_size, algorithm))
 
-    return filtered
+    # Drop certainly-incompressible stragglers that survived the directory gate.
+    already_sampled = {
+        path
+        for record in stats.entropy_samples
+        for path in record.sampled_paths
+    }
+    return _filter_certainly_incompressible_files(filtered, stats, already_sampled)
 
 
 def _has_skipped_ancestor(
@@ -319,19 +458,7 @@ def _has_skipped_ancestor(
     base_dir: Path,
     skipped: dict[Path, DirectorySkipRecord],
 ) -> bool:
-    current = directory
-    while True:
-        record = skipped.get(current)
-        if record is not None:
-            if current != base_dir or directory == base_dir:
-                return True
-        if current == base_dir:
-            break
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return False
+    return _locate_skip_record(directory, base_dir, skipped) is not None
 
 
 def _locate_skip_record(
@@ -343,8 +470,7 @@ def _locate_skip_record(
     while True:
         record = skipped.get(current)
         if record is not None:
-            if current != base_dir or directory == base_dir:
-                return record
+            return record
         if current == base_dir:
             break
         parent = current.parent
@@ -426,6 +552,8 @@ def evaluate_directories_parallel(
             result.sampled_files,
             result.sampled_bytes,
             result.lz4_certain,
+            list(result.sampled_paths),
+            list(result.lz4_certain_paths),
         )
         if skip_record:
             skip_results[directory] = skip_record

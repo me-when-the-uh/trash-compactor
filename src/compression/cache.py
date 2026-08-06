@@ -1,7 +1,7 @@
 import os
 import xxhash
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import Dict, Optional
 
 
 class IncompressibleCache:
@@ -35,8 +35,7 @@ class IncompressibleCache:
         except OSError:
             pass
 
-    @staticmethod
-    def _volume_serial(path: Path) -> str:
+    def _volume_serial(self, path: Path) -> str:
         """Return the volume serial of the drive holding ``path`` (or '')."""
         drive = os.path.splitdrive(str(path))[0]
         if not drive:
@@ -87,15 +86,12 @@ class IncompressibleCache:
         h.update(normalized.encode("utf-8"))
         return h.hexdigest()
 
-    def _is_stale(self, path: Path) -> bool:
+    def _is_stale(self, path: Path, stored: Optional[int]) -> bool:
         """A cached entry is stale when the directory changed after it was cached."""
         try:
             mtime = int(os.stat(path).st_mtime)
         except OSError:
             return False
-        stored = self._entries.get(self._compute_hash(path))
-        if stored is None:
-            stored = self._entries.get(self._legacy_hash(path))
         return stored is not None and mtime > stored
 
     def clear_hash_cache(self) -> None:
@@ -109,7 +105,7 @@ class IncompressibleCache:
             mtime = None
         if self._entries.get(hash_val) != mtime:
             # New entry, or a stale one being re-confirmed: refresh both the
-            # in-memory value and the staged write.
+            # in-memory value and the staged write
             self._entries[hash_val] = mtime
             self._staged[hash_val] = mtime
 
@@ -141,12 +137,11 @@ class IncompressibleCache:
     def has_staged(self) -> bool:
         return bool(self._staged)
 
-    def add_and_persist(self, path: Path):
-        self.add(path)
-        self.commit()
-
     def contains(self, path: Path) -> bool:
-        if self._compute_hash(path) in self._entries:
-            return not self._is_stale(path)
-        # Legacy path-only entries from older cache files.
-        return self._legacy_hash(path) in self._entries and not self._is_stale(path)
+        stored = self._entries.get(self._compute_hash(path))
+        if stored is None:
+            # Legacy path-only entries from older cache files.
+            stored = self._entries.get(self._legacy_hash(path))
+            if stored is None:
+                return False
+        return not self._is_stale(path, stored)
