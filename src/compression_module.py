@@ -8,16 +8,15 @@ from typing import Callable, Optional
 from colorama import Fore, Style
 
 from .compression.compression_executor import execute_compression_plan
-from .compression.compression_planner import iter_files, plan_compression
+from .compression.compression_planner import CountingDirEntryIter, PlanEntry, iter_files, plan_compression
 from .config import (
     DEFAULT_MIN_SAVINGS_PERCENT,
-    DRY_RUN_CONSERVATIVE_FACTORS,
     clamp_savings_percent,
     savings_from_entropy,
 )
 from .i18n import _
-from .skip_logic import commit_incompressible_cache, log_directory_skips, maybe_skip_directory
-from .stats import CompressionStats, EntropySampleRecord, ProgressTimer
+from .skip_logic import commit_incompressible_cache, discard_staged_incompressible_cache, log_directory_skips, maybe_skip_directory
+from .stats import CompressionStats, EntropySampleRecord, ProgressTimer, apply_entropy_projection
 from .timer import PerformanceMonitor
 from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
 
@@ -49,7 +48,7 @@ def create_compression_plan(
     verbosity: int = 0,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
     debug_scan_all: bool = False,
-) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]], Path, float, int]:
+) -> tuple[CompressionStats, PerformanceMonitor, list[PlanEntry], Path, float, int]:
     import logging
 
     stats, monitor, base_dir, min_savings_percent, verbosity_level = _setup_context(
@@ -57,22 +56,22 @@ def create_compression_plan(
     )
     interactive_output = verbosity_level == 0
 
-    all_files = list(iter_files(base_dir, stats, verbosity_level, min_savings_percent, collect_entropy=False))
-    total_files = len(all_files)
-    monitor.stats.total_files = total_files
+    discovered = CountingDirEntryIter(
+        iter_files(base_dir, stats, verbosity_level, min_savings_percent, debug_scan_all=debug_scan_all)
+    )
 
     timer: Optional[ProgressTimer] = None
-    plan: list[tuple[Path, int, str]] = []
+    plan: list[PlanEntry] = []
 
-    if interactive_output and total_files and getattr(sys.stdout, "isatty", lambda: True)():
+    if interactive_output and getattr(sys.stdout, "isatty", lambda: True)():
         timer = ProgressTimer()
         timer.set_label(_("Scanning files..."))
-        timer.start(total=total_files)
+        timer.start(total=0)
         timer.update(0, "")
 
     try:
         plan = _plan_compression(
-            all_files,
+            discovered,
             stats,
             monitor,
             timer,
@@ -82,8 +81,11 @@ def create_compression_plan(
             debug_scan_all=debug_scan_all,
         )
     finally:
+        total_files = discovered.count
+        monitor.stats.total_files = total_files
         if timer:
             if total_files:
+                timer.set_total(total_files)
                 final_skip_message = (
                     _("\n{skipped} out of {total} files are poorly compressible\n").format(
                         skipped=stats.skipped_files, total=total_files
@@ -119,14 +121,14 @@ def compress_directory(
 def execute_compression_plan_wrapper(
     stats: CompressionStats,
     monitor: PerformanceMonitor,
-    plan: list[tuple[Path, int, str]],
+    plan: list[PlanEntry],
     verbosity_level: int,
     interactive_output: bool,
     min_savings_percent: float,
 ) -> tuple[CompressionStats, PerformanceMonitor]:
     monitor.stats.files_skipped = stats.skipped_files
 
-    stage_items: list[tuple[str, list[tuple[Path, int]]]] = []
+    stage_items: list[tuple[str, list[tuple[str, int]]]] = []
     stage_states: list[str] = []
     stage_progress: list[dict[str, int]] = []
     stage_processed: dict[str, int] = {}
@@ -141,9 +143,9 @@ def execute_compression_plan_wrapper(
     stage_lock = threading.Lock()
 
     if plan and interactive_output:
-        grouped: dict[str, list[tuple[Path, int]]] = {}
-        for path, size, algorithm in plan:
-            grouped.setdefault(algorithm, []).append((path, size))
+        grouped: dict[str, list[tuple[str, int]]] = {}
+        for path_str, size, algorithm in plan:
+            grouped.setdefault(algorithm, []).append((path_str, size))
         stage_items = list(grouped.items())
         stage_states = ['pending'] * len(stage_items)
         stage_progress = [{'total': len(entries), 'processed': 0} for _, entries in stage_items]
@@ -164,9 +166,6 @@ def execute_compression_plan_wrapper(
             total = stage_progress[idx]['total']
             processed = min(stage_progress[idx]['processed'], total)
             if state == 'done':
-                elapsed = now - stage_start_times.get(algo, now)
-                if algo in stage_start_times:
-                     pass
                 lines.append(Fore.GREEN + f"Compressing {total} files with {algo}... done" + Style.RESET_ALL)
             elif state == 'running':
                 start_t = stage_start_times.get(algo, now)
@@ -263,6 +262,9 @@ def execute_compression_plan_wrapper(
                     _render_stage_statuses(force=True)
                 sys.stdout.write("\n")
                 sys.stdout.flush()
+    except Exception:
+        discard_staged_incompressible_cache()
+        raise
     finally:
         if stage_render_stop is not None:
             stage_render_stop.set()
@@ -281,7 +283,7 @@ def execute_compression_plan_wrapper(
 
 
 def _plan_compression(
-    files: list[Path],
+    files,
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     timer: Optional[ProgressTimer],
@@ -290,13 +292,9 @@ def _plan_compression(
     base_dir: Path,
     min_savings_percent: float,
     debug_scan_all: bool = False,
-) -> list[tuple[Path, int, str]]:
-    if not files:
-        return []
-
+) -> list[PlanEntry]:
     if timer:
         timer.set_label(_("Analysing files:"))
-        timer.set_total(len(files))
         timer.set_message("")
 
     def _on_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int) -> None:
@@ -305,7 +303,7 @@ def _plan_compression(
         timer.update(processed)
 
     entropy_started = False
-    def _entropy_callback_wrapper(path: Path, processed: int, total: int) -> None:
+    def _entropy_callback_wrapper(path: Path, processed: int, total: int, dir_sampled_files: int = 0) -> None:
         nonlocal entropy_started
         if not timer:
             return
@@ -335,7 +333,7 @@ def entropy_dry_run(
     verbosity: int = 0,
     min_savings_percent: float = DEFAULT_MIN_SAVINGS_PERCENT,
     debug_scan_all: bool = False,
-) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[Path, int, str]]]:
+) -> tuple[CompressionStats, PerformanceMonitor, list[PlanEntry]]:
     
     stats, monitor, plan, base_dir, min_savings_percent, verbosity_level = create_compression_plan(
         directory_path,
@@ -344,32 +342,7 @@ def entropy_dry_run(
         debug_scan_all=debug_scan_all,
     )
     stats.entropy_report_threshold_bytes = REPORTABLE_DIRECTORY_MIN_BYTES
+    apply_entropy_projection(stats, plan)
 
-    stats.entropy_projected_original_bytes = stats.total_original_size
-    
-    entropy_map = {Path(r.path): r for r in stats.entropy_samples}
-    
-    projected_compressed_lzx = 0.0
-    projected_compressed_xpress = 0.0
-    
-    for path, size, algo in plan:
-        parent = path.parent
-        record = entropy_map.get(parent)
-        
-        if record:
-            savings_factor = max(0.0, record.estimated_savings / 100.0)
-            compressed_size = size * (1.0 - savings_factor)
-            projected_compressed_lzx += compressed_size
-            conservative_factor = DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.06)
-            projected_compressed_xpress += compressed_size * conservative_factor
-        else:
-            # Fallback if no entropy record found (e.g. sampling failed or skipped)
-            projected_compressed_lzx += size
-            projected_compressed_xpress += size
-
-    skipped_size = stats.total_compressed_size
-    stats.entropy_projected_compressed_bytes = int(round(projected_compressed_lzx + skipped_size))
-    stats.entropy_projected_compressed_bytes_conservative = int(round(projected_compressed_xpress + skipped_size))
-    
     monitor.end_operation()
     return stats, monitor, plan

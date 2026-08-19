@@ -1,19 +1,38 @@
-import functools
 import logging
 import os
-from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Callable, Iterable, Optional
 
 from ..i18n import _
-from ..config import COMPRESSION_ALGORITHMS, savings_from_entropy, SKIP_EXTENSIONS, ENTROPY_MAX_FILE_BUDGET
-from ..file_utils import CompressionDecision, should_compress_file
-from ..skip_logic import append_directory_skip_record, evaluate_entropy_directory, get_incompressible_cache, maybe_skip_directory, sample_directory_entropy
-from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
+from ..config import (
+    COMPRESSION_ALGORITHMS,
+    ENTROPY_MAX_BYTES,
+    ENTROPY_MAX_FILE_BUDGET,
+    ENTROPY_MAX_FILES,
+    ENTROPY_SAMPLING_PARAMS,
+    savings_from_entropy,
+)
+from ..skip_logic import (
+    append_directory_skip_record,
+    entropy_records_from_probe,
+    evaluate_entropy_directory,
+    get_incompressible_cache,
+)
+from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
-from ..workers import entropy_worker_count, scan_worker_count
-from .entropy import sample_file_entropy
+from ..workers import entropy_worker_count
+from .entropy import _select_sample_files, get_file_probe_budget, sample_file_entropy
+from .file_scan import (
+    CAT_ALREADY_COMPRESSED,
+    CAT_DEBUG_EXT,
+    CAT_ELIGIBLE,
+    CAT_ERROR,
+    CAT_EXTENSION,
+    CountingDirEntryIter,
+    iter_files,
+)  # noqa: F401
+
+PlanEntry = tuple[str, int, str]
 
 
 def _format_size(num_bytes: int) -> str:
@@ -30,224 +49,78 @@ def _format_size(num_bytes: int) -> str:
     return f"{n:.1f} PB"
 
 
-def iter_files(
-    root: Path,
-    stats: CompressionStats,
-    verbosity: int,
-    min_savings_percent: float,
-    collect_entropy: bool,
-    skipped_file_callback: Optional[Callable[[Path], None]] = None,
-) -> Iterator[os.DirEntry]:
-    skip_root = maybe_skip_directory(
-        root,
-        root,
-        stats,
-        collect_entropy,
-        min_savings_percent,
-        verbosity,
-    ).skip
-    if skip_root:
-        if skipped_file_callback:
-            _traverse_skipped(root, skipped_file_callback)
-        return
-
-    stack = [root]
-    
-    while stack:
-        current_dir = stack.pop()
-
-        try:
-            with os.scandir(current_dir) as it:
-                valid_dirs: list[Path] = []
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            candidate = Path(entry.path)
-                            decision = maybe_skip_directory(
-                                candidate,
-                                root,
-                                stats,
-                                collect_entropy,
-                                min_savings_percent,
-                                verbosity,
-                            )
-                            if decision.skip:
-                                if skipped_file_callback:
-                                    _traverse_skipped(candidate, skipped_file_callback)
-                                continue
-                            valid_dirs.append(candidate)
-                        elif entry.is_file(follow_symlinks=False):
-                            yield entry
-                    except OSError:
-                        continue
-        except (OSError, PermissionError):
-            continue
-        stack.extend(reversed(valid_dirs))
-
-
-def _traverse_skipped(root: Path, callback: Callable[[Path], None]) -> None:
-    for current_root, _, files in os.walk(root):
-        current_base = Path(current_root)
-        for name in files:
-            callback(current_base / name)
-
-
-@dataclass(frozen=True)
-class _ScanPayload:
-    path: str
-    file_size: int
-    decision: Optional[CompressionDecision]
-    error: Optional[str] = None
-
-
-def _scan_single(
-    entry: os.DirEntry,
-    debug_scan_all: bool = False,
-    check_already_compressed: bool = True,
-) -> _ScanPayload:
-    file_path = entry.path
-    try:
-        st = entry.stat()
-        file_size = st.st_size
-        attrs = getattr(st, 'st_file_attributes', 0)
-    except OSError as exc:
-        return _ScanPayload(file_path, 0, None, _("Error processing {file_path}: {exc}").format(file_path=file_path, exc=exc))
-
-    decision = should_compress_file(
-        file_path,
-        file_size=file_size,
-        attributes=attrs,
-        ignore_extensions=debug_scan_all,
-        check_already_compressed=check_already_compressed,
-    )
-    return _ScanPayload(file_path, file_size, decision)
-
-
-def _scan_checks_compressed_state() -> bool:
-    value = os.getenv("TRASH_COMPACTOR_FAST_SCAN", "0").strip().lower()
-    return value not in {"1", "true", "yes", "on"}
-
-
-def _iter_scanned_files(files: Iterable[os.DirEntry], debug_scan_all: bool = False) -> Iterator[_ScanPayload]:
-    workers = scan_worker_count()
-    check_already_compressed = _scan_checks_compressed_state()
-
-    mapper = functools.partial(
-        _scan_single, 
-        debug_scan_all=debug_scan_all,
-        check_already_compressed=check_already_compressed,
-    )
-
-    if workers <= 1:
-        yield from map(mapper, files)
-        return
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        from itertools import islice
-        chunk_size = 2000
-        in_flight_limit = max(workers * 4, workers + 1)
-        pending: set[Future[list[_ScanPayload]]] = set()
-        entries = iter(files)
-
-        def _submit_next() -> bool:
-            chunk = list(islice(entries, chunk_size))
-            if not chunk:
-                return False
-            # Submit the whole chunk as a single Future to avoid per-task scheduling overhead
-            pending.add(executor.submit(lambda c: [mapper(entry) for entry in c], chunk))
-            return True
-
-        for _ in range(in_flight_limit):
-            if not _submit_next():
-                break
-
-        while pending:
-            done, pending = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                yield from future.result()
-
-            refill = in_flight_limit - len(pending)
-            for _ in range(refill):
-                if not _submit_next():
-                    break
-
-
 def plan_compression(
-    files: Iterable[os.DirEntry],
+    files: Iterable,
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     *,
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int, bool, Optional[str], int], None]] = None,
-    file_observer: Optional[Callable[[Path, int, CompressionDecision], None]] = None,
+    progress_callback: Optional[Callable[[str, int, bool, Optional[str], int], None]] = None,
     apply_entropy_filter: bool = True,
     entropy_progress_callback: Optional[Callable[[Path, int, int], None]] = None,
     debug_scan_all: bool = False,
-) -> list[tuple[Path, int, str]]:
-    candidates: list[tuple[Path, int, str]] = []
+) -> list[PlanEntry]:
+    candidates: list[PlanEntry] = []
     with monitor.time_file_scan():
         processed = 0
-        for payload in _iter_scanned_files(files, debug_scan_all):
+        bulk_skips = SkipBulkLedger()
+        use_bulk_skips = verbosity < 3
+        for path, size, _attributes, algo, category, hint in files:
             processed += 1
-            file_path = Path(payload.path)
-            decision = payload.decision
 
-            if decision is None:
-                reason = payload.error or "Error processing file"
+            if category == CAT_ERROR:
+                reason = _("Error processing {file_path}").format(file_path=path)
                 stats.errors.append(reason)
-                stats.record_file_skip(
-                    file_path,
-                    reason,
-                    payload.file_size,
-                    payload.file_size,
-                    category='error',
-                )
+                if use_bulk_skips:
+                    bulk_skips.add("error", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, category="error")
                 logging.error(reason)
                 if progress_callback:
-                    progress_callback(file_path, processed, False, reason, payload.file_size)
+                    progress_callback(path, processed, False, reason, size)
                 continue
 
-            file_size = payload.file_size
-            if file_observer:
-                file_observer(file_path, file_size, decision)
-            stats.total_original_size += file_size
+            stats.total_original_size += size
+            stats.total_on_disk_size += hint
 
-            if decision.should_compress:
-                if debug_scan_all and file_path.suffix.lower() in SKIP_EXTENSIONS:
-                    entropy_sum, sampled_bytes, _ = sample_file_entropy(file_path, byte_budget=ENTROPY_MAX_FILE_BUDGET)
-                    if sampled_bytes > 0:
-                        average_entropy = entropy_sum / sampled_bytes
-                        savings = savings_from_entropy(average_entropy)
-                        if savings >= min_savings_percent:
-                            projected_size = int(file_size * (1 - savings / 100))
-                            print(
-                                f"\n[DEBUG] File {file_path.name} has potential savings: {savings:.1f}% "
-                                f"({_format_size(file_size)} -> {_format_size(projected_size)})"
-                            )
-
-                algorithm = COMPRESSION_ALGORITHMS[get_size_category(file_size)]
-                candidates.append((file_path, file_size, algorithm))
+            if category == CAT_ELIGIBLE or category == CAT_DEBUG_EXT:
+                candidates.append((path, size, algo))
+                if category == CAT_DEBUG_EXT:
+                    _debug_extension_probe(path, size, min_savings_percent)
                 if progress_callback:
-                    progress_callback(file_path, processed, True, None, file_size)
+                    progress_callback(path, processed, True, None, size)
+            elif category == CAT_ALREADY_COMPRESSED:
+                if use_bulk_skips:
+                    bulk_skips.add("already_compressed", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, already_compressed=True, category="already_compressed")
+                    logging.debug("Skipping %s: already compressed", path)
+                if progress_callback:
+                    progress_callback(path, processed, False, _("File is already compressed"), size)
+            elif category == CAT_EXTENSION:
+                if use_bulk_skips:
+                    bulk_skips.add("extension", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, category="extension")
+                if progress_callback:
+                    progress_callback(path, processed, False, _("Skipped due to extension"), size)
             else:
-                reason = decision.reason
-                resolved_size = decision.size_hint or file_size
-                stats.record_file_skip(
-                    file_path,
-                    reason,
-                    resolved_size,
-                    file_size,
-                    already_compressed=decision.already_compressed,
-                    category=decision.category,
-                )
-                logging.debug("Skipping %s: %s", file_path, reason)
+                if use_bulk_skips:
+                    bulk_skips.add("too_small", hint, size)
+                else:
+                    stats.record_file_skip_counters(hint, size, category="too_small")
+                    logging.debug("Skipping %s: file too small", path)
                 if progress_callback:
-                    progress_callback(file_path, processed, False, reason, file_size)
+                    progress_callback(path, processed, False, _("File too small"), size)
+
+        if use_bulk_skips:
+            stats.record_bulk_skips(bulk_skips)
 
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():
+            get_incompressible_cache().clear_hash_cache()
             candidates = _filter_high_entropy_directories(
                 candidates,
                 base_dir=base_dir,
@@ -257,20 +130,148 @@ def plan_compression(
                 verbosity=verbosity,
                 progress_callback=entropy_progress_callback,
             )
+
+    if COMPRESSION_ALGORITHMS.get('large') == 'XPRESS16K':
+        # LZX is disabled (benchmark or explicit toggle): the walker still
+        # tagged large files as LZX, so downgrade them here. The executor and
+        # the projection both read the plan's algo, so this is the single
+        # place that must agree with configure_lzx().
+        candidates = [
+            (path_str, size, 'XPRESS16K' if algo == 'LZX' else algo)
+            for path_str, size, algo in candidates
+        ]
     return candidates
 
 
-def get_size_category(file_size: int) -> str:
-    from ..config import SIZE_THRESHOLDS
-    from bisect import bisect_right
+def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float) -> None:
+    entropy_sum, sampled_bytes, _ = sample_file_entropy(
+        Path(path), byte_budget=get_file_probe_budget(file_size), file_size=file_size
+    )
+    if sampled_bytes <= 0:
+        return
+    savings = savings_from_entropy(entropy_sum / sampled_bytes)
+    if savings >= min_savings_percent:
+        projected = int(file_size * (1 - savings / 100))
+        print(
+            f"\n[DEBUG] File {os.path.basename(path)} has potential savings: {savings:.1f}% "
+            f"({_format_size(file_size)} -> {_format_size(projected)})"
+        )
 
-    breaks, labels = zip(*SIZE_THRESHOLDS)
-    index = bisect_right(breaks, file_size)
-    return labels[index] if index < len(labels) else 'large'
+
+def _probe_file_list(files: list[tuple[Path, int]]) -> tuple[Optional[float], int, int, int, list[str], list[str]]:
+    """Aggregate entropy over a pre-collected list of (path, size) files.
+
+    Mirrors ``sample_directory_entropy``'s aggregation but skips the tree walk;
+    the caller already collected the files (with ``skip_root_files=False``, so
+    root-level files are included).
+    """
+    if not files:
+        return None, 0, 0, 0, [], []
+
+    sampled_files = 0
+    sampled_bytes = 0
+    size_weighted_entropy = 0.0
+    size_total = 0
+    lz4_certain = 0
+    sampled_paths: list[str] = []
+    lz4_certain_paths: list[str] = []
+    remaining = ENTROPY_MAX_BYTES
+
+    for path, file_size in files:
+        if remaining <= 0:
+            break
+        per_file_budget = min(get_file_probe_budget(file_size), remaining)
+        if per_file_budget <= 0:
+            break
+        file_entropy, file_bytes, lz4_flag = sample_file_entropy(
+            path, byte_budget=per_file_budget, file_size=file_size
+        )
+        if file_bytes == 0:
+            continue
+        sampled_files += 1
+        sampled_bytes += file_bytes
+        size_weighted_entropy += (file_entropy / file_bytes) * file_size
+        size_total += file_size
+        sampled_paths.append(str(path))
+        if lz4_flag:
+            lz4_certain += 1
+            lz4_certain_paths.append(str(path))
+        remaining -= file_bytes
+
+    if size_total == 0:
+        return None, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths
+    return size_weighted_entropy / size_total, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths
+
+
+def _filter_certainly_incompressible_files(
+    candidates: list[PlanEntry],
+    stats: CompressionStats,
+    already_sampled: Optional[set[str]] = None,
+) -> list[PlanEntry]:
+    """Drop files that are certainly incompressible.
+
+    Probes surviving candidates per directory (largest first, bounded by
+    ENTROPY_MAX_BYTES) and skips only files where every sampled window hit the
+    LZ4 gate. Files already measured by the directory pass (``already_sampled``)
+    are not re-probed; their LZ4 verdicts were recorded in the sample records
+    and are applied here directly.
+    """
+    by_dir: dict[str, list[tuple[int, int, str]]] = {}
+    order: list[str] = []
+    for index, (path_str, file_size, algorithm) in enumerate(candidates):
+        parent_dir = os.path.dirname(path_str)
+        if parent_dir not in by_dir:
+            by_dir[parent_dir] = []
+            order.append(parent_dir)
+        by_dir[parent_dir].append((index, file_size, algorithm))
+
+    hit_paths: set[str] = {
+        path
+        for record in stats.entropy_samples
+        for path in record.lz4_certain_paths
+    }
+    for parent_dir in order:
+        entries = sorted(by_dir[parent_dir], key=lambda item: item[1], reverse=True)
+        remaining = ENTROPY_MAX_BYTES
+        for index, file_size, _algorithm in entries:
+            path_str = candidates[index][0]
+            if already_sampled and path_str in already_sampled:
+                continue
+            if remaining <= 0:
+                break
+            _file_entropy, file_bytes, lz4_certain = sample_file_entropy(
+                Path(path_str),
+                byte_budget=get_file_probe_budget(file_size),
+                file_size=file_size,
+            )
+            if file_bytes == 0:
+                continue
+            remaining -= file_bytes
+            if lz4_certain:
+                hit_paths.add(path_str)
+
+    if not hit_paths:
+        return candidates
+
+    filtered: list[PlanEntry] = []
+    for path_str, file_size, algorithm in candidates:
+        if path_str in hit_paths:
+            stats.record_file_skip(
+                Path(path_str),
+                _("File is certainly incompressible (LZ4 gate)"),
+                file_size,
+                file_size,
+                category='high_entropy',
+            )
+            logging.debug("Skipping %s: certainly incompressible (LZ4 gate)", path_str)
+            continue
+        filtered.append((path_str, file_size, algorithm))
+
+    return filtered
 
 
 def _filter_high_entropy_directories(
-    candidates: list[tuple[Path, int, str]],
+    candidates: list[PlanEntry],
     *,
     base_dir: Path,
     stats: CompressionStats,
@@ -278,65 +279,71 @@ def _filter_high_entropy_directories(
     min_savings_percent: float,
     verbosity: int,
     progress_callback: Optional[Callable[[Path, int, int], None]] = None,
-) -> list[tuple[Path, int, str]]:
+) -> list[PlanEntry]:
     if not candidates or min_savings_percent <= 0:
         return candidates
 
-    directories = {path.parent for path, _, _ in candidates}
-    directories.add(base_dir)
+    base_dir_str = os.fspath(base_dir)
+    directory_paths: set[str] = {os.path.dirname(path_str) for path_str, _, _ in candidates}
+    directory_paths.add(base_dir_str)
+    directories = {Path(path_str) for path_str in directory_paths}
 
     root_skip_record: Optional[DirectorySkipRecord] = None
-    if any(path.parent == base_dir for path, _, _ in candidates):
-        average_entropy, sampled_files, sampled_bytes, lz4_certain_files = sample_directory_entropy(
+    root_files: Optional[list[tuple[Path, int]]] = None
+    if any(os.path.dirname(path_str) == base_dir_str for path_str, _, _ in candidates):
+        root_files, root_skipped = _select_sample_files(
             base_dir,
+            max_files=ENTROPY_MAX_FILES,
             include_subdirectories=False,
+            skip_root_files=False,
         )
-        if monitor and sampled_files > 0:
-            monitor.stats.files_analyzed_for_entropy += sampled_files
+        root_entropy, root_files_sampled, root_bytes_sampled, root_lz4, root_sampled_paths, root_lz4_paths = _probe_file_list(root_files or [])
+        if monitor and root_files_sampled > 0:
+            monitor.stats.files_analyzed_for_entropy += root_files_sampled
 
-        if average_entropy is not None and sampled_files > 0 and sampled_bytes >= 1024:
-            estimated_savings = savings_from_entropy(average_entropy)
+        if root_entropy is not None and root_files_sampled > 0 and root_bytes_sampled >= 1024:
+            estimated_savings = savings_from_entropy(root_entropy)
             logging.debug(
                 "Root entropy sample for %s: %.2f bits/byte (~%.1f%% savings) across %s files (%s bytes)",
                 base_dir,
-                average_entropy,
+                root_entropy,
                 estimated_savings,
-                sampled_files,
-                sampled_bytes,
+                root_files_sampled,
+                root_bytes_sampled,
             )
-            
-            # Record sample for root
+
             from ..skip_logic import _relative_to_base
             root_sample = EntropySampleRecord(
                 path=str(base_dir),
                 relative_path=_relative_to_base(base_dir, base_dir),
-                average_entropy=average_entropy,
+                average_entropy=root_entropy,
                 estimated_savings=estimated_savings,
-                sampled_files=sampled_files,
-                sampled_bytes=sampled_bytes,
-                lz4_certain_files=lz4_certain_files,
+                sampled_files=root_files_sampled,
+                sampled_bytes=root_bytes_sampled,
+                lz4_certain_files=root_lz4,
                 total_bytes=0,
+                sampled_paths=root_sampled_paths,
+                lz4_certain_paths=root_lz4_paths,
             )
             stats.entropy_samples.append(root_sample)
             stats.entropy_directories_sampled += 1
-            stats.lz4_certain_incompressible_files += lz4_certain_files
+            stats.lz4_certain_incompressible_files += root_lz4
             if estimated_savings < min_savings_percent:
                 stats.entropy_directories_below_threshold += 1
 
-            if estimated_savings < min_savings_percent:
                 reason = f"High entropy (est. {estimated_savings:.1f}% savings)"
                 root_skip_record = DirectorySkipRecord(
                     path=str(base_dir),
                     relative_path='.',
                     reason=reason,
                     category='high_entropy',
-                    average_entropy=average_entropy,
+                    average_entropy=root_entropy,
                     estimated_savings=estimated_savings,
-                    sampled_files=sampled_files,
-                    sampled_bytes=sampled_bytes,
+                    sampled_files=root_files_sampled,
+                    sampled_bytes=root_bytes_sampled,
                 )
                 append_directory_skip_record(stats, root_skip_record)
-                if verbosity >= 2:
+                if verbosity >= 1:
                     logging.info(
                         "Skipping root-level files; estimated savings %.1f%% is below threshold %.1f%%",
                         estimated_savings,
@@ -344,6 +351,10 @@ def _filter_high_entropy_directories(
                     )
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
+    # A high-entropy root means the whole subtree is high-entropy: seed the
+    # root's skip record so the ancestor walk cascades it to subdirectories
+    if root_skip_record is not None:
+        skipped_directories[base_dir] = root_skip_record
 
     cache = get_incompressible_cache()
     sorted_directories = sorted(directories, key=lambda item: (len(item.parts), str(item).casefold()))
@@ -375,6 +386,9 @@ def _filter_high_entropy_directories(
         if directory != base_dir and not _has_skipped_ancestor(directory, base_dir, skipped_directories)
     ]
 
+    if progress_callback and directories_to_evaluate:
+        progress_callback(base_dir, 0, len(directories_to_evaluate), 0)
+
     entropy_records, sample_records = evaluate_directories_parallel(
         directories_to_evaluate,
         base_dir,
@@ -383,10 +397,10 @@ def _filter_high_entropy_directories(
         progress_callback=progress_callback,
     )
 
-    if monitor:
+    if monitor and not progress_callback:
         for record in sample_records:
             monitor.stats.files_analyzed_for_entropy += record.sampled_files
-    
+
     for record in sample_records:
         stats.entropy_samples.append(record)
         stats.entropy_directories_sampled += 1
@@ -404,35 +418,40 @@ def _filter_high_entropy_directories(
             skipped_directories[directory] = record
             cache.add(directory)
 
-    if not skipped_directories and root_skip_record is None:
-        return candidates
-
-    filtered: list[tuple[Path, int, str]] = []
-    for path, file_size, algorithm in candidates:
-        if root_skip_record is not None and path.parent == base_dir:
+    filtered: list[PlanEntry] = []
+    for path_str, file_size, algorithm in candidates:
+        parent_str = os.path.dirname(path_str)
+        parent = Path(parent_str)
+        if root_skip_record is not None and parent_str == base_dir_str:
             stats.record_file_skip(
-                path,
+                Path(path_str),
                 root_skip_record.reason,
                 file_size,
                 file_size,
                 category=root_skip_record.category,
             )
-            logging.debug("Skipping %s due to %s", path, root_skip_record.reason)
+            logging.debug("Skipping %s due to %s", path_str, root_skip_record.reason)
             continue
-        skip_record = _locate_skip_record(path.parent, base_dir, skipped_directories)
+        skip_record = _locate_skip_record(parent, base_dir, skipped_directories)
         if skip_record is not None:
             stats.record_file_skip(
-                path,
+                Path(path_str),
                 skip_record.reason,
                 file_size,
                 file_size,
                 category=skip_record.category,
             )
-            logging.debug("Skipping %s due to %s", path, skip_record.reason)
+            logging.debug("Skipping %s due to %s", path_str, skip_record.reason)
             continue
-        filtered.append((path, file_size, algorithm))
+        filtered.append((path_str, file_size, algorithm))
 
-    return filtered
+    # Drop certainly-incompressible stragglers that survived the directory gate.
+    already_sampled = {
+        path
+        for record in stats.entropy_samples
+        for path in record.sampled_paths
+    }
+    return _filter_certainly_incompressible_files(filtered, stats, already_sampled)
 
 
 def _has_skipped_ancestor(
@@ -440,19 +459,7 @@ def _has_skipped_ancestor(
     base_dir: Path,
     skipped: dict[Path, DirectorySkipRecord],
 ) -> bool:
-    current = directory
-    while True:
-        record = skipped.get(current)
-        if record is not None:
-            if current != base_dir or directory == base_dir:
-                return True
-        if current == base_dir:
-            break
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return False
+    return _locate_skip_record(directory, base_dir, skipped) is not None
 
 
 def _locate_skip_record(
@@ -464,8 +471,7 @@ def _locate_skip_record(
     while True:
         record = skipped.get(current)
         if record is not None:
-            if current != base_dir or directory == base_dir:
-                return record
+            return record
         if current == base_dir:
             break
         parent = current.parent
@@ -480,7 +486,7 @@ def evaluate_directories_parallel(
     base_dir: Path,
     min_savings_percent: float,
     verbosity: int,
-    progress_callback: Optional[Callable[[Path, int, int], None]] = None,
+    progress_callback: Optional[Callable[..., None]] = None,
 ) -> tuple[dict[Path, DirectorySkipRecord], list[EntropySampleRecord]]:
     directory_list = list(directories)
     if not directory_list:
@@ -490,69 +496,79 @@ def evaluate_directories_parallel(
     processed_count = 0
     total_count = len(directory_list)
 
-    def _on_complete(directory: Path) -> None:
+    def _on_complete(directory: Path, dir_sampled_files: int = 0) -> None:
         nonlocal processed_count
         processed_count += 1
         if progress_callback:
-            progress_callback(directory, processed_count, total_count)
+            progress_callback(directory, processed_count, total_count, dir_sampled_files)
 
     skip_results: dict[Path, DirectorySkipRecord] = {}
     sample_results: list[EntropySampleRecord] = []
 
-    if worker_count <= 1 or len(directory_list) == 1:
+    serial_threshold = max(worker_count * 2, 8)
+    if worker_count <= 1 or len(directory_list) < serial_threshold:
         for directory in directory_list:
             skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
-            _on_complete(directory)
+            sampled_files = sample_record.sampled_files if sample_record else 0
+            _on_complete(directory, sampled_files)
             if skip_record:
                 skip_results[directory] = skip_record
             if sample_record:
                 sample_results.append(sample_record)
         return skip_results, sample_results
 
-    in_flight_limit = max(worker_count * 4, worker_count + 1)
+    import fast_walk
 
-    with ProcessPoolExecutor(max_workers=worker_count) as executor:
-        pending: dict = {}
-        remaining = iter(directory_list)
+    rust_progress = None
+    if progress_callback:
 
-        def _submit_next() -> bool:
-            try:
-                directory = next(remaining)
-            except StopIteration:
-                return False
-            future = executor.submit(
-                evaluate_entropy_directory,
-                directory,
-                base_dir,
-                min_savings_percent,
-                verbosity,
-            )
-            pending[future] = directory
-            return True
+        def _rust_progress(
+            directory: str,
+            processed: int,
+            total: int,
+            dir_sampled_files: int = 0,
+        ) -> None:
+            progress_callback(Path(directory), processed, total, dir_sampled_files)
 
-        for _ in range(min(in_flight_limit, len(directory_list))):
-            if not _submit_next():
-                break
+        rust_progress = _rust_progress
 
-        while pending:
-            done, _ = wait(pending, return_when=FIRST_COMPLETED)
-            for future in done:
-                directory = pending.pop(future)
-                _on_complete(directory)
+    raw_results = fast_walk.probe_directories_parallel(
+        fast_walk.EntropyParams(
+            dynamic_windows_min_file_size=ENTROPY_SAMPLING_PARAMS.dynamic_windows_min_file_size,
+            dynamic_windows_max_file_size=ENTROPY_SAMPLING_PARAMS.dynamic_windows_max_file_size,
+            huge_windows_file_size=ENTROPY_SAMPLING_PARAMS.huge_windows_file_size,
+            base_sample_windows=ENTROPY_SAMPLING_PARAMS.base_sample_windows,
+            dynamic_windows_min=ENTROPY_SAMPLING_PARAMS.dynamic_windows_min,
+            dynamic_windows_max=ENTROPY_SAMPLING_PARAMS.dynamic_windows_max,
+            huge_windows_max=ENTROPY_SAMPLING_PARAMS.huge_windows_max,
+            target_window_size=ENTROPY_SAMPLING_PARAMS.target_window_size,
+        ),
+        [str(directory) for directory in directory_list],
+        ENTROPY_MAX_FILES,
+        ENTROPY_MAX_BYTES,
+        ENTROPY_MAX_FILE_BUDGET,
+        True,
+        worker_count,
+        rust_progress,
+    )
 
-                try:
-                    skip_record, sample_record = future.result()
-                except Exception as exc:
-                    logging.debug("Entropy sampling failed for %s: %s", directory, exc, exc_info=True)
-                    continue
-
-                if skip_record:
-                    skip_results[directory] = skip_record
-                if sample_record:
-                    sample_results.append(sample_record)
-
-            while len(pending) < in_flight_limit and _submit_next():
-                pass
+    for result in raw_results:
+        directory = Path(result.dir)
+        skip_record, sample_record = entropy_records_from_probe(
+            directory,
+            base_dir,
+            min_savings_percent,
+            verbosity,
+            result.average_entropy,
+            result.sampled_files,
+            result.sampled_bytes,
+            result.lz4_certain,
+            list(result.sampled_paths),
+            list(result.lz4_certain_paths),
+        )
+        if skip_record:
+            skip_results[directory] = skip_record
+        if sample_record:
+            sample_results.append(sample_record)
 
     return skip_results, sample_results
-

@@ -1,27 +1,28 @@
 import shlex
-from argparse import Namespace
 from dataclasses import dataclass
 from typing import ClassVar, Optional
 
 from colorama import Fore, Style
 
-from .config import DEFAULT_MIN_SAVINGS_PERCENT
+from . import config
 from .i18n import _
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
-    'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
+    'verbose': ('-v', 'Set verbosity level (-v/-vvv); repeat same level to disable'),
     'no_lzx': ('-x', 'Disable LZX compression'),
     'force_lzx': ('-f', 'Force LZX compression'),
+    'dry_run': ('-d', 'Dry-run entropy analysis'),
     'single_worker': ('-s', 'Throttle for HDDs'),
     'min_savings': (
         '-m/--min-savings=<percent>',
-        "Set minimum expected savings percentage",
+        f"Set minimum expected savings percentage ({config.MIN_SAVINGS_PERCENT:.0f}-{config.MAX_SAVINGS_PERCENT:.0f})",
     ),
 }
 
 SHORT_FLAG_KEYS: dict[str, str] = {
     'x': 'no_lzx',
     'f': 'force_lzx',
+    'd': 'dry_run',
     's': 'single_worker',
 }
 
@@ -31,24 +32,31 @@ LONG_FLAG_KEYS: dict[str, str] = {
     'quiet': 'verbose_off',
     'no-lzx': 'no_lzx',
     'force-lzx': 'force_lzx',
+    'dry-run': 'dry_run',
     'single-worker': 'single_worker',
     'min-savings': 'min_savings',
 }
+
+START_COMMANDS: set[str] = {'s', 'start'}
+FLAG_HELP_COMMANDS: set[str] = {'f', 'flags'}
 
 _MUTUALLY_EXCLUSIVE: tuple[tuple[str, str], ...] = (
     ('no_lzx', 'force_lzx'),
 )
 
+
 @dataclass
 class LaunchState:
     directory: str = ""
+    one_click: bool = False
     verbose: int = 0
     no_lzx: bool = False
     force_lzx: bool = False
+    dry_run: bool = False
     single_worker: bool = False
-    min_savings: float = DEFAULT_MIN_SAVINGS_PERCENT
+    min_savings: float = config.DEFAULT_MIN_SAVINGS_PERCENT
 
-    MAX_VERBOSITY: ClassVar[int] = 4
+    MAX_VERBOSITY: ClassVar[int] = 3
 
     def reset_verbose(self) -> None:
         self.verbose = 0
@@ -58,8 +66,7 @@ class LaunchState:
         self.verbose = 0 if level == 0 or self.verbose == level else level
 
     def set_min_savings(self, percent: float) -> None:
-        from .config import clamp_savings_percent
-        self.min_savings = clamp_savings_percent(percent)
+        self.min_savings = config.clamp_savings_percent(percent)
 
     def _silence_conflicts(self, key: str) -> None:
         for primary, secondary in _MUTUALLY_EXCLUSIVE:
@@ -79,7 +86,8 @@ class LaunchState:
         if enabled:
             self._silence_conflicts(key)
 
-def _format_active_flags(state: LaunchState) -> str:
+
+def format_active_flags(state: LaunchState) -> str:
     items: list[str] = []
     if state.verbose:
         items.append(_("Verbose level {level} (-{flags})").format(level=state.verbose, flags='v' * state.verbose))
@@ -91,10 +99,12 @@ def _format_active_flags(state: LaunchState) -> str:
             items.append(f"{_(description)} ({flag})")
     return ", ".join(items) if items else _("<none>")
 
-def _print_flag_reference() -> None:
+
+def print_flag_reference() -> None:
     print(Fore.YELLOW + _("\nAvailable flags:") + Style.RESET_ALL)
     for key, (flag, description) in FLAG_METADATA.items():
         print(f"  {flag:<6} {_(description)}")
+
 
 def _coerce_verbose_value(raw: Optional[str]) -> int:
     if raw is None or raw == "":
@@ -104,6 +114,7 @@ def _coerce_verbose_value(raw: Optional[str]) -> int:
     except ValueError:
         return 1
 
+
 def _parse_min_savings(value: Optional[str]) -> Optional[float]:
     if value is None or value == "":
         return None
@@ -112,6 +123,7 @@ def _parse_min_savings(value: Optional[str]) -> Optional[float]:
         return float(stripped)
     except ValueError:
         return None
+
 
 def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -> None:
     key = LONG_FLAG_KEYS.get(option)
@@ -124,13 +136,16 @@ def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -
         if parsed is None:
             print(
                 Fore.RED
-                + _("Invalid value for --min-savings. Provide a number between {min} and {max}.").format(min=10, max=90)
+                + _("Invalid value for --min-savings. Provide a number between {min} and {max}.").format(
+                    min=config.MIN_SAVINGS_PERCENT, max=config.MAX_SAVINGS_PERCENT
+                )
                 + Style.RESET_ALL
             )
             return
         state.set_min_savings(parsed)
     elif key:
         state.toggle(key)
+
 
 def _handle_short_bundle(bundle: str, state: LaunchState) -> None:
     index = 1
@@ -149,6 +164,7 @@ def _handle_short_bundle(bundle: str, state: LaunchState) -> None:
         if mapped:
             state.toggle(mapped)
         index += 1
+
 
 def apply_flag_string(raw: str, state: LaunchState) -> None:
     tokens = shlex.split(raw, posix=False)
@@ -179,6 +195,7 @@ def apply_flag_string(raw: str, state: LaunchState) -> None:
                 _handle_short_bundle(token, state)
         index += 1
 
+
 def split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
     path_tokens: list[str] = []
     flag_tokens: list[str] = []
@@ -200,50 +217,3 @@ def split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
         path_tokens.append(token)
         index += 1
     return path_tokens, flag_tokens
-
-def print_interactive_status(state: LaunchState) -> None:
-    active_flags = _format_active_flags(state)
-    current_directory = state.directory or _("<not set>")
-    print(
-        Fore.CYAN
-        + _("\nCurrent directory: {directory}\nActive flags: {flags}\nMin savings threshold: {savings:.1f}%").format(
-            directory=current_directory,
-            flags=active_flags,
-            savings=state.min_savings
-        )
-        + Style.RESET_ALL
-    )
-
-def apply_composite_command(parts: list[str], state: LaunchState) -> bool:
-    if not parts:
-        return False
-    path_tokens, flag_tokens = split_path_and_flags(parts)
-    if flag_tokens:
-        apply_flag_string(" ".join(flag_tokens), state)
-    if path_tokens:
-        from .runtime import sanitize_path
-        state.directory = sanitize_path(" ".join(path_tokens))
-        return True
-    return False
-
-def process_command(command: str, state: LaunchState) -> None:
-    if command.startswith('-'):
-        apply_flag_string(command, state)
-        return
-
-    parts = shlex.split(command, posix=False)
-    if apply_composite_command(parts, state):
-        return
-
-    from .runtime import sanitize_path
-    state.directory = sanitize_path(command)
-
-def apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
-    args.directory = state.directory
-    args.verbose = state.verbose
-    args.no_lzx = state.no_lzx
-    args.force_lzx = state.force_lzx
-    args.single_worker = state.single_worker
-    from .config import clamp_savings_percent
-    args.min_savings = clamp_savings_percent(state.min_savings)
-    return args

@@ -17,14 +17,13 @@ except ImportError:
     pywebview = None
 
 from .message_types import (
-    GuiRequest, GuiResponse, parse_request,
-    ConfigResponse, FolderResponse, StatusResponse,
+    GuiRequest, GuiResponse,
+    ConfigResponse, StatusResponse,
     FolderSummaryResponse, ProgressUpdateResponse, StateResponse,
-    WarningResponse, SelectFolderRequest, StartCompressionRequest,
+    WarningResponse, StartCompressionRequest,
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
-    AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest, GetProgressUpdateRequest,
+    AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest,
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
-    ChooseFolderRequest, OpenUrlRequest
 )
 from ..i18n import _, get_current_locale, get_translations
 
@@ -85,14 +84,9 @@ class GuiApi:
         req = GetQuickCompressionTargetsRequest()
         return self.backend_handler(req)
 
-    def start_quick_compression(self) -> Dict[str, Any]:
+    def start_quick_compression(self, compactos: bool = False) -> Dict[str, Any]:
         """Start the one-click compression pipeline."""
-        req = StartQuickCompressionRequest()
-        return self.backend_handler(req)
-
-    def get_progress_update(self) -> Dict[str, Any]:
-        """Get current progress update."""
-        req = GetProgressUpdateRequest()
+        req = StartQuickCompressionRequest(compactos=compactos)
         return self.backend_handler(req)
 
     def save_config(self, config: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:
@@ -101,7 +95,7 @@ class GuiApi:
             config = kwargs
         req = SaveConfigRequest(
             decimal=config.get("decimal", False),
-            min_savings=float(config.get("min_savings", 18.0)),
+            min_savings=float(config.get("min_savings", 15.0)),
             no_lzx=config.get("no_lzx", False),
             force_lzx=config.get("force_lzx", False),
             single_worker=config.get("single_worker", False)
@@ -163,6 +157,8 @@ class GuiServer:
 
         with open(ui_path / "style.css", "r", encoding="utf-8") as f:
             style = f.read()
+        with open(ui_path / "jquery.min.js", "r", encoding="utf-8") as f:
+            jquery = f.read()
         with open(ui_path / "app.js", "r", encoding="utf-8") as f:
             script = f.read()
         with open(html_file, "r", encoding="utf-8") as f:
@@ -183,15 +179,19 @@ class GuiServer:
             "/*__BOOT_CONFIG__*/",
             json.dumps(getattr(self, "initial_config", {}) or {}, ensure_ascii=False),
         )
+        html = html.replace("/*__JQUERY__*/", jquery)
         html = html.replace("/*__SCRIPT__*/", script)
 
         try:
             self.window = pywebview.create_window(
-                _("Trash Compactor GUI"),
+                "Trash Compactor",
                 html=html,
                 js_api=self.api,
-                width=760,
-                height=550,
+                width=880,
+                height=650,
+                min_size=(760, 600),
+                resizable=True,
+                text_select=False,
                 background_color="#3d3d3d",
             )
             self.running = True

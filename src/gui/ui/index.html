@@ -6,12 +6,22 @@
     <style>/*__STYLE__*/</style>
     <script>window.__TRASH_COMPACTOR_I18N__ = /*__I18N__*/</script>
     <script>window.__TRASH_COMPACTOR_BOOT_CONFIG__ = /*__BOOT_CONFIG__*/</script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>/*__JQUERY__*/</script>
     <script>/*__SCRIPT__*/</script>
   </head>
   <body>
     <header>
-      <h1><span class="side">⇒</span>T<span class="sml">r<span class="sml">a<span class="sml">s</span>h</span></span> C<span class="sml">o<span class="sml">m<span class="sml">p<span class="sml">a</span>c</span>t</span>o</span>r <span class="side">⇐</span></h1>
+      <h1 style="display: inline-flex; align-items: baseline; gap: 0; white-space: nowrap; line-height: 1;">
+        <span class="side">⇒</span><span style="font-size: 1.1em;">T</span>
+        <span style="font-size: 0.9em;">ra</span>
+        <span style="font-size: 0.8em;">sh</span>
+        <span style="font-size: 0.7em;">C</span>
+        <span style="font-size: 0.6em;">om</span>
+        <span style="font-size: 0.7em;">p</span>
+        <span style="font-size: 0.8em;">ac</span>
+        <span style="font-size: 0.9em;">to</span>
+        <span style="font-size: 1.1em;">r</span>
+        <span class="side">⇐</span></h1>
       <div class="push"></div>
       <nav>
         <ul>
@@ -19,13 +29,19 @@
           <li><button id="Button_Page_Settings" onclick="Gui.page('Settings')">☸ Settings</button></li>
           <li><button id="Button_Page_About" onclick="Gui.page('About')">⌕ About</button></li>
         </ul>
-        <div style="text-align: right; margin: 4px">
+        <!-- <div style="text-align: right; margin: 4px">
           <small style="color: grey;"><span class="version"></span> / <span class="compile-date"></span></small>
-        </div>
+        </div> -->
       </nav>
     </header>
 
     <section class="page" id="Compress">
+      <div class="compactos-wrap">
+        <div id="CompactOS_Indicator" class="compactos-indicator" style="display: none;">
+          <span class="compactos-icon" aria-hidden="true"></span>
+          <span id="CompactOS_Indicator_Text" class="compactos-text"></span>
+        </div>
+      </div>
       <section id="FolderChooser">
         <div class="ctr action-row">
           <button id="Button_Quick" class="quick" onclick="Action.quick_compression()">Quick compression</button>
@@ -40,6 +56,13 @@
           <div class="quick-mode-note">This runs the analysis first before anything is compressed.</div>
           <div id="Quick_Mode_Message" class="quick-mode-message"></div>
           <ul id="Quick_Mode_Targets" class="quick-mode-targets"></ul>
+          <div class="setting-item" id="Quick_CompactOS_Container" style="display: none;">
+            <label class="setting-row setting-toggle" for="Quick_CompactOS">
+              <span class="setting-label" id="Quick_CompactOS_Label">Compress Windows binaries (CompactOS)</span>
+              <input type="checkbox" id="Quick_CompactOS" name="compactos">
+            </label>
+            <div id="Quick_CompactOS_Help" class="setting-help">Requires administrator privileges. This will compress Windows system binaries to save additional space.</div>
+          </div>
           <div class="ctr">
             <button id="Button_Quick_Start" class="quick" onclick="Action.start_quick_compression()">Start quick analysis</button>
             <button id="Button_Quick_Cancel" class="cancel" onclick="Gui.hide_quick_mode()">Cancel</button>
@@ -49,9 +72,8 @@
 
       <section id="Activity" style="display: none;">
         <div id="Activity_Text"></div>
-        <div id="Analysis_Timing"></div>
-        <div class="ctr">
-          <progress id="Activity_Progress"></progress>
+        <div id="Activity_Progress" class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="Activity_Progress_Fill" class="progress-fill"></div>
         </div>
       </section>
 
@@ -66,6 +88,7 @@
       </section>
 
       <section id="Analysis" style="display: none;">
+        <div id="Analysis_Timing"></div>
         <div id="Quick_Estimate">
           <div class="estimate-card total-card">
             <div class="estimate-card-title">Total</div>
@@ -77,9 +100,9 @@
             <div class="estimate-card-title current-card-title" id="Current_Directory_Header">
               <span id="Current_Directory_Header_Text">Current Directory</span>
               <div id="Current_Directory_Nav" class="directory-nav" style="display: none;">
-                <button id="Directory_Prev" class="directory-nav-btn" onclick="Gui.previous_directory()">◀</button>
+                <button id="Directory_Prev" class="directory-nav-btn" type="button" onclick="Gui.previous_directory()" title="Previous directory" aria-label="Previous directory">‹</button>
                 <span id="Directory_Position" class="directory-position"></span>
-                <button id="Directory_Next" class="directory-nav-btn" onclick="Gui.next_directory()">▶</button>
+                <button id="Directory_Next" class="directory-nav-btn" type="button" onclick="Gui.next_directory()" title="Next directory" aria-label="Next directory">›</button>
               </div>
             </div>
             <div class="estimate-card-path" id="Current_Directory_Name">Waiting for analysis...</div>
@@ -113,11 +136,15 @@
         <button id="Button_Reset" class="cancel settings-reset">Reset to recommended</button>
       </div>
 
+      <div id="Defender_Notice" class="defender-notice setting-help performance">
+        Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs.
+      </div>
+
       <div class="setting-item">
         <div class="setting-row">
           <label for="Min_Savings" class="setting-label">Minimum savings</label>
           <div class="setting-control inline-number">
-            <input type="number" id="Min_Savings" name="min_savings" min="0" max="90" value="18">
+            <input type="number" id="Min_Savings" name="min_savings" min="0" max="90" value="15">
             <span class="setting-suffix">%</span>
           </div>
         </div>
@@ -155,21 +182,19 @@
     </section>
 
     <section class="page" id="About" style="display: none;">
-      <h1>Trash Compactor GUI</h1>
-
       <p><strong>Where we're going, we don't need backups!</strong></p>
 
       <p>Report problems to: <a href="https://github.com/me-when-the-uh/trash-compactor">https://github.com/me-when-the-uh/trash-compactor</a>.</p>
 
       <hr>
 
-      <p>An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics.</p>
+      <p id="About_Description"></p>
 
       <p>For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
 
       <p>Alternatively, the program can be used as a script to periodically run the compression on specific folders without calling the GUI window, which only appears if you launch the executable file without passing the directory that is to be compressed.</p>
 
-      <p>Vibe-coded in Python with a webview-slopped GUI.</p>
+      <p>Vibe-coded in Python and with Rust duct-taped to this hackjob.</p>
 
       <p>GUI adapted from <a href="https://github.com/Freaky/Compactor">Compactor</a></p>
     </section>

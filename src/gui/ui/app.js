@@ -191,8 +191,12 @@
 			pywebview.api.choose_folder().then(function(res) {
 				if (res && res.type === 'Folder') {
 					Response.dispatch(res);
-					// Auto start analysis
+					Gui.exit_quick_history_mode();
 					Action.analyse();
+					return;
+				}
+				if (res && res.type === 'Error') {
+					Gui.show_warning(I18n.t('Warning'), res.message || I18n.t('No folder selected'));
 				}
 			});
 		},
@@ -202,18 +206,19 @@
 		},
 
 		quick_compression: function() {
-			if (Gui.should_restart_quick_analysis()) {
-				Action.start_quick_compression();
+			if (Gui.is_busy()) {
 				return;
 			}
-			if (Gui.is_busy() || Gui.has_started_analysis()) {
+			if (Gui.in_quick_history_mode()) {
+				Action.start_quick_compression();
 				return;
 			}
 			pywebview.api.get_quick_compression_targets().then(_dispatch_if_message);
 		},
 
 		start_quick_compression: function() {
-			pywebview.api.start_quick_compression().then(_dispatch_if_message);
+			var compactos = $("#Quick_CompactOS").is(":checked");
+			pywebview.api.start_quick_compression(compactos).then(_dispatch_if_message);
 		},
 
 		pause: function() {
@@ -230,10 +235,6 @@
 
 		stop: function() {
 			pywebview.api.stop_compression().then(_dispatch_if_message);
-		},
-
-		get_progress: function() {
-			pywebview.api.get_progress_update().then(_dispatch_if_message);
 		}
 	};
 })();
@@ -283,13 +284,17 @@ var Response = (function() {
 					break;
 
 				case "QuickCompressionTargets":
-					if (!Gui.should_restart_quick_analysis() && !Gui.is_busy() && !Gui.has_started_analysis()) {
+					if (!Gui.is_busy()) {
 						Gui.show_quick_mode(msg.directories || [], !!msg.allow_compactos);
 					}
 					break;
 
 				case "ProgressUpdate":
 						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
+					break;
+
+				case "CompactOSIndicator":
+						Gui.set_compactos_indicator(!!msg.show, msg.text, !!msg.done, msg.saved_bytes || 0);
 					break;
 
 				case "Warning":
@@ -311,7 +316,7 @@ var Gui = (function() {
 	var status_queue = null;
 	var current_summary_queue = null;
 	var total_summary_queue = null;
-	var directory_summary_queue = null;
+	var directory_summary_pending = [];
 	var directory_summary_history = [];
 	var current_summary_state = null;
 	var total_summary_state = null;
@@ -323,6 +328,9 @@ var Gui = (function() {
 	var last_saved_config = null;
 	var ignore_config_changes = false;
 	var default_lzx_help = "";
+	var compactos_active = false;
+	var total_analysis_timing = null;
+	var last_lz4_certain_files = 0;
 
 	function _upsert_directory_summary(payload) {
 		var i;
@@ -335,11 +343,17 @@ var Gui = (function() {
 		directory_summary_history.push(payload);
 	}
 
+	function _sort_directory_summary_history() {
+		directory_summary_history.sort(function(a, b) {
+			var aSize = (a.data && a.data.logical_size) || 0;
+			var bSize = (b.data && b.data.logical_size) || 0;
+			return bSize - aSize;
+		});
+	}
+
 	function _flush_queued_updates() {
-		if (status_queue) {
-			Gui.set_status(status_queue.status, status_queue.pct, status_queue.quick_history);
-			status_queue = null;
-		}
+		var activateQuickHistory = false;
+
 		if (current_summary_queue) {
 			current_summary_state = current_summary_queue.data;
 			current_summary_directory = current_summary_queue.directory || "";
@@ -350,9 +364,21 @@ var Gui = (function() {
 			total_summary_directory = total_summary_queue.directory || "";
 			total_summary_queue = null;
 		}
-		if (directory_summary_queue) {
-			_upsert_directory_summary(directory_summary_queue);
-			directory_summary_queue = null;
+		if (directory_summary_pending.length) {
+			directory_summary_pending.forEach(_upsert_directory_summary);
+			directory_summary_pending = [];
+		}
+		if (status_queue) {
+			activateQuickHistory = status_queue.quick_history;
+			Gui.set_status(status_queue.status, status_queue.pct, status_queue.final);
+			status_queue = null;
+		}
+		if (activateQuickHistory) {
+			quick_history_mode = true;
+			if (directory_summary_history.length) {
+				_sort_directory_summary_history();
+				directory_summary_index = 0;
+			}
 		}
 		Gui.render_summaries();
 	}
@@ -392,7 +418,7 @@ var Gui = (function() {
 		},
 
 		localize: function() {
-			document.title = I18n.t("Trash Compactor GUI");
+			document.title = "Trash Compactor";
 			$("#Button_Page_Compress").html("⌛ " + I18n.t("Compress"));
 			$("#Button_Page_Settings").html("☸ " + I18n.t("Settings"));
 			$("#Button_Page_About").html("⌕ " + I18n.t("About"));
@@ -403,11 +429,14 @@ var Gui = (function() {
 			$("#Quick_Mode .quick-mode-note").text(I18n.t("This runs the analysis first before anything is compressed."));
 			$("#Button_Quick_Start").text(I18n.t("Start quick analysis"));
 			$("#Button_Quick_Cancel").text(I18n.t("Cancel"));
+			$("#Quick_CompactOS_Label").text(I18n.t("Compress Windows binaries (CompactOS)"));
+			$("#Quick_CompactOS_Help").text(I18n.t("Requires administrator privileges. This will compress Windows system binaries to save additional space."));
 			$("#Button_Pause").text("⏸️ " + I18n.t("Pause"));
 			$("#Button_Resume").text("▶️ " + I18n.t("Resume"));
 			$("#Button_Stop").text("⏹️ " + I18n.t("Stop"));
 			$("#Button_Analyse").text("🔍 " + I18n.t("Analyse"));
 			$("#Button_Compress").text("🗜 " + I18n.t("Compress"));
+			$("#Defender_Notice").text(I18n.t("Real-time antivirus (e.g. Windows Defender) rescans every read and every compressed file and can halve speed. Consider temporarily excluding target folders on first runs."));
 			$("#Current_Directory_Header_Text").text(I18n.t("Current Directory"));
 			$("#Current_Directory_Name").text(I18n.t("Waiting for analysis..."));
 			$("#Estimate_Recovery_Label, #Current_Estimate_Recovery_Label").text(I18n.t("will be recovered"));
@@ -432,12 +461,11 @@ var Gui = (function() {
 			$("#SI_Units option[value='I']").text(I18n.t("Binary (MiB)"));
 			$("#SI_Units option[value='D']").text(I18n.t("Decimal (MB)"));
 			$("#Settings .setting-item:last-child .setting-help").text(I18n.t("Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves."));
-			$("#About h1").text(I18n.t("Trash Compactor GUI"));
 			$("#About p strong").text(I18n.t("Where we're going, we don't need backups!"));
 			$("#About p:nth-of-type(2)").html(I18n.t("Report problems to:") + " <a href=\"https://github.com/me-when-the-uh/trash-compactor\">https://github.com/me-when-the-uh/trash-compactor</a>.");
-			$("#About p:nth-of-type(4)").text(I18n.t("An intelligent graphical interface for Windows NTFS filesystem compression using entropy-based heuristics."));
+			$("#About_Description").text(I18n.t("A (hopefully) easy-to-use graphical interface for Windows NTFS compression using entropy-based heuristics."));
 			$("#About p:nth-of-type(5)").text(I18n.t("For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea."));
-			$("#About p:nth-of-type(6)").text(I18n.t("Vibe-coded in Python with a webview-slopped GUI."));
+			$("#About p:nth-of-type(6)").text(I18n.t("Vibe-coded in Python and with Rust duct-taped to this hackjob."));
 			$("#About p:nth-of-type(7)").html(I18n.t("GUI adapted from") + " <a href=\"https://github.com/Freaky/Compactor\">Compactor</a>");
 		},
 
@@ -457,16 +485,41 @@ var Gui = (function() {
 				Action.reset_config();
 			});
 
-			setInterval(_flush_queued_updates, 100);
+			$(document).on("keydown", function(e) {
+				if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "a" || e.key === "A")) {
+					e.preventDefault();
+					Gui.analyse();
+					return;
+				}
+				if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key === "Enter") {
+					e.preventDefault();
+					if (!$("#Button_Compress").is(":hidden") && !$("#Button_Compress").prop("disabled")) {
+						Action.start_compression();
+					}
+					return;
+				}
+				if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "q" || e.key === "Q")) {
+					e.preventDefault();
+					Action.quick_compression();
+					return;
+				}
+				if (e.key === "Escape" && Gui.is_busy()) {
+					e.preventDefault();
+					Action.stop();
+				}
+			});
+
+			setInterval(_flush_queued_updates, 125);
 			Gui.apply_boot_config();
 			Gui.request_initial_config();
 		},
 
-		queue_status: function(status, pct, quick_history) {
+		queue_status: function(status, pct, quick_history, final) {
 			status_queue = {
 				status: status,
 				pct: pct,
-				quick_history: !!quick_history
+				quick_history: !!quick_history,
+				final: !!final
 			};
 		},
 
@@ -482,7 +535,7 @@ var Gui = (function() {
 			if (scope === "total") {
 				total_summary_queue = payload;
 			} else if (scope === "directory") {
-				directory_summary_queue = payload;
+				directory_summary_pending.push(payload);
 			} else if (scope === "current") {
 				current_summary_queue = payload;
 			} else {
@@ -495,22 +548,22 @@ var Gui = (function() {
 			return $("#Button_Stop").is(":visible");
 		},
 
-		has_started_analysis: function() {
-			return $("#Activity").is(":visible") || $("#Analysis").is(":visible");
-		},
-
-		should_restart_quick_analysis: function() {
+		in_quick_history_mode: function() {
 			return quick_history_mode && !Gui.is_busy();
 		},
 
+		exit_quick_history_mode: function() {
+			quick_history_mode = false;
+			directory_summary_history = [];
+			directory_summary_index = 0;
+			Gui.update_directory_navigation();
+		},
+
 		analyse: function() {
-			if (Gui.should_restart_quick_analysis()) {
-				Action.start_quick_compression();
-				return;
-			}
 			if (Gui.is_busy()) {
 				return;
 			}
+			Gui.exit_quick_history_mode();
 			Action.analyse();
 		},
 
@@ -546,6 +599,7 @@ var Gui = (function() {
 				decimal: $("#SI_Units").val() == "D",
 				min_savings: parseFloat($("#Min_Savings").val()),
 				no_lzx: $("#No_LZX").is(":checked"),
+				force_lzx: !$("#No_LZX").is(":checked"),
 				single_worker: $("#Single_Worker").is(":checked")
 			};
 		},
@@ -593,6 +647,11 @@ var Gui = (function() {
 
 			if (allow_compactos) {
 				note += " " + I18n.t("Administrator privileges are available, but they are not necessary for analysing folders.");
+				$("#Quick_CompactOS_Container").show();
+				$("#Quick_CompactOS").prop("checked", false);
+			} else {
+				$("#Quick_CompactOS_Container").hide();
+				$("#Quick_CompactOS").prop("checked", false);
 			}
 
 			message.text(note);
@@ -607,8 +666,8 @@ var Gui = (function() {
 			$("#Button_Quick_Start").prop("disabled", false);
 		},
 
-                set_min_savings: function(min_savings) {
-				$("#Min_Savings").val(min_savings != null ? min_savings : 18);
+		set_min_savings: function(min_savings) {
+				$("#Min_Savings").val(min_savings != null ? min_savings : 15);
 		},
 
 		set_folder: function(folder) {
@@ -619,19 +678,29 @@ var Gui = (function() {
 			Gui.scanning();
 		},
 
-		set_status: function(status, pct, quick_history) {
+		set_progress: function(pct, final) {
+			var track = $("#Activity_Progress");
+			var fill = $("#Activity_Progress_Fill");
+			track.removeClass("indeterminate complete");
+
+			if (pct == null || pct < 0) {
+				track.addClass("indeterminate");
+				fill.css("width", "");
+				track.attr("aria-valuenow", "");
+				return;
+			}
+
+			var clamped = Math.max(0, Math.min(100, pct));
+			fill.css("width", clamped + "%");
+			track.attr("aria-valuenow", String(Math.round(clamped)));
+			if (clamped >= 100 && final) {
+				track.addClass("complete");
+			}
+		},
+
+		set_status: function(status, pct, final) {
 			$("#Activity_Text").text(status);
-			if (pct != null) {
-				$("#Activity_Progress").val(pct);
-			} else {
-				$("#Activity_Progress").removeAttr("value");
-			}
-			if (quick_history) {
-				quick_history_mode = true;
-				if (directory_summary_history.length) {
-					directory_summary_index = directory_summary_history.length - 1;
-				}
-			}
+			Gui.set_progress(pct, final);
 		},
 
 		scanning: function() {
@@ -639,6 +708,7 @@ var Gui = (function() {
 			Gui.hide_quick_mode();
 			$("#Activity").show();
 			$("#Analysis").show();
+			Gui.set_progress(-1);
 
 			$("#Button_Pause").show();
 			$("#Button_Resume").hide();
@@ -670,6 +740,7 @@ var Gui = (function() {
 		stopped: function() {
 			_flush_queued_updates();
 			Gui.hide_quick_mode();
+			$("#Activity").hide();
 			Gui.scanned();
 		},
 
@@ -679,6 +750,10 @@ var Gui = (function() {
 			$("#Button_Resume").hide();
 			$("#Button_Stop").hide();
 			$("#Button_Analyse").show();
+			$("#Analysis").show();
+			if (total_analysis_timing) {
+				Gui.set_analysis_timing(total_analysis_timing, last_lz4_certain_files);
+			}
 
 			if ($("#File_Count_Compressible").text() != "0") {
 				$("#Button_Compress").show();
@@ -688,9 +763,12 @@ var Gui = (function() {
 		},
 
 		reset_folder_summary: function() {
+			total_analysis_timing = null;
+			last_lz4_certain_files = 0;
+			$("#Analysis_Timing").text("");
 			current_summary_queue = null;
 			total_summary_queue = null;
-			directory_summary_queue = null;
+			directory_summary_pending = [];
 			directory_summary_history = [];
 			current_summary_state = null;
 			total_summary_state = null;
@@ -754,7 +832,10 @@ var Gui = (function() {
 			nav.show();
 			prev.prop("disabled", directory_summary_index <= 0);
 			next.prop("disabled", directory_summary_index >= directory_summary_history.length - 1);
-			position.text((directory_summary_index + 1) + " / " + directory_summary_history.length);
+			position.text(I18n.t("{index} / {total}", {
+				index: directory_summary_index + 1,
+				total: directory_summary_history.length
+			}));
 		},
 
 		previous_directory: function() {
@@ -773,15 +854,61 @@ var Gui = (function() {
 			Gui.render_summaries();
 		},
 
+		set_analysis_timing: function(timing, lz4CertainFiles) {
+			if (timing) {
+				total_analysis_timing = timing;
+				if (lz4CertainFiles != null) {
+					last_lz4_certain_files = lz4CertainFiles;
+				}
+			} else if (!total_analysis_timing) {
+				$("#Analysis_Timing").text("");
+				return;
+			}
+
+			timing = timing || total_analysis_timing;
+			lz4CertainFiles = lz4CertainFiles != null ? lz4CertainFiles : last_lz4_certain_files;
+
+			var scanSeconds = timing.scan_seconds;
+			if (scanSeconds == null) {
+				scanSeconds = timing.combined_scan_seconds || timing.walk_seconds || 0;
+			}
+			var totalSeconds = timing.total_seconds;
+			if (totalSeconds == null) {
+				totalSeconds = scanSeconds + (timing.entropy_seconds || 0);
+			}
+
+			var timingText = I18n.t(
+				"Scan {scan_seconds}s @ {scan_rate} files/s",
+				{
+					scan_seconds: Util.format_number(scanSeconds, 1),
+					scan_rate: Util.format_number(timing.scan_rate || 0, 0)
+				}
+			);
+			if (timing.entropy_seconds > 0) {
+				timingText += "\n" + I18n.t(
+					"Entropy {entropy_seconds}s @ {entropy_rate} dirs/s",
+					{
+						entropy_seconds: Util.format_number(timing.entropy_seconds || 0, 1),
+						entropy_rate: Util.format_number(timing.entropy_rate || 0, 0)
+					}
+				);
+			}
+			timingText += "\n" + I18n.t(
+				"Total {total_seconds}s",
+				{total_seconds: Util.format_number(totalSeconds, 1)}
+			);
+			$("#Analysis_Timing").text(timingText);
+		},
+
 		set_folder_summary: function(data) {
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;
 			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
-			var currentOnDisk = data.current_on_disk_size != null ? data.current_on_disk_size : logicalSize;
+			var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
 			var currentDisplaySize = isAnalysis ? projectedOnDisk : currentOnDisk;
 			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
-			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 18);
+			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
 			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
 
 			$("#Size_Logical").text(Util.bytes_to_human(data.logical_size));
@@ -847,20 +974,10 @@ var Gui = (function() {
 			$("#Compressible_Size_Label").text(isAnalysis ? I18n.t("are compressible") : I18n.t("compressed in this run"));
 			$("#Skipped_Size_Label").text(I18n.t("excluded"));
 
-			if (data.analysis_timing) {
-				var t = data.analysis_timing;
-				$("#Analysis_Timing").text(I18n.t(
-					"Scan {scan_seconds}s @ {scan_rate} files/sec | Entropy {entropy_seconds}s @ {entropy_rate} files/sec",
-					{
-						scan_seconds: Util.format_number(t.combined_scan_seconds || 0, 2),
-						scan_rate: Util.format_number(t.scan_rate || 0, 0),
-						entropy_seconds: Util.format_number(t.entropy_seconds || 0, 2),
-						entropy_rate: Util.format_number(t.entropy_rate || 0, 0)
-					}
-				));
-			} else {
-				$("#Analysis_Timing").text("");
-			}
+			Gui.set_analysis_timing(
+				data.analysis_timing,
+				data.lz4_certain_incompressible_files || 0
+			);
 
 			$("#File_Count_Compressed").text(Util.format_number(data.compressed.count, 0));
 			$("#File_Count_Compressible").text(Util.format_number(data.compressible.count, 0));
@@ -871,10 +988,10 @@ var Gui = (function() {
 			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 			var logicalSize = data.logical_size || 0;
 			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
-			var currentOnDisk = data.current_on_disk_size != null ? data.current_on_disk_size : logicalSize;
+			var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
 			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
-			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 18);
+			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
 			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
 
 			$("#Current_Directory_Name").text(directory || I18n.t("Current Directory"));
@@ -908,6 +1025,63 @@ var Gui = (function() {
 
 		show_warning: function(title, message) {
 			alert(title + "\n\n" + message);
+		},
+
+		set_compactos_indicator: function(active, text, done, savedBytes) {
+			compactos_active = active;
+			var indicator = $("#CompactOS_Indicator");
+			var indicatorText = $("#CompactOS_Indicator_Text");
+			var icon = indicator.find(".compactos-icon");
+			if (active) {
+				Gui._reserve_compactos_size(indicator, indicatorText, icon);
+				indicator.removeClass("stopped");
+				if (done) {
+					indicator.addClass("done");
+					var base = text || I18n.t("Done compressing Windows binaries.");
+					if (savedBytes > 0) {
+						base += " Saved " + Util.bytes_to_human(savedBytes);
+					}
+					indicatorText.text(base);
+					icon.text("✓");
+				} else if (text && /fail|error/i.test(text)) {
+					indicator.removeClass("done").addClass("stopped");
+					icon.text("!");
+				} else {
+					indicator.removeClass("done");
+					indicatorText.text(text || I18n.t("Compressing Windows binaries..."));
+					icon.text("");
+				}
+				indicator.show();
+			} else {
+				indicator.hide().removeClass("done stopped");
+				icon.text("");
+			}
+		},
+
+		_reserve_compactos_size: function($ind, $txt, $icon) {
+			if ($ind.data("sized")) return;
+			var probe = $ind.clone().css({
+				display: "inline-flex", visibility: "hidden",
+				position: "absolute", left: "-9999px"
+			}).appendTo("body");
+			var pTxt = probe.find(".compactos-text");
+			var pIcon = probe.find(".compactos-icon");
+			var maxW = 0;
+			[
+				{t: I18n.t("Compressing Windows binaries..."), d: false},
+				{t: I18n.t("Done compressing Windows binaries."), d: true},
+				{t: I18n.t("Done compressing Windows binaries.") + " Saved 12.3 GiB.", d: true}
+			].forEach(function(c) {
+				probe.toggleClass("done", c.d);
+				pTxt.text(c.t);
+				pIcon.text(c.d ? "✓" : "");
+				void probe[0].offsetWidth;
+				var w = probe[0].scrollWidth;
+				if (w > maxW) maxW = w;
+			});
+			probe.remove();
+			if (maxW > 80) $ind.css("min-width", maxW + "px");
+			$ind.data("sized", true);
 		}
 	};
 })();

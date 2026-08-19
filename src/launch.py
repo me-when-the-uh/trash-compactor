@@ -2,20 +2,23 @@ import logging
 import os
 import shlex
 import subprocess
-import threading
 from argparse import Namespace
-from dataclasses import dataclass
-from typing import ClassVar, Optional
+from typing import Optional
 
 from colorama import Fore, Style
 
 from . import config, benchmark
 from .console import EscapeExit, announce_cancelled, read_user_input
-from .file_utils import (
-    DRIVE_FIXED,
-    DRIVE_REMOTE,
-    get_volume_details,
-    sanitize_path,
+from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, get_volume_details
+from .file_utils import sanitize_path
+from .launch_flags import (
+    FLAG_HELP_COMMANDS,
+    LaunchState,
+    START_COMMANDS,
+    apply_flag_string,
+    format_active_flags,
+    print_flag_reference,
+    split_path_and_flags,
 )
 from .workers import set_worker_cap
 from .i18n import _
@@ -47,8 +50,11 @@ def pick_directory_dialog() -> Optional[str]:
             startupinfo=startupinfo
         )
         path = result.stdout.strip()
+        if not path:
+            print(Fore.YELLOW + _("Folder picker returned no selection; you can type a path instead.") + Style.RESET_ALL)
         return path if path else None
     except FileNotFoundError:
+        print(Fore.YELLOW + _("PowerShell is required for the folder picker; type a path instead.") + Style.RESET_ALL)
         return None
 
 
@@ -93,7 +99,9 @@ def configure_lzx(
 
 
 def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
-    details = get_volume_details(directory)
+    from .drive_inspector import get_volume_details_fast
+
+    details = get_volume_details_fast(directory)
     throttle_requested = force_serial  # Carry over manual single-worker overrides
     target_label = details.drive_letter or directory
 
@@ -129,11 +137,16 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
             logging.info(_("Single-worker mode honored even though the drive is not fixed media."))
         return True
 
+    # Only fixed drives need the full probe (seek penalty / media type)
+    details = get_volume_details(directory)
+
     if details.rotational is not True:
         if details.rotational is None:
             logging.debug(
-                _("Drive %s did not report seek penalty; treating as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag."),
+                _("Drive %s did not report seek penalty; treating as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag. method=%s media=%s"),
                 target_label,
+                getattr(details, 'detection_method', ''),
+                getattr(details, 'media_type', None),
             )
         if throttle_requested:
             set_worker_cap(1)
@@ -167,231 +180,38 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
             return False
         throttle_requested = throttle_response in {"", "y", "yes"}
 
+    from .workers import set_hdd_mode, set_worker_cap
+    set_hdd_mode(True)
+    logging.info(_("HDD mode engaged for %s: sequential scan/entropy/compression, smaller batches."), target_label)
     if throttle_requested:
         set_worker_cap(1)
         logging.info(_("Single-worker mode engaged for %s due to HDD safeguards."), target_label)
         if not force_serial:
             print(Fore.YELLOW + _("Running sequentially to keep fragmentation in check.") + Style.RESET_ALL)
+    else:
+        print(Fore.YELLOW + _("HDD mode: scanning, entropy sampling, and compression all run sequentially so the disk head moves in order instead of jumping.") + Style.RESET_ALL)
 
     print(Fore.YELLOW + _("\nProceeding with compression on HDD. This may impact system performance.") + Style.RESET_ALL)
     return True
 
 
-FLAG_METADATA: dict[str, tuple[str, str]] = {
-    'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
-    'no_lzx': ('-x', 'Disable LZX compression'),
-    'force_lzx': ('-f', 'Force LZX compression'),
-    'dry_run': ('-d', 'Dry-run entropy analysis'),
-    'single_worker': ('-s', 'Throttle for HDDs'),
-    'min_savings': (
-        '-m/--min-savings=<percent>',
-        f"Set minimum expected savings percentage ({config.MIN_SAVINGS_PERCENT:.0f}-{config.MAX_SAVINGS_PERCENT:.0f})",
-    ),
-}
+def print_defrag_hint(compressed_files: int) -> None:
+    """Suggest defragmenting after compression on a spinning drive."""
+    from .workers import hdd_mode
 
-SHORT_FLAG_KEYS: dict[str, str] = {
-    'x': 'no_lzx',
-    'f': 'force_lzx',
-    'd': 'dry_run',
-    's': 'single_worker',
-}
-
-LONG_FLAG_KEYS: dict[str, str] = {
-    'verbose': 'verbose',
-    'no-verbose': 'verbose_off',
-    'quiet': 'verbose_off',
-    'no-lzx': 'no_lzx',
-    'force-lzx': 'force_lzx',
-    'dry-run': 'dry_run',
-    'single-worker': 'single_worker',
-    'min-savings': 'min_savings',
-}
-
-_START_COMMANDS: set[str] = {'s', 'start'}
-_FLAG_HELP_COMMANDS: set[str] = {'f', 'flags'}
-
-_MUTUALLY_EXCLUSIVE: tuple[tuple[str, str], ...] = (
-    ('no_lzx', 'force_lzx'),
-)
-
-
-@dataclass
-class LaunchState:
-    directory: str = ""
-    one_click: bool = False
-    verbose: int = 0
-    no_lzx: bool = False
-    force_lzx: bool = False
-    dry_run: bool = False
-    single_worker: bool = False
-    min_savings: float = config.DEFAULT_MIN_SAVINGS_PERCENT
-
-    MAX_VERBOSITY: ClassVar[int] = 4
-
-    def reset_verbose(self) -> None:
-        self.verbose = 0
-
-    def set_verbose_level(self, level: int) -> None:
-        level = max(0, min(level, self.MAX_VERBOSITY))
-        self.verbose = 0 if level == 0 or self.verbose == level else level
-
-    def set_min_savings(self, percent: float) -> None:
-        self.min_savings = config.clamp_savings_percent(percent)
-
-    def _silence_conflicts(self, key: str) -> None:
-        for primary, secondary in _MUTUALLY_EXCLUSIVE:
-            if key == primary and getattr(self, secondary):
-                setattr(self, secondary, False)
-            elif key == secondary and getattr(self, primary):
-                setattr(self, primary, False)
-
-    def toggle(self, key: str) -> None:
-        if key == 'min_savings':
-            return
-        if key == 'verbose':
-            self.set_verbose_level(1)
-            return
-        enabled = not getattr(self, key)
-        setattr(self, key, enabled)
-        if enabled:
-            self._silence_conflicts(key)
-
-
-def _format_active_flags(state: LaunchState) -> str:
-    items: list[str] = []
-    if state.verbose:
-        items.append(_("Verbose level {level} (-{flags})").format(level=state.verbose, flags='v' * state.verbose))
-
-    for key, (flag, description) in FLAG_METADATA.items():
-        if key == 'verbose' or key == 'min_savings':
-            continue
-        if getattr(state, key):
-            items.append(f"{_(description)} ({flag})")
-    return ", ".join(items) if items else _("<none>")
-
-
-def _print_flag_reference() -> None:
-    print(Fore.YELLOW + _("\nAvailable flags:") + Style.RESET_ALL)
-    for key, (flag, description) in FLAG_METADATA.items():
-        print(f"  {flag:<6} {_(description)}")
-
-
-def _coerce_verbose_value(raw: Optional[str]) -> int:
-    if raw is None or raw == "":
-        return 1
-    try:
-        return int(raw)
-    except ValueError:
-        return 1
-
-
-def _parse_min_savings(value: Optional[str]) -> Optional[float]:
-    if value is None or value == "":
-        return None
-    stripped = value.strip().rstrip('%')
-    try:
-        return float(stripped)
-    except ValueError:
-        return None
-
-
-def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -> None:
-    key = LONG_FLAG_KEYS.get(option)
-    if key == 'verbose_off':
-        state.reset_verbose()
-    elif key == 'verbose':
-        state.set_verbose_level(_coerce_verbose_value(value))
-    elif key == 'min_savings':
-        parsed = _parse_min_savings(value)
-        if parsed is None:
-            print(
-                Fore.RED
-                + _("Invalid value for --min-savings. Provide a number between {min} and {max}.").format(
-                    min=config.MIN_SAVINGS_PERCENT, max=config.MAX_SAVINGS_PERCENT
-                )
-                + Style.RESET_ALL
+    if hdd_mode() and compressed_files > 0:
+        print(
+            Fore.YELLOW
+            + _(
+                "\nNTFS compression fragmented files on this hard drive. "
+                "Consider defragmenting the drive now: defrag.exe /C"
             )
-            return
-        state.set_min_savings(parsed)
-    elif key:
-        state.toggle(key)
-
-
-def _handle_short_bundle(bundle: str, state: LaunchState) -> None:
-    index = 1
-    upper = len(bundle)
-    while index < upper:
-        char = bundle[index].lower()
-        if char == 'v':
-            length = 1
-            while index + length < upper and bundle[index + length].lower() == 'v':
-                length += 1
-            state.set_verbose_level(length)
-            index += length
-            continue
-
-        mapped = SHORT_FLAG_KEYS.get(char)
-        if mapped:
-            state.toggle(mapped)
-        index += 1
-
-
-def _apply_flag_string(raw: str, state: LaunchState) -> None:
-    tokens = shlex.split(raw, posix=False)
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token.startswith('--'):
-            option = token[2:]
-            value: Optional[str] = None
-            if '=' in option:
-                option, value = option.split('=', 1)
-            elif index + 1 < len(tokens) and not tokens[index + 1].startswith('-'):
-                value = tokens[index + 1]
-                index += 1
-            _handle_long_option(option, value, state)
-        elif token.startswith('-') and len(token) > 1:
-            lowered = token.lower()
-            if lowered.startswith('-m'):
-                raw_value = token[2:]
-                if raw_value.startswith('='):
-                    raw_value = raw_value[1:]
-                value = raw_value or None
-                if value is None and index + 1 < len(tokens) and not tokens[index + 1].startswith('-'):
-                    value = tokens[index + 1]
-                    index += 1
-                _handle_long_option('min-savings', value, state)
-            else:
-                _handle_short_bundle(token, state)
-        index += 1
-
-
-def _split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
-    # Treat leading flags and trailing toggles uniformly; Windows paths don't start with '-'
-    path_tokens: list[str] = []
-    flag_tokens: list[str] = []
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token.startswith('-'):
-            flag_tokens.append(token)
-            lowered = token.lower()
-            if lowered.startswith('-m'):
-                raw_value = token[2:]
-                if raw_value.startswith('='):
-                    raw_value = raw_value[1:]
-                if raw_value == "" and index + 1 < len(tokens) and not tokens[index + 1].startswith('-'):
-                    flag_tokens.append(tokens[index + 1])
-                    index += 1
-            index += 1
-            continue
-        path_tokens.append(token)
-        index += 1
-    return path_tokens, flag_tokens
+            + Style.RESET_ALL
+        )
 
 
 def _print_interactive_status(state: LaunchState) -> None:
-    active_flags = _format_active_flags(state)
+    active_flags = format_active_flags(state)
     current_directory = state.directory or _("<not set>")
     print(
         Fore.CYAN
@@ -408,9 +228,9 @@ def _apply_composite_command(parts: list[str], state: LaunchState) -> bool:
     # Returns True if a path was supplied, so the function caller can short-circuit the default handler
     if not parts:
         return False
-    path_tokens, flag_tokens = _split_path_and_flags(parts)
+    path_tokens, flag_tokens = split_path_and_flags(parts)
     if flag_tokens:
-        _apply_flag_string(" ".join(flag_tokens), state)
+        apply_flag_string(" ".join(flag_tokens), state)
     if path_tokens:
         state.directory = sanitize_path(" ".join(path_tokens))
         return True
@@ -429,7 +249,7 @@ def _display_flag_help() -> None:
     print(
         _("Toggle flags by entering their short forms together (e.g. -vx) or separately (e.g. -d). Re-enter a flag to disable it.")
     )
-    _print_flag_reference()
+    print_flag_reference()
 
 
 def _can_start(state: LaunchState) -> bool:
@@ -455,7 +275,7 @@ def _tokenize_command(command: str) -> list[str]:
 
 def _process_command(command: str, state: LaunchState) -> None:
     if command.startswith('-'):
-        _apply_flag_string(command, state)
+        apply_flag_string(command, state)
         return
 
     parts = _tokenize_command(command)
@@ -473,7 +293,9 @@ def _run_interactive_session(state: LaunchState) -> None:
         )
         print(_("Press '1' then Enter to compress necessary directories in one click."))
 
-        command = _read_interactive_command() or 's'
+        command = _read_interactive_command().strip()
+        if not command:
+            continue
         lowered = command.lower()
 
         if lowered == '1':
@@ -481,7 +303,7 @@ def _run_interactive_session(state: LaunchState) -> None:
             state.directory = ""
             return
 
-        if lowered in _START_COMMANDS:
+        if lowered in START_COMMANDS:
             if _can_start(state):
                 return
             continue
@@ -492,7 +314,7 @@ def _run_interactive_session(state: LaunchState) -> None:
                 state.directory = sanitize_path(selected)
             continue
 
-        if lowered in _FLAG_HELP_COMMANDS:
+        if lowered in FLAG_HELP_COMMANDS:
             _display_flag_help()
             continue
 
@@ -530,7 +352,7 @@ def interactive_configure(args: Namespace) -> Namespace:
         state.directory = ""
         return _apply_state_to_args(args, state)
 
-    _print_flag_reference()
+    print_flag_reference()
 
     _run_interactive_session(state)
     return _apply_state_to_args(args, state)
@@ -547,6 +369,14 @@ def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, N
         else:
             print(Fore.RED + _("No directory provided.") + Style.RESET_ALL)
 
+        # Without a console there is no user to ask; fail instead of looping.
+        from .console import _interactive_console
+
+        if not _interactive_console():
+            return "", args
+
         # Force interactive mode if directory is missing/invalid
         args.directory = ""
         args = interactive_configure(args)
+        if getattr(args, "one_click", False):
+            return "", args

@@ -1,11 +1,8 @@
-import heapq
 import logging
-import math
 import os
-import random
 import zlib
 import lz4.block
-from collections import Counter, deque
+from collections import deque
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -15,7 +12,11 @@ from ..config import (
     ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE,
     ENTROPY_DYNAMIC_WINDOWS_MIN,
     ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE,
+    ENTROPY_HUGE_WINDOWS_FILE_SIZE,
+    ENTROPY_HUGE_WINDOWS_MAX,
+    ENTROPY_MAX_BYTES,
     ENTROPY_MAX_FILE_BUDGET,
+    ENTROPY_MAX_FILES,
     ENTROPY_TARGET_WINDOW_SIZE,
 )
 
@@ -24,19 +25,19 @@ _LZ4_INCOMPRESSIBLE_THRESHOLD = 0.95
 
 def sample_directory_entropy(
     path: Path,
-    max_files: int = 45,
+    max_files: int = ENTROPY_MAX_FILES,
     chunk_size: Optional[int] = None,
-    max_bytes: int = 4 * 1024 * 1024,
+    max_bytes: int = ENTROPY_MAX_BYTES,
     *,
     skip_root_files: bool = False,
     include_subdirectories: bool = True,
-) -> tuple[Optional[float], int, int, int]:
+) -> tuple[Optional[float], int, int, int, list[str], list[str]]:
     if chunk_size is None:
         chunk_size = ENTROPY_MAX_FILE_BUDGET
     if max_files <= 0 or max_bytes <= 0:
-        return None, 0, 0, 0
+        return None, 0, 0, 0, [], []
 
-    files, root_files_skipped = _reservoir_sample_files(
+    files, root_files_skipped = _select_sample_files(
         path,
         max_files=max_files,
         include_subdirectories=include_subdirectories,
@@ -53,40 +54,45 @@ def sample_directory_entropy(
             include_subdirectories=include_subdirectories,
         )
 
-    random.shuffle(files)
-
     sampled_files = 0
     sampled_bytes = 0
-    weighted_entropy = 0.0
+    size_weighted_entropy = 0.0
+    size_total = 0
     lz4_certain_incompressible_files = 0
+    sampled_paths: list[str] = []
+    lz4_certain_paths: list[str] = []
     total_budget = max_bytes
 
-    for file_path in files:
+    for file_path, file_size in files:
         remaining = total_budget - sampled_bytes
         if remaining <= 0:
             break
 
-        per_file_budget = min(chunk_size, remaining)
+        per_file_budget = min(get_file_probe_budget(file_size), remaining)
         if per_file_budget <= 0:
             break
 
         file_entropy, file_bytes, lz4_certain = sample_file_entropy(
             file_path,
             byte_budget=per_file_budget,
+            file_size=file_size,
         )
         if file_bytes == 0:
             continue
 
         sampled_files += 1
         sampled_bytes += file_bytes
-        weighted_entropy += file_entropy
+        size_weighted_entropy += (file_entropy / file_bytes) * file_size
+        size_total += file_size
+        sampled_paths.append(str(file_path))
         if lz4_certain:
             lz4_certain_incompressible_files += 1
+            lz4_certain_paths.append(str(file_path))
 
         if sampled_bytes >= total_budget:
             break
 
-    if sampled_bytes == 0:
+    if size_total == 0:
         if skip_root_files and root_files_skipped:
             return sample_directory_entropy(
                 path,
@@ -96,29 +102,26 @@ def sample_directory_entropy(
                 skip_root_files=False,
                 include_subdirectories=include_subdirectories,
             )
-        return None, sampled_files, sampled_bytes, lz4_certain_incompressible_files
+        return None, sampled_files, sampled_bytes, lz4_certain_incompressible_files, sampled_paths, lz4_certain_paths
 
-    average_entropy = weighted_entropy / sampled_bytes
-    return average_entropy, sampled_files, sampled_bytes, lz4_certain_incompressible_files
+    average_entropy = size_weighted_entropy / size_total
+    return average_entropy, sampled_files, sampled_bytes, lz4_certain_incompressible_files, sampled_paths, lz4_certain_paths
 
 
-def _reservoir_sample_files(
+def _select_sample_files(
     root: Path,
     *,
     max_files: int,
     include_subdirectories: bool,
     skip_root_files: bool,
-) -> tuple[list[Path], bool]:
+) -> tuple[list[tuple[Path, int]], bool]:
     if max_files <= 0:
         return [], False
 
-    # Use a min-heap to keep the k items with the largest keys
-    # Heap elements: (key, path)
-    reservoir: list[tuple[float, Path]] = []
-    
-    pending = deque([root])
+    all_files: list[tuple[int, str, Path]] = []
     root_files_skipped = False
 
+    pending = deque([root])
     while pending:
         current = pending.popleft()
         try:
@@ -145,49 +148,67 @@ def _reservoir_sample_files(
                         if file_size <= 0:
                             continue
 
-                        # Weighted reservoir sampling (Efraimidis-Spirakis)
-                        # Key = u^(1/w) -> log(Key) = log(u) / w
-                        # the intent is to keep items with largest keys.
-                        # u is random in (0, 1]
-                        u = random.random()
-                        while u == 0:
-                            u = random.random()
-
-                        key = math.log(u) / file_size
-                        file_path = Path(entry.path)
-
-                        if len(reservoir) < max_files:
-                            heapq.heappush(reservoir, (key, file_path))
-                        elif key > reservoir[0][0]:
-                            heapq.heapreplace(reservoir, (key, file_path))
+                        all_files.append((file_size, str(entry.path), Path(entry.path)))
                     except OSError:
                         continue
         except OSError as exc:
             logging.debug("Unable to inspect %s for entropy: %s", current, exc)
             continue
 
-    return [path for _, path in reservoir], root_files_skipped
+    if not all_files:
+        return [], root_files_skipped
 
+    all_files.sort(key=lambda item: (-item[0], item[1]))
+
+    if len(all_files) <= max_files:
+        selected = all_files
+    else:
+        strata = max(1, max_files // 5)
+        top_k = max_files - strata
+        selected = all_files[:top_k]
+        remainder = all_files[top_k:]
+        stride = len(remainder) / strata
+        for j in range(strata):
+            selected.append(remainder[int(j * stride)])
+
+    return [(path, size) for size, _path_key, path in selected], root_files_skipped
 
 def get_sample_window_count(file_size: int) -> int:
     if file_size <= ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE:
         return ENTROPY_BASE_SAMPLE_WINDOWS
+    if file_size >= ENTROPY_HUGE_WINDOWS_FILE_SIZE:
+        return ENTROPY_HUGE_WINDOWS_MAX
+
     if file_size >= ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE:
-        return ENTROPY_DYNAMIC_WINDOWS_MAX
-    
+        ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE) / (ENTROPY_HUGE_WINDOWS_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE)
+        return int(ENTROPY_DYNAMIC_WINDOWS_MAX + ratio * (ENTROPY_HUGE_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MAX))
+
     ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE) / (ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE)
     return int(ENTROPY_DYNAMIC_WINDOWS_MIN + ratio * (ENTROPY_DYNAMIC_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MIN))
 
 
-def sample_file_entropy(path: Path, *, byte_budget: int) -> tuple[float, int, bool]:
+def get_file_probe_budget(file_size: int) -> int:
+    """
+    Total bytes to sample from one file: one target window per window slot.
+    """
+    return get_sample_window_count(file_size) * ENTROPY_TARGET_WINDOW_SIZE
+
+
+def sample_file_entropy(
+    path: Path,
+    *,
+    byte_budget: int,
+    file_size: Optional[int] = None,
+) -> tuple[float, int, bool]:
     if byte_budget <= 0:
         return 0.0, 0, False
 
-    try:
-        file_size = path.stat().st_size
-    except OSError as exc:
-        logging.debug("Unable to stat %s for entropy sampling: %s", path, exc)
-        return 0.0, 0, False
+    if file_size is None:
+        try:
+            file_size = path.stat().st_size
+        except OSError as exc:
+            logging.debug("Unable to stat %s for entropy sampling: %s", path, exc)
+            return 0.0, 0, False
 
     if file_size == 0:
         return 0.0, 0, False
@@ -310,7 +331,7 @@ def _compression_probe_entropy(sample: bytes) -> tuple[float, bool]:
     except Exception:
         pass  # Fall through to zlib
 
-    # zlib (DEFLATE = LZ77 + Huffman) matches NTFS compression algorithms,
+    # zlib matches NTFS compression algorithms,
     # giving accurate ratio estimates for LZX/XPRESS
     try:
         compressed = zlib.compress(sample, level=2)

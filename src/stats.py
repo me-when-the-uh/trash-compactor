@@ -27,21 +27,6 @@ class ProgressTimer:
         self._last_output = ""
         self._start_time: float = 0.0
 
-    def format_path(self, full_path: str, base_dir: str) -> str:
-        try:
-            rel_path = os.path.relpath(full_path, base_dir)
-        except Exception:
-            rel_path = os.path.basename(full_path)
-
-        parts = rel_path.split(os.sep)
-        if len(parts) <= 2:
-            return "/".join(parts)
-
-        # This thingy keeps the spinner readable even for deeply nested files
-        head, tail = parts[0], parts[-1]
-        middle = '...'
-        return f"{head}/{middle}/{tail}"
-
     def _spin(self) -> None:
         next_tick = time.monotonic()
         while not self._stop_event.is_set():
@@ -151,6 +136,41 @@ class DirectorySkipRecord:
 
 
 @dataclass
+class SkipBulkLedger:
+    extension: int = 0
+    extension_logical: int = 0
+    extension_hint: int = 0
+    too_small: int = 0
+    too_small_logical: int = 0
+    too_small_hint: int = 0
+    already_compressed: int = 0
+    already_compressed_logical: int = 0
+    already_compressed_hint: int = 0
+    error: int = 0
+    error_logical: int = 0
+    error_hint: int = 0
+
+    def add(self, category: str, hint: int, logical: int) -> None:
+        resolved_hint = hint if hint > 0 else logical
+        if category == "extension":
+            self.extension += 1
+            self.extension_logical += logical
+            self.extension_hint += resolved_hint
+        elif category == "too_small":
+            self.too_small += 1
+            self.too_small_logical += logical
+            self.too_small_hint += resolved_hint
+        elif category == "already_compressed":
+            self.already_compressed += 1
+            self.already_compressed_logical += logical
+            self.already_compressed_hint += resolved_hint
+        elif category == "error":
+            self.error += 1
+            self.error_logical += logical
+            self.error_hint += resolved_hint
+
+
+@dataclass
 class EntropySampleRecord:
     path: str
     relative_path: str
@@ -160,14 +180,8 @@ class EntropySampleRecord:
     sampled_bytes: int
     total_bytes: int
     lz4_certain_files: int = 0
-
-
-@dataclass
-class FileSkipRecord:
-    path: str
-    relative_path: str
-    reason: str
-    category: str = "generic"
+    sampled_paths: List[str] = field(default_factory=list)
+    lz4_certain_paths: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -177,6 +191,7 @@ class CompressionStats:
     already_compressed_files: int = 0
     excluded_files: int = 0
     total_original_size: int = 0
+    total_on_disk_size: int = 0
     total_compressed_size: int = 0
     total_skipped_size: int = 0
     total_skipped_physical_size: int = 0
@@ -187,7 +202,6 @@ class CompressionStats:
     errors: List[str] = field(default_factory=list)
     directory_skips: List[DirectorySkipRecord] = field(default_factory=list)
     entropy_samples: List[EntropySampleRecord] = field(default_factory=list)
-    file_skips: List[FileSkipRecord] = field(default_factory=list)
     base_dir: Optional[Path] = None
     entropy_directories_sampled: int = 0
     entropy_directories_below_threshold: int = 0
@@ -196,8 +210,8 @@ class CompressionStats:
     min_savings_percent: float = 0.0
     entropy_report_threshold_bytes: int = 0
     entropy_projected_original_bytes: int = 0
-    entropy_projected_compressed_bytes: int = 0
-    entropy_projected_compressed_bytes_conservative: int = 0
+    entropy_projected_size: int = 0
+    entropy_projected_size_conservative: int = 0
     lz4_certain_incompressible_files: int = 0
 
     def set_base_dir(self, base_dir: Path) -> None:
@@ -213,11 +227,96 @@ class CompressionStats:
         already_compressed: bool = False,
         category: Optional[str] = None,
     ) -> None:
+        self._record_skip(
+            size_hint,
+            original_size,
+            already_compressed,
+            self._classify_skip(reason, already_compressed, category),
+        )
+
+    def record_file_skip_counters(
+        self,
+        size_hint: int,
+        original_size: int,
+        *,
+        already_compressed: bool = False,
+        category: Optional[str] = None,
+    ) -> None:
+        self._record_skip(size_hint, original_size, already_compressed, category)
+
+    def record_bulk_skips(self, ledger: SkipBulkLedger) -> None:
+        self._record_skip_batch(
+            ledger.extension,
+            ledger.extension_hint,
+            ledger.extension_logical,
+            already_compressed=False,
+            category="extension",
+        )
+        self._record_skip_batch(
+            ledger.too_small,
+            ledger.too_small_hint,
+            ledger.too_small_logical,
+            already_compressed=False,
+            category="too_small",
+        )
+        self._record_skip_batch(
+            ledger.already_compressed,
+            ledger.already_compressed_hint,
+            ledger.already_compressed_logical,
+            already_compressed=True,
+            category="already_compressed",
+        )
+        self._record_skip_batch(
+            ledger.error,
+            ledger.error_hint,
+            ledger.error_logical,
+            already_compressed=False,
+            category="error",
+        )
+
+    def _record_skip_batch(
+        self,
+        count: int,
+        hint_total: int,
+        logical_total: int,
+        *,
+        already_compressed: bool,
+        category: Optional[str],
+    ) -> None:
+        if count <= 0:
+            return
+        self.skipped_files += count
+        if hint_total > 0:
+            self.total_skipped_physical_size += hint_total
+            self.total_compressed_size += hint_total
+        if logical_total > 0:
+            self.total_skipped_size += logical_total
+        if already_compressed:
+            self.already_compressed_files += count
+            if logical_total > 0:
+                self.already_compressed_logical_size += logical_total
+            if hint_total > 0:
+                self.already_compressed_physical_size += hint_total
+        else:
+            self.excluded_files += count
+            if logical_total > 0:
+                self.excluded_logical_size += logical_total
+            if hint_total > 0:
+                self.excluded_physical_size += hint_total
+        if category == "extension":
+            self.skip_extension_files += count
+
+    def _record_skip(
+        self,
+        size_hint: int,
+        original_size: int,
+        already_compressed: bool,
+        category: Optional[str],
+    ) -> None:
         resolved_hint = size_hint if size_hint > 0 else original_size
         self.skipped_files += 1
         if resolved_hint > 0:
             self.total_skipped_physical_size += resolved_hint
-        if resolved_hint > 0:
             self.total_compressed_size += resolved_hint
         if original_size > 0:
             self.total_skipped_size += original_size
@@ -233,32 +332,10 @@ class CompressionStats:
                 self.excluded_logical_size += original_size
             if resolved_hint > 0:
                 self.excluded_physical_size += resolved_hint
-
-        resolved_category = self._classify_skip(reason, already_compressed, category)
-        if resolved_category == 'extension':
+        if category == 'extension':
             self.skip_extension_files += 1
-        elif resolved_category == 'high_entropy':
+        elif category == 'high_entropy':
             self.skip_low_savings_files += 1
-
-        relative = str(file_path)
-        base = self.base_dir
-        if base is not None:
-            try:
-                relative = str(file_path.relative_to(base))
-            except ValueError:
-                try:
-                    relative = str(file_path.resolve().relative_to(base))
-                except Exception:
-                    relative = str(file_path)
-
-        self.file_skips.append(
-            FileSkipRecord(
-                path=str(file_path),
-                relative_path=relative,
-                reason=reason,
-                category=resolved_category,
-            )
-        )
 
     def _classify_skip(
         self,
@@ -279,14 +356,42 @@ class CompressionStats:
         return 'generic'
 
 
-def _format_sample_bytes(value: int) -> str:
-    if value >= 1024 * 1024:
-        return f"{value / (1024 * 1024):.1f} MB"
-    if value >= 1024:
-        return f"{value / 1024:.1f} KB"
-    if value > 0:
-        return f"{value} B"
-    return "0 B"
+def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int, str]]) -> None:
+    from .config import DRY_RUN_CONSERVATIVE_FACTORS, SIZE_THRESHOLDS
+
+    # Files above the largest size threshold would use LZX when enabled.
+    lzx_size_threshold = SIZE_THRESHOLDS[-1][0]  # 1MB
+
+    stats.entropy_projected_original_bytes = stats.total_original_size
+    entropy_map = {Path(record.path): record for record in stats.entropy_samples}
+
+    projected_lzx = 0.0
+    projected_xpress = 0.0
+    for path_str, size, algo in plan:
+        record = entropy_map.get(Path(path_str).parent)
+        if record:
+            factor = max(0.0, record.estimated_savings / 100.0)
+            base_compressed = size * (1.0 - factor)
+
+            is_large_file = algo == 'LZX' or (algo == 'XPRESS16K' and size > lzx_size_threshold)
+
+            if is_large_file:
+                lzx_factor = DRY_RUN_CONSERVATIVE_FACTORS.get('LZX', 0.95)
+                xpress_factor = DRY_RUN_CONSERVATIVE_FACTORS.get('XPRESS16K', 1.0)
+                projected_lzx += base_compressed * lzx_factor
+                projected_xpress += base_compressed * xpress_factor
+            else:
+                # Non-large files: same factor for both projections.
+                algo_factor = DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.0)
+                projected_lzx += base_compressed * algo_factor
+                projected_xpress += base_compressed * algo_factor
+        else:
+            projected_lzx += size
+            projected_xpress += size
+
+    skipped = stats.total_compressed_size
+    stats.entropy_projected_size = int(round(projected_lzx + skipped))
+    stats.entropy_projected_size_conservative = int(round(projected_xpress + skipped))
 
 
 def _format_summary_size(value: int) -> str:
@@ -356,8 +461,8 @@ def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, v
     print_dry_run_summary(
         min_savings_percent=min_savings_percent,
         projected_original_bytes=stats.entropy_projected_original_bytes,
-        projected_compressed_lzx_bytes=stats.entropy_projected_compressed_bytes,
-        projected_compressed_xpress_bytes=stats.entropy_projected_compressed_bytes_conservative,
+        projected_compressed_lzx_bytes=stats.entropy_projected_size,
+        projected_compressed_xpress_bytes=stats.entropy_projected_size_conservative,
     )
 
 
@@ -399,9 +504,4 @@ def print_compression_summary(stats: CompressionStats) -> None:
         logging.info(_("\nErrors encountered:"))
         for error in stats.errors:
             logging.error(error)
-
-    # if stats.file_skips:
-    #     logging.info("\nSkipped files detail:")
-    #     for record in stats.file_skips:
-    #         logging.info(" - %s: %s", record.relative_path, record.reason)
 

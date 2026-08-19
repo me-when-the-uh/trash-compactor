@@ -1,0 +1,24 @@
+[package]
+name = "fast_walk"
+version = "0.1.0"
+edition = "2021"
+description = "Parallel directory walk + stat + filter for trash-compactor"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+rayon = "1"
+flate2 = "1"
+lz4 = "1.28"
+memmap2 = "0.9"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = "symbols"

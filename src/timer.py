@@ -16,6 +16,7 @@ class TimingStats:
     files_compressed: int = 0
     files_skipped: int = 0
     files_analyzed_for_entropy: int = 0
+    directories_analyzed_for_entropy: int = 0
 
 
     @property
@@ -101,29 +102,6 @@ class TimingStats:
         if span <= 0 or self.total_time <= 0:
             return False
         return (span / self.total_time) * 100.0 >= float(min_percent)
-
-
-class Timer:
-    def __init__(self, name: str = "operation", log_on_exit: bool = False) -> None:
-        self.name = name
-        self.log_on_exit = log_on_exit
-        self.start_time: Optional[float] = None
-        self.elapsed: float = 0.0
-
-    def __enter__(self) -> "Timer":
-        self.start_time = time.perf_counter()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
-        if self.start_time is None:
-            return False
-        self.elapsed = time.perf_counter() - self.start_time
-        if self.log_on_exit:
-            logging.debug("%s took %.3fs", self.name, self.elapsed)
-        return False
-
-    def get_elapsed(self) -> float:
-        return time.perf_counter() - self.start_time if self.start_time is not None else 0.0
 
 
 class PerformanceMonitor:

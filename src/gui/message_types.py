@@ -64,15 +64,10 @@ class GuiResponse:
 
 
 @dataclass
-class SelectFolderRequest(GuiRequest):
-    type: str = field(init=False, default="SelectFolder")
-
-
-@dataclass
 class StartCompressionRequest(GuiRequest):
     type: str = field(init=False, default="StartCompression")
     path: str = ""
-    min_savings: float = 18.0
+    min_savings: Optional[float] = None
 
 
 @dataclass
@@ -104,18 +99,14 @@ class GetQuickCompressionTargetsRequest(GuiRequest):
 @dataclass
 class StartQuickCompressionRequest(GuiRequest):
     type: str = field(init=False, default="StartQuickCompression")
-
-
-@dataclass
-class GetProgressUpdateRequest(GuiRequest):
-    type: str = field(init=False, default="GetProgressUpdate")
+    compactos: bool = False
 
 
 @dataclass
 class SaveConfigRequest(GuiRequest):
     type: str = field(init=False, default="SaveConfig")
     decimal: bool = False
-    min_savings: float = 18.0
+    min_savings: float = 15.0
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
@@ -127,31 +118,15 @@ class ResetConfigRequest(GuiRequest):
 
 
 @dataclass
-class ChooseFolderRequest(GuiRequest):
-    type: str = field(init=False, default="ChooseFolder")
-
-
-@dataclass
-class OpenUrlRequest(GuiRequest):
-    type: str = field(init=False, default="OpenUrl")
-    url: str = ""
-
-
-@dataclass
 class ConfigResponse(GuiResponse):
     type: str = field(init=False, default="Config")
     decimal: bool = False
-    min_savings: float = 18.0
+    min_savings: float = 15.0
     no_lzx: bool = False
     force_lzx: bool = False
     single_worker: bool = False
+    hdd_mode: bool = False
     lzx_warning: str = ""
-
-
-@dataclass
-class FolderResponse(GuiResponse):
-    type: str = field(init=False, default="Folder")
-    path: str = ""
 
 
 @dataclass
@@ -182,6 +157,16 @@ class ProgressUpdateResponse(GuiResponse):
     status: str = ""
     pct: Optional[float] = None
     quick_history: bool = False
+    final: bool = False
+
+
+@dataclass
+class CompactOSIndicatorResponse(GuiResponse):
+    type: str = field(init=False, default="CompactOSIndicator")
+    show: bool = False
+    text: str = ""
+    done: bool = False
+    saved_bytes: int = 0
 
 
 @dataclass
@@ -199,49 +184,3 @@ class WarningResponse(GuiResponse):
     title: str = ""
     message: str = ""
 
-
-def parse_request(data: str) -> Optional[GuiRequest]:
-    """Parse JSON request string into appropriate GuiRequest subclass."""
-    try:
-        obj = json.loads(data)
-        req_type = obj.get("type")
-
-        if req_type == "SelectFolder":
-            return SelectFolderRequest()
-        elif req_type == "StartCompression":
-            return StartCompressionRequest(
-                path=obj.get("path", ""),
-                min_savings=obj.get("min_savings", 18.0),
-            )
-        elif req_type == "PauseCompression":
-            return PauseCompressionRequest()
-        elif req_type == "ResumeCompression":
-            return ResumeCompressionRequest()
-        elif req_type == "StopCompression":
-            return StopCompressionRequest()
-        elif req_type == "AnalyseFolder":
-            return AnalyseFolderRequest(path=obj.get("path", ""))
-        elif req_type == "GetQuickCompressionTargets":
-            return GetQuickCompressionTargetsRequest()
-        elif req_type == "StartQuickCompression":
-            return StartQuickCompressionRequest()
-        elif req_type == "GetProgressUpdate":
-            return GetProgressUpdateRequest()
-        elif req_type == "SaveConfig":
-            return SaveConfigRequest(
-                decimal=obj.get("decimal", False),
-                min_savings=float(obj.get("min_savings", 18.0)),
-                no_lzx=obj.get("no_lzx", False),
-                force_lzx=obj.get("force_lzx", False),
-                single_worker=obj.get("single_worker", False),
-            )
-        elif req_type == "ResetConfig":
-            return ResetConfigRequest()
-        elif req_type == "ChooseFolder":
-            return ChooseFolderRequest()
-        elif req_type == "OpenUrl":
-            return OpenUrlRequest(url=obj.get("url", ""))
-    except Exception:
-        pass
-
-    return None

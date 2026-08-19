@@ -7,13 +7,33 @@ from typing import Callable, Iterator, Optional, Sequence
 
 from ..i18n import _
 from ..config import COMPRESSION_ALGORITHMS
+from ..exceptions import WorkerStopped
 from ..file_utils import is_file_compressed
 from ..stats import CompressionStats
 from ..timer import PerformanceMonitor
+from ..workers import hdd_mode
 
 _BATCH_SIZE = 100
+_HDD_BATCH_SIZE = 25
 _MAX_COMMAND_CHARS = 4000
-_COMPACT_TIMEOUT_SECONDS = 300
+_HDD_MAX_COMMAND_CHARS = 1500
+_COMPACT_TIMEOUT_SECONDS = 600
+_SINGLE_FILE_TIMEOUT_SECONDS = 60
+
+
+def _batch_limits() -> tuple[int, int]:
+    if hdd_mode():
+        return _HDD_BATCH_SIZE, _HDD_MAX_COMMAND_CHARS
+    return _BATCH_SIZE, _MAX_COMMAND_CHARS
+
+
+def _compact_path(path_str: str) -> str:
+    resolved = str(Path(path_str).resolve())
+    if resolved.startswith("\\\\?\\"):
+        stripped = resolved[4:]
+        if len(stripped) < 260:
+            return stripped
+    return resolved
 
 
 def _hidden_startupinfo() -> subprocess.STARTUPINFO:
@@ -22,7 +42,12 @@ def _hidden_startupinfo() -> subprocess.STARTUPINFO:
     return startupinfo
 
 
-def _run_compact(args: Sequence[str], *, capture: bool = False) -> subprocess.CompletedProcess:
+def _run_compact(
+    args: Sequence[str],
+    *,
+    capture: bool = False,
+    timeout: int = _COMPACT_TIMEOUT_SECONDS,
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
         stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
@@ -30,15 +55,15 @@ def _run_compact(args: Sequence[str], *, capture: bool = False) -> subprocess.Co
         startupinfo=_hidden_startupinfo(),
         shell=False,
         text=capture,
-        timeout=_COMPACT_TIMEOUT_SECONDS,
+        timeout=timeout,
     )
 
 
-def compress_file(file_path: Path, algorithm: str) -> bool:
+def compress_file(file_path: Path, algorithm: str, *, timeout: int = _COMPACT_TIMEOUT_SECONDS) -> bool:
     try:
         # compact /c /a /exe:{algorithm} "{file_path}"
-        command = ['compact', '/c', '/a', f'/exe:{algorithm}', str(file_path.resolve())]
-        result = _run_compact(command)
+        command = ['compact', '/c', '/a', f'/exe:{algorithm}', _compact_path(str(file_path))]
+        result = _run_compact(command, timeout=timeout)
         return result.returncode == 0
     except (OSError, subprocess.SubprocessError) as exc:
         logging.error("Error compressing %s: %s", file_path, exc)
@@ -46,7 +71,7 @@ def compress_file(file_path: Path, algorithm: str) -> bool:
 
 
 def execute_compression_plan(
-    plan: Sequence[tuple[Path, int, str]],
+    plan: Sequence[tuple[str, int, str]],
     stats: CompressionStats,
     monitor: PerformanceMonitor,
     verbosity: int,
@@ -63,27 +88,28 @@ def execute_compression_plan(
     stats_lock = threading.Lock()
     progress_lock = threading.Lock()
 
-    def _chunk(entries: Sequence[tuple[Path, int]], size: int) -> Iterator[list[tuple[Path, int]]]:
+    def _chunk(entries: Sequence[tuple[str, int]]) -> Iterator[list[tuple[str, int]]]:
         current = []
         current_length = 0
+        batch_size, max_chars = _batch_limits()
 
-        for path, file_size in entries:
-            path_length = len(str(path.resolve())) + 3  # for quotes and space
-            if current and (len(current) >= size or current_length + path_length > _MAX_COMMAND_CHARS):
+        for path_str, file_size in entries:
+            path_length = len(_compact_path(path_str)) + 3  # for quotes and space
+            if current and (len(current) >= batch_size or current_length + path_length > max_chars):
                 yield current
                 current = []
                 current_length = 0
 
-            current.append((path, file_size))
+            current.append((path_str, file_size))
             current_length += path_length
 
         if current:
             yield current
 
-    def _compact_batch(algo: str, paths: Sequence[Path]) -> subprocess.CompletedProcess:
+    def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
         # compact /c /a /exe:{algo} path1 path2 ...
         args = ['compact', '/c', '/a', f'/exe:{algo}']
-        args.extend(str(path.resolve()) for path in paths)
+        args.extend(_compact_path(path_str) for path_str in path_strs)
         return _run_compact(args)
 
     def _record_error(message: str) -> None:
@@ -98,7 +124,7 @@ def execute_compression_plan(
             logging.debug("Compressed %s using %s", path, algo)
         else:
             # Verification failed to show size change, so we don't count it as compressed
-            if verbosity >= 2:
+            if verbosity >= 1:
                 logging.warning(
                     "Compressed %s using %s but verification reported no size change",
                     path,
@@ -127,6 +153,8 @@ def execute_compression_plan(
         with progress_lock:
             try:
                 progress_callback(path, algo)
+            except WorkerStopped:
+                raise
             except Exception:  # pragma: no cover - defensive logging
                 logging.debug("Progress callback failed for %s", path, exc_info=True)
 
@@ -140,8 +168,14 @@ def execute_compression_plan(
         else:
             _record_success(path, compressed_size, algo, verified)
 
-    def _compress_single(path: Path, file_size: int, algo: str) -> None:
-        success = compress_file(path, algo)
+    def _compress_single(
+        path: Path,
+        file_size: int,
+        algo: str,
+        *,
+        timeout: int = _SINGLE_FILE_TIMEOUT_SECONDS,
+    ) -> None:
+        success = compress_file(path, algo, timeout=timeout)
 
         if not success:
             _record_failure(path, file_size, algo)
@@ -149,13 +183,13 @@ def execute_compression_plan(
 
         _finalize_success(path, file_size, algo, context='fallback')
 
-    grouped = {}
-    for path, size, algorithm in plan:
-        grouped.setdefault(algorithm, []).append((path, size))
+    grouped: dict[str, list[tuple[str, int]]] = {}
+    for path_str, size, algorithm in plan:
+        grouped.setdefault(algorithm, []).append((path_str, size))
 
     for algorithm, entries in grouped.items():
         workers = lzx_workers if algorithm == 'LZX' else xp_workers
-        batches = list(_chunk(entries, _BATCH_SIZE))
+        batches = list(_chunk(entries))
 
         if stage_callback:
             try:
@@ -168,7 +202,7 @@ def execute_compression_plan(
                 executor.submit(
                     _compact_batch,
                     algorithm,
-                    [path for path, _ in batch],
+                    [path_str for path_str, _ in batch],
                 ): batch
                 for batch in batches
             }
@@ -178,6 +212,8 @@ def execute_compression_plan(
 
                 try:
                     result = future.result()
+                except WorkerStopped:
+                    raise
                 except Exception as exc:
                     logging.error(
                         "Batch compression exception (%s files, algo=%s): %s. Retrying individually.",
@@ -185,9 +221,10 @@ def execute_compression_plan(
                         algorithm,
                         exc,
                     )
-                    for path, file_size in batch:
+                    for path_str, file_size in batch:
+                        path = Path(path_str)
                         _record_error(_("Batch exception for {path}: {exc}").format(path=path, exc=exc))
-                        _compress_single(path, file_size, algorithm)
+                        _compress_single(path, file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
                     continue
 
                 if result.returncode != 0:
@@ -197,9 +234,9 @@ def execute_compression_plan(
                         algorithm,
                         len(batch),
                     )
-                    for path, file_size in batch:
-                        _compress_single(path, file_size, algorithm)
+                    for path_str, file_size in batch:
+                        _compress_single(Path(path_str), file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
                     continue
 
-                for path, file_size in batch:
-                    _finalize_success(path, file_size, algorithm, context='batch')
+                for path_str, file_size in batch:
+                    _finalize_success(Path(path_str), file_size, algorithm, context='batch')

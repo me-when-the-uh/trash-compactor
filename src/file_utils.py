@@ -1,4 +1,3 @@
-import bisect
 import ctypes
 import logging
 import os
@@ -7,11 +6,10 @@ import subprocess
 from dataclasses import dataclass
 from ctypes import wintypes
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from .i18n import _
-from .config import DEFAULT_EXCLUDE_DIRECTORIES, MIN_COMPRESSIBLE_SIZE, SIZE_THRESHOLDS, SKIP_EXTENSIONS
-from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, is_hard_drive, get_volume_details
+from .drive_inspector import DRIVE_REMOTE, get_volume_details
 
 
 def sanitize_path(path: str) -> str:
@@ -27,23 +25,94 @@ def is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
-def hide_console_window() -> None:
-    try:
-        import ctypes
-        hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-        if hwnd:
-            ctypes.windll.user32.ShowWindow(hwnd, 0)  # SW_HIDE = 0
-    except (AttributeError, OSError):
-        # If console window is unavailable
-        pass
-
-
 def _normalize_for_compare(path: str | Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(path)))
     if len(normalized) == 2 and normalized[1] == ':':
         return normalized + os.sep
     return normalized
 
+
+def _fixed_drive_roots() -> tuple[str, ...]:
+    try:
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        _get_drive_type = kernel32.GetDriveTypeW
+        _get_drive_type.argtypes = [wintypes.LPCWSTR]
+        _get_drive_type.restype = wintypes.UINT
+        _logical_drives = kernel32.GetLogicalDrives
+        _logical_drives.restype = wintypes.DWORD
+
+        DRIVE_FIXED = 3
+        bitmask = _logical_drives()
+        roots: list[str] = []
+        for index in range(26):
+            if bitmask & (1 << index):
+                root = f"{chr(ord('A') + index)}:\\"
+                if _get_drive_type(root) == DRIVE_FIXED:
+                    roots.append(root)
+        if roots:
+            return tuple(roots)
+    except Exception:
+        pass
+
+    # Fallback: only the system drive.
+    system_drive = os.environ.get('SystemDrive', 'C:')
+    return (system_drive if system_drive.endswith(('\\', '/')) else f"{system_drive}\\",)
+
+
+def _default_excluded_directories() -> tuple[str, ...]:
+    system_root = os.environ.get('SystemRoot') or ''
+    system_root_norm = os.path.normcase(os.path.normpath(system_root)) if system_root else ''
+
+    def _drive_path(root: str, segment: str) -> str:
+        return os.path.join(root, segment)
+
+    entries: list[str] = []
+
+    for drive_root in _fixed_drive_roots():
+        # The active Windows install may live on any fixed drive; always exclude
+        # it, even if SystemDrive does not point at it.
+        windows_root = _drive_path(drive_root, 'Windows')
+        if not system_root_norm or os.path.normcase(os.path.normpath(windows_root)) == system_root_norm:
+            entries.append(windows_root)
+
+        # Stale installs: Windows.old is always protected at the drive root, and
+        # Windows.old.NNN (e.g. Windows.old.000) via the dotted-prefix entry.
+        entries.append(_drive_path(drive_root, 'Windows.old'))
+        entries.append(_drive_path(drive_root, 'Windows.old.'))
+        try:
+            with os.scandir(drive_root) as it:
+                for entry in it:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    name = entry.name
+                    if name.lower().startswith('windows.old') and (
+                        len(name) == len('windows.old') or name[len('windows.old')] == '.'
+                    ):
+                        entries.append(entry.path)
+        except OSError:
+            pass
+
+        # Protected directories on every fixed drive
+        for segment in ('$Recycle.Bin', 'System Volume Information', 'Recovery', 'PerfLogs'):
+            entries.append(_drive_path(drive_root, segment))
+
+    if not entries:
+        entries.append(os.environ.get('SystemRoot') or system_root)
+
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for entry in entries:
+        if not entry:
+            continue
+        normalized = os.path.normcase(os.path.normpath(entry))
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        cleaned.append(os.path.normpath(entry))
+    return tuple(cleaned)
+
+
+DEFAULT_EXCLUDE_DIRECTORIES: Tuple[str, ...] = _default_excluded_directories()
 
 _DEFAULT_EXCLUDE_MAP: dict[str, str] = {
     _normalize_for_compare(candidate): os.path.normpath(candidate)
@@ -58,12 +127,13 @@ def _match_exclusion(normalized: str) -> tuple[bool, Optional[str]]:
         prefix = excluded_norm + os.sep
         if normalized.startswith(prefix):
             return True, _("Within protected system directory ({display})").format(display=display)
+        # Dotted namespace prefix (e.g. C:\Windows.old.000 under Windows.old.).
+        if excluded_norm.endswith(os.sep + "windows.old.") and normalized.startswith(excluded_norm):
+            return True, _("Within protected system directory ({display})").format(display=display)
     return False, None
 
 
-_SIZE_BREAKS, _SIZE_LABELS = zip(*SIZE_THRESHOLDS)
 from .drive_inspector import KERNEL32
-
 _FILE_ATTRIBUTE_COMPRESSED = getattr(stat, 'FILE_ATTRIBUTE_COMPRESSED', 0x800)
 
 _GET_COMPRESSED_FILE_SIZE = KERNEL32.GetCompressedFileSizeW
@@ -74,12 +144,15 @@ def get_ntfs_compressed_size(file_path: str | Path) -> int:
     high = wintypes.DWORD()
     low = _GET_COMPRESSED_FILE_SIZE(str(file_path), ctypes.byref(high))
     if low == 0xFFFFFFFF:
+        # GetCompressedFileSizeW returns INVALID_FILE_SIZE (0xFFFFFFFF) as the
+        # low DWORD for both failure AND for legitimate sizes >= 4 GiB where
+        # the high DWORD is non-zero. This right here is the correct error identifier
         error = ctypes.get_last_error()
         if error:
             raise ctypes.WinError(error)
     return (high.value << 32) + low
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DirectoryDecision:
     skip: bool
     reason: str = ""
@@ -97,46 +170,12 @@ class DirectoryDecision:
         return cls(False, "")
 
 
-@dataclass(frozen=True)
-class CompressionDecision:
-    should_compress: bool
-    reason: str
-    size_hint: int = 0
-    category: str = "generic"
-    already_compressed: bool = False
-
-    @classmethod
-    def allow(cls, size_hint: int) -> "CompressionDecision":
-        return cls(True, _("File eligible for compression"), size_hint, "eligible", False)
-
-    @classmethod
-    def deny(
-        cls,
-        reason: str,
-        size_hint: int = 0,
-        category: str = "generic",
-        already_compressed: bool = False,
-    ) -> "CompressionDecision":
-        return cls(False, reason, size_hint, category, already_compressed)
-
-
-def get_size_category(file_size: int) -> str:
-    index = bisect.bisect_right(_SIZE_BREAKS, file_size)
-    return _SIZE_LABELS[index] if index < len(_SIZE_LABELS) else 'large'
-
-
-def should_skip_directory(directory: Path) -> DirectoryDecision:
+def should_skip_directory(directory: str | Path) -> DirectoryDecision:
     normalized = _normalize_for_compare(directory)
     match, reason = _match_exclusion(normalized)
     if match:
         return DirectoryDecision.deny(reason or _("Protected system directory"))
     return DirectoryDecision.allow_path()
-
-
-def is_protected_path(path: str | Path) -> bool:
-    normalized = _normalize_for_compare(path)
-    match, _ = _match_exclusion(normalized)
-    return match
 
 
 def get_protection_reason(path: str | Path) -> Optional[str]:
@@ -149,6 +188,37 @@ def describe_protected_path(directory: str) -> Optional[str]:
     return get_protection_reason(directory)
 
 
+def validate_target_path(directory: str) -> Optional[str]:
+    """Return a reason the target cannot be compressed, or None if it can.
+
+    Covers the structural checks shared by the CLI and GUI: protected system
+    paths, unresolvable volumes, network shares, and non-NTFS filesystems.
+    """
+    candidate = sanitize_path(directory)
+    if not candidate:
+        return _("No folder selected")
+
+    protection_reason = describe_protected_path(candidate)
+    if protection_reason:
+        return _("Cannot compress protected path: {reason}").format(reason=protection_reason)
+
+    from .drive_inspector import get_volume_details_fast
+
+    details = get_volume_details_fast(candidate)
+    if details.anchor is None:
+        return _("Unable to resolve the target volume. Please verify the path.")
+
+    if details.drive_type == DRIVE_REMOTE:
+        return _("Network shares are not supported targets for compression.")
+
+    if details.filesystem and details.filesystem != "NTFS":
+        return _(
+            "Windows compression requires NTFS. Detected filesystem: {filesystem}"
+        ).format(filesystem=details.filesystem or "unknown")
+
+    return None
+
+
 def is_file_compressed(
     file_path: str | Path, 
     *,
@@ -159,7 +229,7 @@ def is_file_compressed(
         try:
             stat_info = os.stat(file_path)
             actual_size = stat_info.st_size
-            attributes = stat_info.st_file_attributes
+            attributes = getattr(stat_info, "st_file_attributes", 0)
         except OSError as exc:
             logging.error("Failed to get actual file size for %s: %s", file_path, exc)
             return False, 0
@@ -177,55 +247,5 @@ def is_file_compressed(
         return True, compressed_size
 
     return False, compressed_size
-
-
-def should_compress_file(
-    file_path: str | Path,
-    *,
-    file_size: Optional[int] = None,
-    attributes: Optional[int] = None,
-    ignore_extensions: bool = False,
-    check_already_compressed: bool = True,
-) -> CompressionDecision:
-    if isinstance(file_path, str):
-        suffix = os.path.splitext(file_path)[1].lower()
-    else:
-        suffix = file_path.suffix.lower()
-
-    if not ignore_extensions and suffix in SKIP_EXTENSIONS:
-        return CompressionDecision.deny(
-            _("Skipped due to extension {suffix}").format(suffix=suffix),
-            category="extension",
-        )
-
-    try:
-        resolved_size = file_size if file_size is not None else os.stat(file_path).st_size
-    except OSError as exc:
-        logging.error("Failed to stat %s: %s", file_path, exc)
-        return CompressionDecision.deny(
-            _("Unable to read file size: {exc}").format(exc=exc),
-            category="error",
-        )
-
-    if resolved_size < MIN_COMPRESSIBLE_SIZE:
-        return CompressionDecision.deny(
-            _("File too small ({size} bytes)").format(size=resolved_size),
-            resolved_size,
-            category="too_small",
-        )
-
-    if check_already_compressed:
-        is_compressed, compressed_size = is_file_compressed(
-            file_path, actual_size=resolved_size, attributes=attributes
-        )
-        if is_compressed:
-            return CompressionDecision.deny(
-                _("File is already compressed"),
-                compressed_size,
-                category="already_compressed",
-                already_compressed=True,
-            )
-
-    return CompressionDecision.allow(resolved_size)
 
 
