@@ -9,12 +9,8 @@ from colorama import Fore, Style
 
 from . import config, benchmark
 from .console import EscapeExit, announce_cancelled, read_user_input
-from .file_utils import (
-    DRIVE_FIXED,
-    DRIVE_REMOTE,
-    get_volume_details,
-    sanitize_path,
-)
+from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, get_volume_details
+from .file_utils import sanitize_path
 from .launch_flags import (
     FLAG_HELP_COMMANDS,
     LaunchState,

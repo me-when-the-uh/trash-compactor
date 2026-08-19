@@ -4,7 +4,7 @@
     "\nPress Enter twice to exit...": "\nPressione Enter duas vezes para sair...",
     "\nPress Esc twice to exit, or use Ctrl+C.": "\nPressione Esc duas vezes para sair, ou use Ctrl+C.",
     "Exiting...": "Saindo...",
-    "Set verbosity level (-v/-vvvv); repeat same level to disable": "Definir nível de verbosidade (-v/-vvvv); repita o mesmo nível para desativar",
+    "Set verbosity level (-v/-vvv); repeat same level to disable": "Definir nível de verbosidade (-v/-vvv); repita o mesmo nível para desativar",
     "Disable LZX compression": "Desativar compressão LZX",
     "Force LZX compression": "Forçar compressão LZX",
     "Dry-run entropy analysis": "Simulação da análise de entropia",
@@ -37,8 +37,7 @@
     "Error: Cannot disable and force LZX compression at the same time.": "Erro: Não é possível desativar e forçar a compressão LZX ao mesmo tempo.",
     "Verbosity level 1: cache decisions and summary stats": "Nível de verbosidade 1: decisões de cache e estatísticas resumidas",
     "Verbosity level 2: include stage-level progress and verification warnings": "Nível de verbosidade 2: incluir progresso por estágio e avisos de verificação",
-    "Verbosity level 3: extended diagnostics for skipped files": "Nível de verbosidade 3: diagnósticos estendidos para arquivos pulados",
-    "Verbosity level 4: full debug logging enabled": "Nível de verbosidade 4: log de depuração completo ativado",
+    "Verbosity level 3: full debug logging enabled": "Nível de verbosidade 3: log de depuração completo ativado",
     "This script requires administrator privileges": "Este script requer privilégios de administrador",
     "Running with administrator privileges.": "Executando com privilégios de administrador.",
     "Running without administrator privileges. Some protected files may be skipped.": "Executando sem privilégios de administrador. Alguns arquivos protegidos podem ser ignorados.",
@@ -264,5 +263,8 @@
     "It is recommended to disable LZX compression for this system.": "Recomenda-se desativar a compressão LZX neste sistema.",
     "Scanning complete": "Varredura concluída",
     "Done compressing Windows binaries.": "Compressão dos binários do Windows concluída.",
+    "CompactOS compression stopped.": "Compactação CompactOS interrompida.",
+    "\nStopped by user.": "\nParado pelo usuário.",
+    "Analysis failed for {directory}: {exc}": "Falha na análise de {directory}: {exc}",
     "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt": "Falha ao iniciar a GUI: pywebview não está incluído neste executável. Recompile após executar: python -m pip install -r requirements.txt"
 }

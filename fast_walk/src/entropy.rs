@@ -12,14 +12,53 @@ use std::sync::{Arc, Mutex};
 
 const LZ4_INCOMPRESSIBLE_THRESHOLD: f64 = 0.95;
 
-const ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: u64 = 2 * 1024 * 1024;
-const ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
-const ENTROPY_HUGE_WINDOWS_FILE_SIZE: u64 = 256 * 1024 * 1024;
-const ENTROPY_BASE_SAMPLE_WINDOWS: u32 = 3;
-const ENTROPY_DYNAMIC_WINDOWS_MIN: u32 = 4;
-const ENTROPY_DYNAMIC_WINDOWS_MAX: u32 = 20;
-const ENTROPY_HUGE_WINDOWS_MAX: u32 = 40;
-const ENTROPY_TARGET_WINDOW_SIZE: u64 = 16 * 1024;
+#[pyclass]
+#[derive(Clone)]
+pub struct EntropyParams {
+    #[pyo3(get)]
+    pub dynamic_windows_min_file_size: u64,
+    #[pyo3(get)]
+    pub dynamic_windows_max_file_size: u64,
+    #[pyo3(get)]
+    pub huge_windows_file_size: u64,
+    #[pyo3(get)]
+    pub base_sample_windows: u32,
+    #[pyo3(get)]
+    pub dynamic_windows_min: u32,
+    #[pyo3(get)]
+    pub dynamic_windows_max: u32,
+    #[pyo3(get)]
+    pub huge_windows_max: u32,
+    #[pyo3(get)]
+    pub target_window_size: u64,
+}
+
+#[pymethods]
+impl EntropyParams {
+    #[new]
+    #[pyo3(signature = (dynamic_windows_min_file_size, dynamic_windows_max_file_size, huge_windows_file_size, base_sample_windows, dynamic_windows_min, dynamic_windows_max, huge_windows_max, target_window_size))]
+    fn new(
+        dynamic_windows_min_file_size: u64,
+        dynamic_windows_max_file_size: u64,
+        huge_windows_file_size: u64,
+        base_sample_windows: u32,
+        dynamic_windows_min: u32,
+        dynamic_windows_max: u32,
+        huge_windows_max: u32,
+        target_window_size: u64,
+    ) -> Self {
+        EntropyParams {
+            dynamic_windows_min_file_size,
+            dynamic_windows_max_file_size,
+            huge_windows_file_size,
+            base_sample_windows,
+            dynamic_windows_min,
+            dynamic_windows_max,
+            huge_windows_max,
+            target_window_size,
+        }
+    }
+}
 
 #[pyclass]
 #[derive(Clone)]
@@ -61,43 +100,48 @@ struct FileProbeOutcome {
     lz4_certain: bool,
 }
 
-fn get_sample_window_count(file_size: u64) -> u32 {
-    if file_size <= ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE {
-        return ENTROPY_BASE_SAMPLE_WINDOWS;
+fn get_sample_window_count(params: &EntropyParams, file_size: u64) -> u32 {
+    if file_size <= params.dynamic_windows_min_file_size {
+        return params.base_sample_windows;
     }
-    if file_size >= ENTROPY_HUGE_WINDOWS_FILE_SIZE {
-        return ENTROPY_HUGE_WINDOWS_MAX;
-    }
-
-    if file_size >= ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE {
-        let ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE) as f64
-            / (ENTROPY_HUGE_WINDOWS_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE) as f64;
-        return ENTROPY_DYNAMIC_WINDOWS_MAX
-            + (ratio * (ENTROPY_HUGE_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MAX) as f64) as u32;
+    if file_size >= params.huge_windows_file_size {
+        return params.huge_windows_max;
     }
 
-    let ratio = (file_size - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE) as f64
-        / (ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE - ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE) as f64;
-    ENTROPY_DYNAMIC_WINDOWS_MIN
-        + (ratio * (ENTROPY_DYNAMIC_WINDOWS_MAX - ENTROPY_DYNAMIC_WINDOWS_MIN) as f64) as u32
+    if file_size >= params.dynamic_windows_max_file_size {
+        let ratio = (file_size - params.dynamic_windows_max_file_size) as f64
+            / (params.huge_windows_file_size - params.dynamic_windows_max_file_size) as f64;
+        return params.dynamic_windows_max
+            + (ratio * (params.huge_windows_max - params.dynamic_windows_max) as f64) as u32;
+    }
+
+    let ratio = (file_size - params.dynamic_windows_min_file_size) as f64
+        / (params.dynamic_windows_max_file_size - params.dynamic_windows_min_file_size) as f64;
+    params.dynamic_windows_min
+        + (ratio * (params.dynamic_windows_max - params.dynamic_windows_min) as f64) as u32
 }
 
-fn get_file_probe_budget(file_size: u64) -> u64 {
-    get_sample_window_count(file_size) as u64 * ENTROPY_TARGET_WINDOW_SIZE
+fn get_file_probe_budget(params: &EntropyParams, file_size: u64) -> u64 {
+    get_sample_window_count(params, file_size) as u64 * params.target_window_size
 }
 
-fn derive_window_size(byte_budget: u64, num_windows: u32) -> u64 {
+fn derive_window_size(params: &EntropyParams, byte_budget: u64, num_windows: u32) -> u64 {
     if byte_budget == 0 {
         return 0;
     }
-    let mut window = ENTROPY_TARGET_WINDOW_SIZE.min(byte_budget);
+    let mut window = params.target_window_size.min(byte_budget);
     if window * num_windows as u64 > byte_budget && byte_budget >= num_windows as u64 {
         window = byte_budget / num_windows as u64;
     }
     window.max(1)
 }
 
-fn plan_sample_windows(file_size: u64, window_size: u64, num_windows: u32) -> Vec<(u64, u64)> {
+fn plan_sample_windows(
+    params: &EntropyParams,
+    file_size: u64,
+    window_size: u64,
+    num_windows: u32,
+) -> Vec<(u64, u64)> {
     if file_size == 0 || window_size == 0 || num_windows == 0 {
         return Vec::new();
     }
@@ -108,7 +152,7 @@ fn plan_sample_windows(file_size: u64, window_size: u64, num_windows: u32) -> Ve
 
     let mut raw_windows: Vec<(u64, u64)> = Vec::new();
 
-    if num_windows == 3 && ENTROPY_BASE_SAMPLE_WINDOWS == 3 {
+    if num_windows == 3 && params.base_sample_windows == 3 {
         let p10 = (file_size as f64 * 0.10) as u64;
         let p45 = (file_size as f64 * 0.45) as u64;
         let p80 = (file_size as f64 * 0.80) as u64;
@@ -214,7 +258,7 @@ fn read_window_bytes(file: &mut File, mmap: Option<&Mmap>, offset: u64, length: 
     }
 }
 
-fn probe_file(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) {
+fn probe_file(params: &EntropyParams, path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) {
     if byte_budget == 0 || file_size == 0 {
         return (0.0, 0, false);
     }
@@ -222,20 +266,20 @@ fn probe_file(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) 
     // A panic (e.g. an lz4/mmap edge case) must not poison the rayon batch:
     // degrade to "no sample" so the directory is just skipped by the entropy
     // gate, exactly like a file that failed to open.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe_file_inner(path, file_size, byte_budget)))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe_file_inner(params, path, file_size, byte_budget)))
         .unwrap_or((0.0, 0, false))
 }
 
-fn probe_file_inner(path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) {
-    let num_windows = get_sample_window_count(file_size);
-    let window_size = derive_window_size(byte_budget, num_windows);
-    let windows = plan_sample_windows(file_size, window_size, num_windows);
+fn probe_file_inner(params: &EntropyParams, path: &str, file_size: u64, byte_budget: u64) -> (f64, u64, bool) {
+    let num_windows = get_sample_window_count(params, file_size);
+    let window_size = derive_window_size(params, byte_budget, num_windows);
+    let windows = plan_sample_windows(params, file_size, window_size, num_windows);
     if windows.is_empty() {
         return (0.0, 0, false);
     }
 
     let mut file = File::open(path).ok();
-    let mmap = if file_size >= ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE {
+    let mmap = if file_size >= params.dynamic_windows_min_file_size {
         file.as_ref()
             .and_then(|f| unsafe { Mmap::map(f).ok() })
     } else {
@@ -425,6 +469,7 @@ fn reservoir_sample(files: &[(String, u64)], max_files: u32) -> Vec<(String, u64
 }
 
 fn build_probe_jobs(
+    params: &EntropyParams,
     sampled_list: &[(String, u64)],
     chunk_size: u64,
     max_bytes: u64,
@@ -436,8 +481,8 @@ fn build_probe_jobs(
         if remaining == 0 {
             break;
         }
-        let per_file = get_file_probe_budget(*size);
-        let budget = per_file.min(chunk_size.max(per_file)).min(remaining);
+        let per_file = get_file_probe_budget(params, *size);
+        let budget = per_file.min(chunk_size).min(remaining);
         if budget == 0 {
             break;
         }
@@ -447,13 +492,14 @@ fn build_probe_jobs(
             budget,
             order: order as u32,
         });
-        remaining = remaining.saturating_sub(budget.min(*size));
+        remaining = remaining.saturating_sub(budget);
     }
 
     jobs
 }
 
 fn prepare_directory_plan(
+    params: &EntropyParams,
     dir: &str,
     max_files: u32,
     chunk_size: u64,
@@ -464,7 +510,7 @@ fn prepare_directory_plan(
     let root = Path::new(dir);
     let files = collect_subtree_files(root, include_subdirectories, breadth_first);
     let sampled_list = reservoir_sample(&files, max_files);
-    let jobs = build_probe_jobs(&sampled_list, chunk_size, max_bytes);
+    let jobs = build_probe_jobs(params, &sampled_list, chunk_size, max_bytes);
     DirPlan {
         dir: dir.to_string(),
         jobs,
@@ -563,9 +609,10 @@ fn maybe_fire_progress(
 }
 
 #[pyfunction]
-#[pyo3(signature = (dirs, max_files, max_bytes, chunk_size, include_subdirectories, workers, progress_callback=None))]
+#[pyo3(signature = (params, dirs, max_files, max_bytes, chunk_size, include_subdirectories, workers, progress_callback=None))]
 pub fn probe_directories_parallel(
     py: Python<'_>,
+    params: EntropyParams,
     dirs: Vec<String>,
     max_files: u32,
     max_bytes: u64,
@@ -591,6 +638,7 @@ pub fn probe_directories_parallel(
             let mut results = Vec::with_capacity(total);
             for (done, dir) in dirs.iter().enumerate() {
                 let plan = prepare_directory_plan(
+                    &params,
                     dir,
                     max_files,
                     chunk_size,
@@ -601,7 +649,7 @@ pub fn probe_directories_parallel(
                 let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
                 for job in &plan.jobs {
                     let (weighted_entropy, sampled_bytes, lz4_certain) =
-                        probe_file(&job.path, job.size, job.budget);
+                        probe_file(&params, &job.path, job.size, job.budget);
                     outcomes.push(FileProbeOutcome {
                         order: job.order,
                         path: job.path.clone(),
@@ -651,6 +699,7 @@ pub fn probe_directories_parallel(
 
             dirs.par_iter().enumerate().for_each(|(dir_index, dir)| {
                 let plan = prepare_directory_plan(
+                    &params,
                     dir,
                     max_files,
                     chunk_size,
@@ -662,7 +711,7 @@ pub fn probe_directories_parallel(
                 let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
                 for job in &plan.jobs {
                     let (weighted_entropy, sampled_bytes, lz4_certain) =
-                        probe_file(&job.path, job.size, job.budget);
+                        probe_file(&params, &job.path, job.size, job.budget);
                     outcomes.push(FileProbeOutcome {
                         order: job.order,
                         path: job.path.clone(),
@@ -710,6 +759,7 @@ pub fn probe_directories_parallel(
 
 pub fn register_entropy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DirEntropyResult>()?;
+    m.add_class::<EntropyParams>()?;
     m.add_function(wrap_pyfunction!(probe_directories_parallel, m)?)?;
     Ok(())
 }

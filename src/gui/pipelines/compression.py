@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from ...compression.compression_executor import execute_compression_plan
+from ...exceptions import WorkerStopped
 from ...i18n import _
 from ...skip_logic import commit_incompressible_cache
 from ...stats import CompressionStats
@@ -165,7 +166,7 @@ def run_quick_analysis_compression(backend: "GuiBackend") -> None:
             compressed_count,
             exec_start_time,
         )
-    except InterruptedError:
+    except WorkerStopped:
         backend._discard_quick_pipeline_state()
         raise
 

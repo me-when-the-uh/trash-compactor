@@ -2,6 +2,7 @@ import threading
 import time
 from typing import TYPE_CHECKING, Any
 
+from ...exceptions import WorkerStopped
 from ...file_utils import is_admin
 from ...i18n import _
 from ...one_click import resolve_targets, run_compactos_hidden
@@ -33,9 +34,15 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
             success, output, parsed = run_compactos_hidden(
                 progress_callback=_progress,
                 line_callback=_progress,
+                stop_check=backend.stop_event.is_set,
             )
             saved = int(parsed.get("saved_bytes") or 0) if isinstance(parsed, dict) else 0
-            msg = _("Done compressing Windows binaries.") if success else _("CompactOS compression failed.")
+            if backend.stop_event.is_set():
+                msg = _("CompactOS compression stopped.")
+            elif success:
+                msg = _("Done compressing Windows binaries.")
+            else:
+                msg = _("CompactOS compression failed.")
             backend._send(CompactOSIndicatorResponse(show=True, text=msg, done=success, saved_bytes=saved))
 
         compactos_thread = threading.Thread(target=_run_compactos, daemon=True)
@@ -54,7 +61,6 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
     total_entropy_files = 0
 
     quick_start_time = time.perf_counter()
-    interrupted = False
     try:
         for index, directory in enumerate(targets, start=1):
             backend._check_pause_stop()
@@ -76,6 +82,8 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
                     quick_dir_index=index,
                     quick_dir_total=len(targets),
                 )
+            except WorkerStopped:
+                raise
             except Exception as exc:
                 backend._send(
                     WarningResponse(
@@ -157,8 +165,7 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
             100.0,
             quick_history=True,
         )
-    except InterruptedError:
-        interrupted = True
+    except WorkerStopped:
         quick_results.clear()
         backend._discard_quick_pipeline_state()
         raise

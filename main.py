@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 from colorama import Fore, Style, init
 
 from src import config
-from src.console import EscapeExit, attach_to_parent_console, display_banner, prompt_exit, read_user_input
+from src.console import EscapeExit, allocate_console, attach_to_parent_console, display_banner, prompt_exit, read_user_input
 from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
 from src.file_utils import describe_protected_path, is_admin, validate_target_path
 from src.skip_logic import discard_staged_incompressible_cache, log_directory_skips
@@ -24,7 +24,7 @@ from pathlib import Path
 
 
 def setup_logging(verbosity: int) -> None:
-    debug_enabled = verbosity >= 4
+    debug_enabled = verbosity >= 3
 
     class _Formatter(logging.Formatter):
         def __init__(self, debug: bool) -> None:
@@ -78,8 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         Verbosity levels:
           -v    Summarise cache exclusions and entropy sampling
           -vv   Include per-stage progress updates
-          -vvv  Add additional diagnostics for skipped files
-          -vvvv Enable full debug logging (developer focus)
+          -vvv  Enable full debug logging (developer focus)
         """
     ).rstrip()
 
@@ -258,9 +257,9 @@ def _emit_verbosity_banner(level: int) -> None:
     verbose_labels = {
         1: _("Verbosity level 1: entropy decisions and summary stats"),
         2: _("Verbosity level 2: include stage-level progress and verification warnings"),
-        3: _("Verbosity level 3: extended diagnostics for skipped directories"),
+        3: _("Verbosity level 3: full debug logging enabled"),
     }
-    label = verbose_labels.get(level, _("Verbosity level 4: full debug logging enabled"))
+    label = verbose_labels.get(level, _("Verbosity level 3: full debug logging enabled"))
     print(Fore.BLUE + label + Style.RESET_ALL)
 
 
@@ -355,9 +354,6 @@ def main() -> int:
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                 benchmark_ok = run_benchmark()
 
-            # GUI-subsystem exe: Windows never allocated a console, so there is
-            # no CLI window to hide. Just open the GUI.
-            import webview  
             from src.gui.backend import run_gui
             run_gui(benchmark_ok=benchmark_ok)
             os._exit(0)

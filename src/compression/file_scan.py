@@ -3,12 +3,11 @@ import os
 from typing import Callable, Iterable, Iterator, Optional
 
 from ..config import (
-    DEFAULT_EXCLUDE_DIRECTORIES,
     MIN_COMPRESSIBLE_SIZE,
     SIZE_THRESHOLDS,
     SKIP_EXTENSIONS,
 )
-from ..file_utils import _normalize_for_compare
+from ..file_utils import DEFAULT_EXCLUDE_DIRECTORIES, _normalize_for_compare
 from ..skip_logic import maybe_skip_directory
 from ..stats import CompressionStats
 from ..workers import scan_worker_count

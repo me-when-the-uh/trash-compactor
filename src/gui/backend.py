@@ -5,6 +5,7 @@ import time
 from typing import Any, Callable, Optional
 
 from ..config import DEFAULT_MIN_SAVINGS_PERCENT
+from ..exceptions import WorkerStopped
 from ..i18n import _
 from ..stats import CompressionStats
 from .handlers import dispatch_request
@@ -123,8 +124,8 @@ class GuiBackend:
     def _run_pipeline(self, label: str, action: Callable[[], None]) -> None:
         try:
             action()
-        except InterruptedError:
-            pass
+        except WorkerStopped:
+            logging.debug("%s stopped by user", label)
         except Exception as exc:
             logging.exception("%s error", label)
             self._send(WarningResponse(_("Error"), str(exc)))
@@ -202,15 +203,13 @@ class GuiBackend:
 
     def _check_pause_stop(self):
         if self.stop_event.is_set():
-            raise InterruptedError("Stopped by user")
+            raise WorkerStopped
 
         if self.pause_event.is_set():
-            self._send(StateResponse("Paused"))
             while self.pause_event.is_set():
                 if self.stop_event.is_set():
-                    raise InterruptedError("Stopped by user")
+                    raise WorkerStopped
                 time.sleep(0.2)
-            self._send(StateResponse("Resumed"))
 
     def _run_analysis(self):
         def _pipeline() -> None:

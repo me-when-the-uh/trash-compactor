@@ -166,9 +166,6 @@ def execute_compression_plan_wrapper(
             total = stage_progress[idx]['total']
             processed = min(stage_progress[idx]['processed'], total)
             if state == 'done':
-                elapsed = now - stage_start_times.get(algo, now)
-                if algo in stage_start_times:
-                     pass
                 lines.append(Fore.GREEN + f"Compressing {total} files with {algo}... done" + Style.RESET_ALL)
             elif state == 'running':
                 start_t = stage_start_times.get(algo, now)

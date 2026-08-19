@@ -27,21 +27,6 @@ class ProgressTimer:
         self._last_output = ""
         self._start_time: float = 0.0
 
-    def format_path(self, full_path: str, base_dir: str) -> str:
-        try:
-            rel_path = os.path.relpath(full_path, base_dir)
-        except Exception:
-            rel_path = os.path.basename(full_path)
-
-        parts = rel_path.split(os.sep)
-        if len(parts) <= 2:
-            return "/".join(parts)
-
-        # This thingy keeps the spinner readable even for deeply nested files
-        head, tail = parts[0], parts[-1]
-        middle = '...'
-        return f"{head}/{middle}/{tail}"
-
     def _spin(self) -> None:
         next_tick = time.monotonic()
         while not self._stop_event.is_set():
@@ -407,16 +392,6 @@ def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int,
     skipped = stats.total_compressed_size
     stats.entropy_projected_size = int(round(projected_lzx + skipped))
     stats.entropy_projected_size_conservative = int(round(projected_xpress + skipped))
-
-
-def _format_sample_bytes(value: int) -> str:
-    if value >= 1024 * 1024:
-        return f"{value / (1024 * 1024):.1f} MB"
-    if value >= 1024:
-        return f"{value / 1024:.1f} KB"
-    if value > 0:
-        return f"{value} B"
-    return "0 B"
 
 
 def _format_summary_size(value: int) -> str:

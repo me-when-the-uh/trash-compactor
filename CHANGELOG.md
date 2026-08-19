@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.7.0] - 2026-08-03
+## [v0.7.0] - 2026-08-19
 
 ### Added
 - HDD mode: a gentler single-worker pipeline for spinning drives with a defrag hint after the run
@@ -14,10 +14,13 @@ All notable changes to this project will be documented in this file.
 - No-compress zones now cover all fixed NTFS drives, not just the system drive
 - CompactOS runs get a timeout and safer log handling
 - Dead code removed; build date and version now come from a single source
+- Native entropy budget accounting now matches the Python sampler
+- Program feedback and verbose output have been changed for the better
 
 ### Fixed
 - Program no longer closes the console it's launched from
 - Crash on non-interactive CLI runs
+- Crash when the executable was double-clicked with CLI arguments and no console available
 - Stale cache entries persisting after interrupted runs
 - Empty interactive input and folder-picker errors now handled gracefully
 - GUI no longer flashes a "Stopped" state after a completed run

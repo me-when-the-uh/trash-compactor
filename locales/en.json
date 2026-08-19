@@ -4,7 +4,7 @@
     "\nPress Enter twice to exit...": "\nPress Enter twice to exit...",
     "\nPress Esc twice to exit, or use Ctrl+C.": "\nPress Esc twice to exit, or use Ctrl+C.",
     "Exiting...": "Exiting...",
-    "Set verbosity level (-v/-vvvv); repeat same level to disable": "Set verbosity (-v/-vvvv); repeat to turn off",
+    "Set verbosity level (-v/-vvv); repeat same level to disable": "Set verbosity (-v/-vvv); repeat to turn off",
     "Disable LZX compression": "Disable LZX compression",
     "It is recommended to disable LZX compression for this system.": "It is recommended to disable LZX compression for this system.",
     "Force LZX compression": "Force LZX compression",
@@ -38,7 +38,7 @@
     "Error: Cannot disable and force LZX compression at the same time.": "Error: Cannot disable and force LZX compression at the same time.",
     "Verbosity level 1: cache decisions and summary stats": "Verbosity level 1: cache decisions and summary stats",
     "Verbosity level 2: include stage-level progress and verification warnings": "Verbosity level 2: include stage-level progress and verification warnings",
-    "Verbosity level 3: extended diagnostics for skipped files": "Verbosity level 3: extended diagnostics for skipped files",
+    "Verbosity level 3: full debug logging enabled": "Verbosity level 3: full debug logging enabled",
     "Verbosity level 4: full debug logging enabled": "Verbosity level 4: full debug logging enabled",
     "This script requires administrator privileges": "This script must be run as administrator",
     "Running with administrator privileges.": "Running as administrator.",
@@ -264,5 +264,8 @@
     "Done compressing Windows binaries.": "Done compressing Windows binaries.",
     "CompactOS compression complete.": "CompactOS compression complete.",
     "CompactOS compression failed (exit code {code}).": "CompactOS compression failed (exit code {code}).",
-    "CompactOS compression failed.": "CompactOS compression failed."
+    "CompactOS compression failed.": "CompactOS compression failed.",
+    "CompactOS compression stopped.": "CompactOS compression stopped.",
+    "\nStopped by user.": "\nStopped by user.",
+    "Analysis failed for {directory}: {exc}": "Analysis failed for {directory}: {exc}"
 }

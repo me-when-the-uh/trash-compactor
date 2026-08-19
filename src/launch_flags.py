@@ -8,7 +8,7 @@ from . import config
 from .i18n import _
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
-    'verbose': ('-v', 'Set verbosity level (-v/-vvvv); repeat same level to disable'),
+    'verbose': ('-v', 'Set verbosity level (-v/-vvv); repeat same level to disable'),
     'no_lzx': ('-x', 'Disable LZX compression'),
     'force_lzx': ('-f', 'Force LZX compression'),
     'dry_run': ('-d', 'Dry-run entropy analysis'),
@@ -56,7 +56,7 @@ class LaunchState:
     single_worker: bool = False
     min_savings: float = config.DEFAULT_MIN_SAVINGS_PERCENT
 
-    MAX_VERBOSITY: ClassVar[int] = 4
+    MAX_VERBOSITY: ClassVar[int] = 3
 
     def reset_verbose(self) -> None:
         self.verbose = 0

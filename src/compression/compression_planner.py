@@ -9,6 +9,7 @@ from ..config import (
     ENTROPY_MAX_BYTES,
     ENTROPY_MAX_FILE_BUDGET,
     ENTROPY_MAX_FILES,
+    ENTROPY_SAMPLING_PARAMS,
     savings_from_entropy,
 )
 from ..skip_logic import (
@@ -65,7 +66,7 @@ def plan_compression(
     with monitor.time_file_scan():
         processed = 0
         bulk_skips = SkipBulkLedger()
-        use_bulk_skips = verbosity < 4
+        use_bulk_skips = verbosity < 3
         for path, size, _attributes, algo, category, hint in files:
             processed += 1
 
@@ -342,7 +343,7 @@ def _filter_high_entropy_directories(
                     sampled_bytes=root_bytes_sampled,
                 )
                 append_directory_skip_record(stats, root_skip_record)
-                if verbosity >= 2:
+                if verbosity >= 1:
                     logging.info(
                         "Skipping root-level files; estimated savings %.1f%% is below threshold %.1f%%",
                         estimated_savings,
@@ -532,6 +533,16 @@ def evaluate_directories_parallel(
         rust_progress = _rust_progress
 
     raw_results = fast_walk.probe_directories_parallel(
+        fast_walk.EntropyParams(
+            dynamic_windows_min_file_size=ENTROPY_SAMPLING_PARAMS.dynamic_windows_min_file_size,
+            dynamic_windows_max_file_size=ENTROPY_SAMPLING_PARAMS.dynamic_windows_max_file_size,
+            huge_windows_file_size=ENTROPY_SAMPLING_PARAMS.huge_windows_file_size,
+            base_sample_windows=ENTROPY_SAMPLING_PARAMS.base_sample_windows,
+            dynamic_windows_min=ENTROPY_SAMPLING_PARAMS.dynamic_windows_min,
+            dynamic_windows_max=ENTROPY_SAMPLING_PARAMS.dynamic_windows_max,
+            huge_windows_max=ENTROPY_SAMPLING_PARAMS.huge_windows_max,
+            target_window_size=ENTROPY_SAMPLING_PARAMS.target_window_size,
+        ),
         [str(directory) for directory in directory_list],
         ENTROPY_MAX_FILES,
         ENTROPY_MAX_BYTES,

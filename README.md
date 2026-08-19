@@ -311,7 +311,7 @@ Use `-s` to additionally force sequential scan/entropy on very old drives where 
 
 | Flag | Description |
 |---|---|
-| `-v` / `--verbose` | Show exclusion decisions with entropy sampling. Supports 4 levels of verbosity, up to `-vvvv` for debug logs. |
+| `-v` / `--verbose` | Show exclusion decisions with entropy sampling. Supports 3 levels of verbosity, up to `-vvv` for debug logs. |
 | `-m` / `--min-savings <percent>` | Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically. |
 | `-y` / `--yes` / `--no-prompt` | Proceed with compression after a dry-run analysis without prompting. |
 

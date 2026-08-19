@@ -190,6 +190,7 @@ def run_compactos_hidden(
     progress_callback=None,
     line_callback=None,
     timeout: int = COMPACTOS_TIMEOUT_SECONDS,
+    stop_check=None,
 ) -> tuple[bool, str, dict]:
     """Run compact.exe /compactos:always hidden (no visible window)."""
     if os.name != "nt":
@@ -236,8 +237,21 @@ def run_compactos_hidden(
 
         reader = threading.Thread(target=_read_output, daemon=True)
         reader.start()
+        stopped = False
         try:
-            proc.wait(timeout=max(0, timeout))
+            deadline = time.monotonic() + max(0, timeout)
+            while True:
+                if stop_check is not None and stop_check():
+                    stopped = True
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    break
+                try:
+                    proc.wait(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
         except subprocess.TimeoutExpired:
             timed_out = True
             proc.kill()
@@ -245,9 +259,11 @@ def run_compactos_hidden(
         reader.join(timeout=5)
 
         output = "\n".join(output_lines)
-        if timed_out:
+        if stopped:
+            output += _("\nStopped by user.")
+        elif timed_out:
             output += _("\n[timed out after {seconds}s]").format(seconds=timeout)
-        success = not timed_out and proc.returncode == 0
+        success = not timed_out and not stopped and proc.returncode == 0
         parsed = _parse_compactos_summary(output)
 
         if progress_callback:

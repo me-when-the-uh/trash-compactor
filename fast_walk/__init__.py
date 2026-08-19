@@ -52,7 +52,7 @@ _ext = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_ext)
 sys.modules["fast_walk._native"] = _ext
 
-for _name in ("DirEntropyResult", "WalkIter", "probe_directories_parallel", "walk_and_filter"):
+for _name in ("DirEntropyResult", "EntropyParams", "WalkIter", "probe_directories_parallel", "walk_and_filter"):
     globals()[_name] = getattr(_ext, _name)
 
 del _name, _ext, _ext_path, _spec, _find_extension

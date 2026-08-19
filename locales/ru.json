@@ -4,7 +4,7 @@
     "\nPress Enter twice to exit...": "\nНажмите Enter дважды для выхода...",
     "\nPress Esc twice to exit, or use Ctrl+C.": "\nНажмите Esc дважды для выхода или используйте Ctrl+C.",
     "Exiting...": "Выход...",
-    "Set verbosity level (-v/-vvvv); repeat same level to disable": "Установить уровень детализации (-v/-vvvv); повторный ввод флага отключает его",
+    "Set verbosity level (-v/-vvv); repeat same level to disable": "Установить уровень детализации (-v/-vvv); повторный ввод флага отключает его",
     "Disable LZX compression": "Отключить сжатие LZX",
     "It is recommended to disable LZX compression for this system.": "Для этой системы рекомендуется отключить сжатие LZX.",
     "Force LZX compression": "Принудительно использовать сжатие LZX",
@@ -38,8 +38,7 @@
     "Error: Cannot disable and force LZX compression at the same time.": "Ошибка: Нельзя одновременно отключить и принудительно включить сжатие LZX.",
     "Verbosity level 1: cache decisions and summary stats": "Уровень детализации 1: решения по кэшу и сводная статистика",
     "Verbosity level 2: include stage-level progress and verification warnings": "Уровень детализации 2: прогресс по этапам и предупреждения проверки",
-    "Verbosity level 3: extended diagnostics for skipped files": "Уровень детализации 3: расширенная диагностика пропущенных файлов",
-    "Verbosity level 4: full debug logging enabled": "Уровень детализации 4: включена полная отладка",
+    "Verbosity level 3: full debug logging enabled": "Уровень детализации 3: включена полная отладка",
     "This script requires administrator privileges": "Этот скрипт требует прав администратора",
     "Running with administrator privileges.": "Запуск с правами администратора.",
     "Running without administrator privileges. Some protected files may be skipped.": "Запуск без прав администратора. Некоторые защищенные файлы могут быть пропущены.",
@@ -264,5 +263,8 @@
     "CompactOS compression failed.": "Сжатие CompactOS не удалось.",
     "Scanning complete": "Сканирование завершено",
     "Done compressing Windows binaries.": "Сжатие системных бинарников Windows завершено.",
+    "CompactOS compression stopped.": "Сжатие CompactOS остановлено.",
+    "\nStopped by user.": "\nОстановлено пользователем.",
+    "Analysis failed for {directory}: {exc}": "Не удалось проанализировать {directory}: {exc}",
     "GUI failed to start: pywebview is not bundled in this executable. Rebuild after running: python -m pip install -r requirements.txt": "Не удалось запустить GUI: pywebview не включён в этот исполняемый файл. Пересоберите после: python -m pip install -r requirements.txt"
 }

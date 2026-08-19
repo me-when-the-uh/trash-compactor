@@ -7,6 +7,7 @@ from typing import Callable, Iterator, Optional, Sequence
 
 from ..i18n import _
 from ..config import COMPRESSION_ALGORITHMS
+from ..exceptions import WorkerStopped
 from ..file_utils import is_file_compressed
 from ..stats import CompressionStats
 from ..timer import PerformanceMonitor
@@ -123,7 +124,7 @@ def execute_compression_plan(
             logging.debug("Compressed %s using %s", path, algo)
         else:
             # Verification failed to show size change, so we don't count it as compressed
-            if verbosity >= 2:
+            if verbosity >= 1:
                 logging.warning(
                     "Compressed %s using %s but verification reported no size change",
                     path,
@@ -152,6 +153,8 @@ def execute_compression_plan(
         with progress_lock:
             try:
                 progress_callback(path, algo)
+            except WorkerStopped:
+                raise
             except Exception:  # pragma: no cover - defensive logging
                 logging.debug("Progress callback failed for %s", path, exc_info=True)
 
@@ -209,6 +212,8 @@ def execute_compression_plan(
 
                 try:
                     result = future.result()
+                except WorkerStopped:
+                    raise
                 except Exception as exc:
                     logging.error(
                         "Batch compression exception (%s files, algo=%s): %s. Retrying individually.",

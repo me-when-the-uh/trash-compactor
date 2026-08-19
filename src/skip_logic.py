@@ -199,7 +199,7 @@ def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_per
                 record.sampled_files,
             )
 
-    if verbosity >= 4 and 'system' in buckets:
+    if verbosity >= 3 and 'system' in buckets:
         system_records = buckets['system']
         logging.info(_("Skipped %s protected directories:"), len(system_records))
         for record in system_records:
