@@ -8,7 +8,7 @@
 [![NTFS](https://img.shields.io/badge/filesystem-NTFS%20only-blueviolet?style=for-the-badge&labelColor=1b1f27&color=7d5cfc)](#limitations)<!-- [![Python](https://img.shields.io/badge/python-3.11%20-%203.13-yellow?style=for-the-badge&logo=python&logoColor=white&labelColor=1b1f27&color=f0c94a)](#option-2-running-from-source)
 [![Rust](https://img.shields.io/badge/rust%20engine-fast__walk-orange?style=for-the-badge&logo=rust&logoColor=white&labelColor=1b1f27&color=f0753a)](#native-rust-engine) -->
 [![License](https://img.shields.io/badge/license-MIT-brightgreen?style=for-the-badge&labelColor=1b1f27&color=4bc34b)](LICENSE)
-[![Release](https://img.shields.io/badge/latest-v0.7.0-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
+[![Release](https://img.shields.io/badge/latest-v0.7.1-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
 [![Build date](https://img.shields.io/badge/build%20date-who%20cares-blue?style=for-the-badge&labelColor=1b1f27&color=6cb6ff)](src/version.py)
 [![RAM](https://img.shields.io/badge/RAM%20usage-25%25%20lower-brightgreen?style=for-the-badge&labelColor=1b1f27&color=4bc34b)](#native-rust-engine)
 <!-- [![Stars](https://img.shields.io/github/stars/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=2f81f7&logo=star&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/stargazers)
@@ -258,7 +258,7 @@ Trash-Compactor offers three distinct operation modes to handle different scenar
 
 #### 1-Click / Unattended Mode (Preferred)
 
-Pressing or passing `1` upon starting will run this mode. Most users can just compress their directories once and forget about it. Designed to be extremely simple to use for a casual user, a system administrator, refurbisher, or the so-called *family tech support*.
+Pressing or passing `1` upon starting will run this mode. Most users can compress their directories once and forget about it. It's designed to be extremely simple to use for a casual user, a system administrator, refurbisher, or the so-called family tech support.
 
 This mode will automatically compress the following directories:
 

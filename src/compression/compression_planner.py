@@ -351,6 +351,9 @@ def _filter_high_entropy_directories(
                     )
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
+    # Dir whose probe confirmed every sampled file as LZ4-certain: skip
+    # candidates without a second per-file probe.
+    directory_lz4_certain: set[Path] = set()
     # A high-entropy root means the whole subtree is high-entropy: seed the
     # root's skip record so the ancestor walk cascades it to subdirectories
     if root_skip_record is not None:
@@ -379,6 +382,7 @@ def _filter_high_entropy_directories(
         )
         append_directory_skip_record(stats, record)
         skipped_directories[directory] = record
+        directory_lz4_certain.add(directory)
 
     directories_to_evaluate = [
         directory
@@ -396,6 +400,8 @@ def _filter_high_entropy_directories(
         verbosity,
         progress_callback=progress_callback,
     )
+
+    sample_records_by_dir = {Path(record.path): record for record in sample_records}
 
     if monitor and not progress_callback:
         for record in sample_records:
@@ -417,6 +423,8 @@ def _filter_high_entropy_directories(
             append_directory_skip_record(stats, record)
             skipped_directories[directory] = record
             cache.add(directory)
+            if sample_records_by_dir[directory].lz4_certain_files > 0:
+                directory_lz4_certain.add(directory)
 
     filtered: list[PlanEntry] = []
     for path_str, file_size, algorithm in candidates:
@@ -431,6 +439,17 @@ def _filter_high_entropy_directories(
                 category=root_skip_record.category,
             )
             logging.debug("Skipping %s due to %s", path_str, root_skip_record.reason)
+            continue
+        if parent in directory_lz4_certain:
+            # Dir probe already confirmed LZ4-certain; no re-probe.
+            stats.record_file_skip(
+                Path(path_str),
+                _("File is certainly incompressible (LZ4 gate)"),
+                file_size,
+                file_size,
+                category='high_entropy',
+            )
+            logging.debug("Skipping %s: certainly incompressible (LZ4 gate)", path_str)
             continue
         skip_record = _locate_skip_record(parent, base_dir, skipped_directories)
         if skip_record is not None:
@@ -549,6 +568,7 @@ def evaluate_directories_parallel(
         ENTROPY_MAX_FILE_BUDGET,
         True,
         worker_count,
+        True,
         rust_progress,
     )
 
@@ -563,8 +583,9 @@ def evaluate_directories_parallel(
             result.sampled_files,
             result.sampled_bytes,
             result.lz4_certain,
-            list(result.sampled_paths),
-            list(result.lz4_certain_paths),
+            has_lz4_certain=result.has_lz4_certain,
+            sampled_paths=list(result.sampled_paths),
+            lz4_certain_paths=list(result.lz4_certain_paths),
         )
         if skip_record:
             skip_results[directory] = skip_record
