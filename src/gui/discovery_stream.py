@@ -6,6 +6,7 @@ from ..compression.file_scan import iter_files
 from ..i18n import _
 from ..stats import CompressionStats
 from .progress import (
+    SCAN_PROGRESS_EVERY_FILES,
     SCAN_STOP_CHECK_EVERY_FILES,
     UI_STATUS_INTERVAL_SECONDS,
     UI_SUMMARY_INTERVAL_SECONDS,
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class GuiDiscoveryStream:
-    """Buffer fully classified Rust scan results, then replay for stats dispatch."""
+    """Stream classified Rust scan results into the planner, consumed once."""
 
     __slots__ = (
         "_backend",
@@ -26,7 +27,6 @@ class GuiDiscoveryStream:
         "_stats",
         "_progress_kwargs",
         "_overall_start",
-        "_buffer",
         "count",
         "walk_seconds",
         "complete",
@@ -49,7 +49,6 @@ class GuiDiscoveryStream:
         self._stats = stats
         self._progress_kwargs = progress_kwargs
         self._overall_start = overall_start
-        self._buffer: list | None = None
         self.count = 0
         self.walk_seconds = 0.0
         self.complete = False
@@ -68,51 +67,57 @@ class GuiDiscoveryStream:
         self._walk_start = time.perf_counter()
         self._last_scan_update = self._walk_start
         self._last_summary_update = self._walk_start
-        self._buffer = []
-
-        for entry in iter_files(self._base_dir, self._stats, 0, self._backend.min_savings):
-            self._buffer.append(entry)
-            self.count += 1
-            if self.count % SCAN_STOP_CHECK_EVERY_FILES == 0:
-                self._backend._check_pause_stop()
-
-            now = time.perf_counter()
-            walk_elapsed = max(0.001, now - self._walk_start)
-            if now - self._last_scan_update > UI_STATUS_INTERVAL_SECONDS:
-                self._last_scan_update = now
-                self._backend._send_progress(
-                    _("Scanning directory... {count} files found ({rate:.0f} files/s)").format(
-                        count=self.count,
-                        rate=self.count / walk_elapsed,
-                    ),
-                    scan_progress_percent(self.count),
-                    **self._progress_kwargs,
-                )
-
-            if now - self._last_summary_update > UI_SUMMARY_INTERVAL_SECONDS:
-                self._last_summary_update = now
-                timing = build_live_analysis_timing(
-                    scan_seconds=max(0.001, now - self._overall_start),
-                    total_files=self.count,
-                    total_seconds=max(0.001, now - self._overall_start),
-                )
-                self._backend._send_folder_summary(
-                    self._stats,
-                    0,
-                    0,
-                    directory=str(self._base_dir),
-                    scope="current",
-                    analysis_timing=timing,
-                )
-
+        self._stream_scan_progress(0)
         self.walk_seconds = max(0.001, time.perf_counter() - self._walk_start)
         return True
 
+    def _stream_scan_progress(self, count: int) -> None:
+        # Count-gated: a time gate lets one through every ~20ms when the GUI
+        # bridge is slow, serialising the whole walk on the webview.
+        if count % SCAN_PROGRESS_EVERY_FILES != 0 and not self.complete:
+            return
+        now = time.perf_counter()
+        walk_elapsed = max(0.001, now - self._walk_start)
+        if now - self._last_scan_update > UI_STATUS_INTERVAL_SECONDS or self.complete:
+            self._last_scan_update = now
+            self._backend._send_progress(
+                _("Scanning directory... {count} files found ({rate:.0f} files/s)").format(
+                    count=count,
+                    rate=count / walk_elapsed,
+                ),
+                scan_progress_percent(count),
+                **self._progress_kwargs,
+            )
+
+        if now - self._last_summary_update > UI_SUMMARY_INTERVAL_SECONDS or self.complete:
+            self._last_summary_update = now
+            timing = build_live_analysis_timing(
+                scan_seconds=max(0.001, now - self._overall_start),
+                total_files=count,
+                total_seconds=max(0.001, now - self._overall_start),
+            )
+            self._backend._send_folder_summary(
+                self._stats,
+                0,
+                0,
+                directory=str(self._base_dir),
+                scope="current",
+                analysis_timing=timing,
+            )
+
     def __iter__(self):
         try:
-            for index, entry in enumerate(self._buffer or ()):
+            self._walk_start = time.perf_counter()
+            self._last_scan_update = self._walk_start
+            self._last_summary_update = self._walk_start
+            for index, entry in enumerate(iter_files(self._base_dir, self._stats, 0, self._backend.min_savings)):
+                self.count += 1
                 if index % SCAN_STOP_CHECK_EVERY_FILES == 0:
                     self._backend._check_pause_stop()
+                self._stream_scan_progress(self.count)
                 yield entry
+            # Final update with the completed rate.
+            self.complete = True
+            self._stream_scan_progress(self.count)
         finally:
             self.complete = True

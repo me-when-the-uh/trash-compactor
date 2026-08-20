@@ -74,6 +74,8 @@ pub struct DirEntropyResult {
     #[pyo3(get)]
     pub lz4_certain: u32,
     #[pyo3(get)]
+    pub has_lz4_certain: bool,
+    #[pyo3(get)]
     pub sampled_paths: Vec<String>,
     #[pyo3(get)]
     pub lz4_certain_paths: Vec<String>,
@@ -98,6 +100,207 @@ struct FileProbeOutcome {
     weighted_entropy: f64,
     sampled_bytes: u64,
     lz4_certain: bool,
+}
+
+/// Bounded largest-N selection merged into the walk: no full per-directory
+/// file list is ever materialised.
+struct SampleSelection {
+    max_files: usize,
+    entries: Vec<(u64, String)>,
+}
+
+impl SampleSelection {
+    fn new(max_files: u32) -> Self {
+        SampleSelection {
+            max_files: max_files as usize,
+            entries: Vec::with_capacity((max_files as usize).min(1024)),
+        }
+    }
+
+    fn consider(&mut self, path: String, size: u64) {
+        if self.max_files == 0 {
+            return;
+        }
+        if self.entries.len() < self.max_files {
+            self.entries.push((size, path));
+            if self.entries.len() == self.max_files {
+                self.entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+            }
+            return;
+        }
+        // The tail is the current smallest candidate.
+        let (smallest_size, _) = self.entries[self.entries.len() - 1];
+        if size <= smallest_size {
+            return;
+        }
+        let pos = self
+            .entries
+            .binary_search_by(|(s, p)| size.cmp(s).then_with(|| path.as_str().cmp(p.as_str())))
+            .unwrap_or_else(|p| p);
+        self.entries.insert(pos, (size, path));
+        self.entries.pop();
+    }
+
+    /// Fold another selection's candidates into this one (parallel workers).
+    fn merge(&mut self, other: SampleSelection) {
+        for (size, path) in other.entries {
+            self.consider(path, size);
+        }
+    }
+
+    /// Top ``strata`` slots for the deterministic largest files; the rest is a
+    /// regular stride over the remainder. Mirrors the old full-list behaviour.
+    fn finalize(mut self) -> Vec<(String, u64)> {
+        if self.entries.len() <= self.max_files {
+            return self
+                .entries
+                .into_iter()
+                .map(|(size, path)| (path, size))
+                .collect();
+        }
+        let strata = (self.max_files / 5).max(1);
+        let top_k = self.max_files.saturating_sub(strata);
+        let mut selected: Vec<(String, u64)> = Vec::with_capacity(self.max_files);
+        for (size, path) in self.entries.drain(..top_k) {
+            selected.push((path, size));
+        }
+        if strata > 0 && !self.entries.is_empty() {
+            let step = self.entries.len() as f64 / strata as f64;
+            for j in 0..strata {
+                let idx = (j as f64 * step) as usize;
+                let (size, path) = &self.entries[idx];
+                selected.push((path.clone(), *size));
+            }
+        }
+        selected
+    }
+}
+
+/// Walk ``root`` once, feeding files into ``selection``; returns subdirs so
+/// the caller can keep walking.
+fn scan_dir_into_selection(
+    dir: &Path,
+    selection: &mut SampleSelection,
+    subdirs: &mut Vec<PathBuf>,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            subdirs.push(entry.path());
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        let size = metadata.len();
+        if size == 0 {
+            continue;
+        }
+        selection.consider(entry.path().to_string_lossy().into_owned(), size);
+    }
+}
+
+fn collect_sample_selection(
+    root: &Path,
+    max_files: u32,
+    include_subdirectories: bool,
+    breadth_first: bool,
+) -> Vec<(String, u64)> {
+    let mut selection = SampleSelection::new(max_files);
+    let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
+    let mut head = 0usize;
+
+    while head < pending.len() {
+        let dir = if breadth_first {
+            let d = pending[head].clone();
+            head += 1;
+            d
+        } else {
+            pending.pop().unwrap()
+        };
+
+        let mut subdirs: Vec<PathBuf> = Vec::new();
+        scan_dir_into_selection(&dir, &mut selection, &mut subdirs);
+        if include_subdirectories {
+            pending.extend(subdirs);
+        }
+    }
+
+    selection.finalize()
+}
+
+fn collect_sample_selection_parallel(root: &Path, max_files: u32) -> Vec<(String, u64)> {
+    let stack: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(vec![root.to_path_buf()]));
+    let pending = Arc::new(AtomicUsize::new(1));
+    let shared: Arc<Mutex<SampleSelection>> = Arc::new(Mutex::new(SampleSelection::new(max_files)));
+
+    rayon::scope(|s| {
+        for _ in 0..rayon::current_num_threads().max(1) {
+            let stack = Arc::clone(&stack);
+            let pending = Arc::clone(&pending);
+            let shared = Arc::clone(&shared);
+            s.spawn(move |_| {
+                let mut local = SampleSelection::new(max_files);
+                loop {
+                    if pending.load(Ordering::Acquire) == 0 {
+                        shared
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .merge(local);
+                        return;
+                    }
+
+                    let dir = {
+                        let mut stack = stack.lock().unwrap_or_else(|e| e.into_inner());
+                        stack.pop()
+                    };
+                    let Some(dir) = dir else {
+                        std::thread::yield_now();
+                        continue;
+                    };
+
+                    let Ok(entries) = std::fs::read_dir(&dir) else {
+                        pending.fetch_sub(1, Ordering::AcqRel);
+                        continue;
+                    };
+
+                    let mut new_dirs: Vec<PathBuf> = Vec::new();
+                    for entry in entries.flatten() {
+                        let Ok(metadata) = entry.metadata() else {
+                            continue;
+                        };
+                        if metadata.is_dir() {
+                            new_dirs.push(entry.path());
+                            continue;
+                        }
+                        if !metadata.is_file() {
+                            continue;
+                        }
+                        let size = metadata.len();
+                        if size == 0 {
+                            continue;
+                        }
+                        local.consider(entry.path().to_string_lossy().into_owned(), size);
+                    }
+
+                    if !new_dirs.is_empty() {
+                        pending.fetch_add(new_dirs.len(), Ordering::AcqRel);
+                        stack.lock().unwrap_or_else(|e| e.into_inner()).extend(new_dirs);
+                    }
+                    pending.fetch_sub(1, Ordering::AcqRel);
+                }
+            });
+        }
+    });
+
+    let mut selection = shared.lock().unwrap_or_else(|e| e.into_inner());
+    let selection = std::mem::replace(&mut *selection, SampleSelection::new(0));
+    selection.finalize()
 }
 
 fn get_sample_window_count(params: &EntropyParams, file_size: u64) -> u32 {
@@ -327,147 +530,6 @@ fn probe_file_inner(params: &EntropyParams, path: &str, file_size: u64, byte_bud
     (weighted_entropy, sampled_bytes, lz4_certain)
 }
 
-fn collect_subtree_files(root: &Path, include_subdirectories: bool, breadth_first: bool) -> Vec<(String, u64)> {
-    // Parallel walk for the multi-worker case for SSDs
-    if !breadth_first && include_subdirectories {
-        return collect_subtree_files_parallel(root);
-    }
-
-    let mut files: Vec<(String, u64)> = Vec::new();
-    let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
-    // FIFO walk for sequential (HDD) probing keeps the disk head moving in
-    // discovery order
-    let mut head = 0usize;
-
-    while head < pending.len() {
-        let dir = if breadth_first {
-            let d = pending[head].clone();
-            head += 1;
-            d
-        } else {
-            pending.pop().unwrap()
-        };
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-
-        for entry in entries.flatten() {
-            let Ok(metadata) = entry.metadata() else {
-                continue;
-            };
-
-            if metadata.is_dir() {
-                if include_subdirectories {
-                    pending.push(entry.path());
-                }
-                continue;
-            }
-
-            if !metadata.is_file() {
-                continue;
-            }
-
-            let size = metadata.len();
-            if size == 0 {
-                continue;
-            }
-
-            files.push((entry.path().to_string_lossy().into_owned(), size));
-        }
-    }
-
-    files
-}
-
-fn collect_subtree_files_parallel(root: &Path) -> Vec<(String, u64)> {
-    use std::sync::Mutex;
-
-    let stack: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(vec![root.to_path_buf()]));
-    let pending = Arc::new(AtomicUsize::new(1));
-    let files: Arc<Mutex<Vec<(String, u64)>>> = Arc::new(Mutex::new(Vec::new()));
-
-    rayon::scope(|s| {
-        for _ in 0..rayon::current_num_threads().max(1) {
-            let stack = Arc::clone(&stack);
-            let pending = Arc::clone(&pending);
-            let files = Arc::clone(&files);
-            s.spawn(move |_| {
-                let mut local: Vec<(String, u64)> = Vec::new();
-                loop {
-                    if pending.load(Ordering::Acquire) == 0 {
-                        if !local.is_empty() {
-                            files.lock().unwrap_or_else(|e| e.into_inner()).append(&mut local);
-                        }
-                        return;
-                    }
-
-                    let dir = {
-                        let mut stack = stack.lock().unwrap_or_else(|e| e.into_inner());
-                        stack.pop()
-                    };
-                    let Some(dir) = dir else {
-                        std::thread::yield_now();
-                        continue;
-                    };
-
-                    let Ok(entries) = std::fs::read_dir(&dir) else {
-                        pending.fetch_sub(1, Ordering::AcqRel);
-                        continue;
-                    };
-
-                    let mut new_dirs: Vec<PathBuf> = Vec::new();
-                    for entry in entries.flatten() {
-                        let Ok(metadata) = entry.metadata() else {
-                            continue;
-                        };
-                        if metadata.is_dir() {
-                            new_dirs.push(entry.path());
-                            continue;
-                        }
-                        if !metadata.is_file() {
-                            continue;
-                        }
-                        let size = metadata.len();
-                        if size == 0 {
-                            continue;
-                        }
-                        local.push((entry.path().to_string_lossy().into_owned(), size));
-                    }
-
-                    if !new_dirs.is_empty() {
-                        pending.fetch_add(new_dirs.len(), Ordering::AcqRel);
-                        stack.lock().unwrap_or_else(|e| e.into_inner()).extend(new_dirs);
-                    }
-                    pending.fetch_sub(1, Ordering::AcqRel);
-                }
-            });
-        }
-    });
-
-    Arc::try_unwrap(files).ok().and_then(|m| m.into_inner().ok()).unwrap_or_default()
-}
-
-fn reservoir_sample(files: &[(String, u64)], max_files: u32) -> Vec<(String, u64)> {
-    if max_files == 0 || files.is_empty() {
-        return Vec::new();
-    }
-
-    let mut sorted: Vec<(String, u64)> = files.to_vec();
-    sorted.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    if sorted.len() <= max_files as usize {
-        return sorted;
-    }
-
-    let strata = (max_files / 5).max(1) as usize;
-    let top_k = (max_files as usize).saturating_sub(strata);
-    let mut selected = sorted[..top_k].to_vec();
-    let remainder = &sorted[top_k..];
-    for j in 0..strata {
-        selected.push(remainder[(j as f64 * remainder.len() as f64 / strata as f64) as usize].clone());
-    }
-    selected
-}
-
 fn build_probe_jobs(
     params: &EntropyParams,
     sampled_list: &[(String, u64)],
@@ -508,8 +570,11 @@ fn prepare_directory_plan(
     breadth_first: bool,
 ) -> DirPlan {
     let root = Path::new(dir);
-    let files = collect_subtree_files(root, include_subdirectories, breadth_first);
-    let sampled_list = reservoir_sample(&files, max_files);
+    let sampled_list = if !breadth_first && include_subdirectories {
+        collect_sample_selection_parallel(root, max_files)
+    } else {
+        collect_sample_selection(root, max_files, include_subdirectories, breadth_first)
+    };
     let jobs = build_probe_jobs(params, &sampled_list, chunk_size, max_bytes);
     DirPlan {
         dir: dir.to_string(),
@@ -520,7 +585,8 @@ fn prepare_directory_plan(
 fn aggregate_directory(
     outcomes: &mut [FileProbeOutcome],
     max_bytes: u64,
-) -> (f64, u32, u64, u32, Vec<String>, Vec<String>) {
+    collect_paths: bool,
+) -> (f64, u32, u64, u32, bool, Vec<String>, Vec<String>) {
     outcomes.sort_unstable_by_key(|o| o.order);
 
     let mut sampled_files = 0u32;
@@ -528,6 +594,7 @@ fn aggregate_directory(
     let mut size_weighted_entropy = 0.0f64;
     let mut size_total = 0u64;
     let mut lz4_certain_files = 0u32;
+    let mut has_lz4_certain = false;
     let mut sampled_paths: Vec<String> = Vec::new();
     let mut lz4_certain_paths: Vec<String> = Vec::new();
 
@@ -544,10 +611,15 @@ fn aggregate_directory(
         size_weighted_entropy += (outcome.weighted_entropy / outcome.sampled_bytes as f64)
             * outcome.file_size as f64;
         size_total += outcome.file_size;
-        sampled_paths.push(outcome.path.clone());
+        if collect_paths {
+            sampled_paths.push(outcome.path.clone());
+        }
         if outcome.lz4_certain {
             lz4_certain_files += 1;
-            lz4_certain_paths.push(outcome.path.clone());
+            has_lz4_certain = true;
+            if collect_paths {
+                lz4_certain_paths.push(outcome.path.clone());
+            }
         }
 
         if sampled_bytes >= max_bytes {
@@ -561,6 +633,7 @@ fn aggregate_directory(
             sampled_files,
             sampled_bytes,
             lz4_certain_files,
+            has_lz4_certain,
             sampled_paths,
             lz4_certain_paths,
         );
@@ -572,6 +645,7 @@ fn aggregate_directory(
         sampled_files,
         sampled_bytes,
         lz4_certain_files,
+        has_lz4_certain,
         sampled_paths,
         lz4_certain_paths,
     )
@@ -609,7 +683,7 @@ fn maybe_fire_progress(
 }
 
 #[pyfunction]
-#[pyo3(signature = (params, dirs, max_files, max_bytes, chunk_size, include_subdirectories, workers, progress_callback=None))]
+#[pyo3(signature = (params, dirs, max_files, max_bytes, chunk_size, include_subdirectories, workers, collect_paths, progress_callback=None))]
 pub fn probe_directories_parallel(
     py: Python<'_>,
     params: EntropyParams,
@@ -619,6 +693,7 @@ pub fn probe_directories_parallel(
     chunk_size: u64,
     include_subdirectories: bool,
     workers: usize,
+    collect_paths: bool,
     progress_callback: Option<Py<PyAny>>,
 ) -> PyResult<Vec<DirEntropyResult>> {
     if dirs.is_empty() {
@@ -659,14 +734,15 @@ pub fn probe_directories_parallel(
                         lz4_certain,
                     });
                 }
-                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths) =
-                    aggregate_directory(&mut outcomes, max_bytes);
+                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, has_lz4_certain, sampled_paths, lz4_certain_paths) =
+                    aggregate_directory(&mut outcomes, max_bytes, collect_paths);
                 results.push(DirEntropyResult {
                     dir: plan.dir.clone(),
                     average_entropy,
                     sampled_files,
                     sampled_bytes,
                     lz4_certain,
+                    has_lz4_certain,
                     sampled_paths,
                     lz4_certain_paths,
                 });
@@ -722,8 +798,8 @@ pub fn probe_directories_parallel(
                     });
                 }
 
-                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths) =
-                    aggregate_directory(&mut outcomes, max_bytes);
+                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, has_lz4_certain, sampled_paths, lz4_certain_paths) =
+                    aggregate_directory(&mut outcomes, max_bytes, collect_paths);
                 *result_slots[dir_index].lock().unwrap_or_else(|e| e.into_inner()) =
                     Some(DirEntropyResult {
                         dir: plan.dir.clone(),
@@ -731,6 +807,7 @@ pub fn probe_directories_parallel(
                         sampled_files,
                         sampled_bytes,
                         lz4_certain,
+                        has_lz4_certain,
                         sampled_paths,
                         lz4_certain_paths,
                     });
@@ -762,4 +839,51 @@ pub fn register_entropy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<EntropyParams>()?;
     m.add_function(wrap_pyfunction!(probe_directories_parallel, m)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_keeps_largest_files_bounded() {
+        let mut sel = SampleSelection::new(10);
+        for i in 0..1000u64 {
+            sel.consider(format!("f{i}"), i);
+        }
+        assert_eq!(sel.entries.len(), 10);
+        // The kept entries must be the 10 largest, descending by size.
+        let sizes: Vec<u64> = sel.entries.iter().map(|(s, _)| *s).collect();
+        assert_eq!(sizes, vec![999, 998, 997, 996, 995, 994, 993, 992, 991, 990]);
+    }
+
+    #[test]
+    fn selection_merges_workers() {
+        let mut a = SampleSelection::new(5);
+        let mut b = SampleSelection::new(5);
+        for i in 0..10u64 {
+            if i % 2 == 0 {
+                a.consider(format!("a{i}"), i);
+            } else {
+                b.consider(format!("b{i}"), i);
+            }
+        }
+        a.merge(b);
+        assert_eq!(a.entries.len(), 5);
+        let sizes: Vec<u64> = a.entries.iter().map(|(s, _)| *s).collect();
+        assert_eq!(sizes, vec![9, 8, 7, 6, 5]);
+    }
+
+    #[test]
+    fn selection_finalize_matches_strata_behavior() {
+        let mut sel = SampleSelection::new(10);
+        for i in (0..100u64).rev() {
+            sel.consider(format!("f{i}"), i);
+        }
+        let finalized = sel.finalize();
+        assert_eq!(finalized.len(), 10);
+        // Top 8 largest (90..99), then a stride sample from the remaining pool.
+        let first_eight: Vec<u64> = finalized.iter().take(8).map(|(_, s)| *s).collect();
+        assert_eq!(first_eight, vec![99, 98, 97, 96, 95, 94, 93, 92]);
+    }
 }

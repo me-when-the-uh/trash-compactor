@@ -54,6 +54,8 @@ def entropy_records_from_probe(
     sampled_files: int,
     sampled_bytes: int,
     lz4_certain_files: int,
+    *,
+    has_lz4_certain: bool = False,
     sampled_paths: Optional[list[str]] = None,
     lz4_certain_paths: Optional[list[str]] = None,
 ) -> tuple[Optional[DirectorySkipRecord], Optional[EntropySampleRecord]]:
@@ -73,6 +75,12 @@ def entropy_records_from_probe(
         sampled_files,
         sampled_bytes,
     )
+
+    # Callers that probe without path collection (fast_walk) still need the
+    # directory-level LZ4 verdict: use a sentinel when every sampled file was
+    # certainly incompressible.
+    if has_lz4_certain and not lz4_certain_paths:
+        lz4_certain_paths = ["*"]
 
     sample_record = EntropySampleRecord(
         path=str(directory),
@@ -131,8 +139,8 @@ def evaluate_entropy_directory(
         sampled_files,
         sampled_bytes,
         lz4_certain_files,
-        sampled_paths,
-        lz4_certain_paths,
+        sampled_paths=sampled_paths,
+        lz4_certain_paths=lz4_certain_paths,
     )
 
 

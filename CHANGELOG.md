@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.7.1] - 2026-08-20
+
+### Changed
+- Rust entropy sampling now selects the largest files in a single bounded pass to drastically reduce the list of files in memory
+- GUI scan results now stream straight into the planner instead of being buffered
+- Planner logic improved to skip per-file scanning of directories in case they're all badly compressible 
+- Webview calls fixed to avoid stalling the scanning and compression processes
+
+All of this brought about a 3-10x memory consumption improvement, depending on the absolute number of files.
+
 ## [v0.7.0] - 2026-08-19
 
 ### Added

@@ -47,7 +47,6 @@ def run_analysis_pipeline(
     backend._send_progress(_("Scanning directory..."), 0.0, **progress_kwargs)
 
     discovery = GuiDiscoveryStream(backend, base_dir, stats, progress_kwargs, overall_start_time)
-    discovery.prefill_walk()
 
     plan_count = 0
     total_compressible_size = 0
@@ -75,13 +74,15 @@ def run_analysis_pipeline(
 
         discovery.notify_check_progress(processed)
         total_files = max(discovery.count, processed)
-        if processed % PLAN_PROGRESS_GRANULARITY != 0 and processed != total_files:
+        # Count-gated: time-gating lets a summary through every ~20ms when the
+        # GUI bridge is slow, serialising the scan on evaluate_js.
+        if processed % PLAN_PROGRESS_GRANULARITY != 0 and not discovery.complete:
             return
         backend._check_pause_stop()
 
         now = time.perf_counter()
 
-        if now - last_update_time > UI_STATUS_INTERVAL_SECONDS or processed == total_files:
+        if discovery.complete and now - last_update_time > UI_STATUS_INTERVAL_SECONDS:
             last_update_time = now
             backend._send_check_phase_progress(
                 processed,
@@ -89,7 +90,7 @@ def run_analysis_pipeline(
                 **progress_kwargs,
             )
 
-        if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total_files:
+        if processed % (PLAN_PROGRESS_GRANULARITY * 64) == 0 or discovery.complete:
             last_summary_update_time = now
             backend._send_folder_summary(
                 stats,
@@ -121,7 +122,9 @@ def run_analysis_pipeline(
             entropy_phase_start = now
         entropy_elapsed = max(0.001, now - entropy_phase_start)
 
-        if now - last_summary_update_time > UI_SUMMARY_INTERVAL_SECONDS or processed == total:
+        # Count-gated summary: entropy dirs are few (one per subdirectory), so
+        # a count gate here bounds GUI bridge calls tightly.
+        if processed % (ENTROPY_PROGRESS_GRANULARITY * 4) == 0 or processed == total:
             last_summary_update_time = now
             backend._send_folder_summary(
                 stats,
@@ -160,11 +163,6 @@ def run_analysis_pipeline(
     last_update_time = backend._check_phase_start
     last_summary_update_time = backend._check_phase_start
     discovery.enter_check_phase()
-    backend._send_progress(
-        _("Analyzing files..."),
-        scan_progress_percent(discovery.count),
-        **progress_kwargs,
-    )
 
     plan = plan_compression(
         discovery,
