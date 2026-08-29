@@ -79,8 +79,12 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
 
     backend._send(StateResponse("Compacting"))
 
-    total_to_compress = len(plan)
-    total_compressible_size = sum(p[1] for p in plan)
+    # Reuse the totals counted during analysis
+    total_to_compress = backend.last_analysis_plan_count
+    total_compressible_size = backend.last_analysis_total_size
+    if total_to_compress != len(plan):
+        total_to_compress = len(plan)
+        total_compressible_size = sum(p[1] for p in plan)
     compressed_count = [0]
     exec_start_time = time.perf_counter()
 

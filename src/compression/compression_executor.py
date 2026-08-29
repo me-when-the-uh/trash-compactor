@@ -4,7 +4,7 @@ import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from ..i18n import _
 from ..directstorage import compact_failure_is_bypassio, is_under, normalize_path
@@ -23,6 +23,9 @@ _HDD_MAX_COMMAND_CHARS = 1500
 _COMPACT_TIMEOUT_SECONDS = 600
 _SINGLE_FILE_TIMEOUT_SECONDS = 60
 
+# Below Normal process priority for compact.exe
+_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+
 
 def _batch_limits() -> tuple[int, int]:
     if hdd_mode():
@@ -31,12 +34,13 @@ def _batch_limits() -> tuple[int, int]:
 
 
 def _compact_path(path_str: str) -> str:
-    resolved = str(Path(path_str).resolve())
-    if resolved.startswith("\\\\?\\"):
-        stripped = resolved[4:]
+    if not os.path.isabs(path_str):
+        path_str = str(Path(path_str).resolve())
+    if path_str.startswith("\\\\?\\"):
+        stripped = path_str[4:]
         if len(stripped) < 260:
             return stripped
-    return resolved
+    return path_str
 
 
 def _run_compact(
@@ -49,7 +53,7 @@ def _run_compact(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         startupinfo=hidden_startupinfo(),
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        creationflags=subprocess.CREATE_NO_WINDOW | _BELOW_NORMAL_PRIORITY_CLASS,
         shell=False,
         text=True,
         timeout=timeout,
@@ -136,24 +140,6 @@ def execute_compression_plan(
         if not blocked_dirs:
             return False
         return any(is_under(path_str, blocked) for blocked in blocked_dirs)
-
-    def _chunk(entries: Sequence[tuple[str, int]]) -> Iterator[list[tuple[str, int]]]:
-        current = []
-        current_length = 0
-        batch_size, max_chars = _batch_limits()
-
-        for path_str, file_size in entries:
-            path_length = len(_compact_path(path_str)) + 3  # for quotes and space
-            if current and (len(current) >= batch_size or current_length + path_length > max_chars):
-                yield current
-                current = []
-                current_length = 0
-
-            current.append((path_str, file_size))
-            current_length += path_length
-
-        if current:
-            yield current
 
     def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
         # compact /c /a /exe:{algo} path1 path2 ...
@@ -258,7 +244,7 @@ def execute_compression_plan(
 
     for algorithm, entries in grouped.items():
         workers = lzx_workers if algorithm == 'LZX' else xp_workers
-        batches = list(_chunk(entries))
+        batch_size, max_chars = _batch_limits()
 
         if stage_callback:
             try:
@@ -267,14 +253,21 @@ def execute_compression_plan(
                 logging.debug("Stage callback failed for %s", algorithm, exc_info=True)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(
-                    _compact_batch,
-                    algorithm,
-                    [path_str for path_str, _ in batch],
-                ): batch
-                for batch in batches
-            }
+            futures: dict = {}
+            batch: list[tuple[str, int]] = []
+            batch_chars = 0
+            for path_str, file_size in entries:
+                path_length = len(_compact_path(path_str)) + 3  # for quotes and space
+                if batch and (len(batch) >= batch_size or batch_chars + path_length > max_chars):
+                    futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = batch
+                    batch = []
+                    batch_chars = 0
+
+                batch.append((path_str, file_size))
+                batch_chars += path_length
+
+            if batch:
+                futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = batch
 
             for future in as_completed(futures):
                 batch = futures[future]

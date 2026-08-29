@@ -2,7 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.8.0-beta] - 2026-08-29
+## [v0.8.0-beta] - 2026-08-30
+### Changed
+- Hard drive type check now runs at the beginning to avoid any hangups
+- Process priority changed to Below Normal to avoid slowdowns
+
+## [v0.8.0-alpha] - 2026-08-29
 
 ### Added
 - DirectStorage games are skipped before the entropy pass and listed in the analysis page and the log (based on dstorage.dll)

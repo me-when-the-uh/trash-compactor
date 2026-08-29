@@ -4,6 +4,7 @@ Handles IPC between HTML/JS frontend and Python compression backend.
 """
 
 import logging
+import os
 import threading
 import queue
 import json
@@ -35,17 +36,20 @@ class GuiApi:
     def __init__(self, backend_handler: Callable):
         self.backend_handler = backend_handler
         self.current_folder = ""
+        self._window: Optional[Any] = None
+
+    def _pick_folder(self) -> Optional[str]:
+        if self._window is None:
+            return None
+        result = self._window.create_file_dialog(pywebview.FileDialog.FOLDER)
+        if not result:
+            return None
+        return result[0]
 
     def choose_folder(self) -> Dict[str, Any]:
         """Show folder picker dialog."""
         try:
-            import tkinter as tk
-            from tkinter import filedialog
-
-            root = tk.Tk()
-            root.withdraw()
-            folder = filedialog.askdirectory(title=_("Select folder to compress"))
-            root.destroy()
+            folder = self._pick_folder()
 
             if folder:
                 self.current_folder = folder
@@ -122,13 +126,7 @@ class GuiApi:
 
     def choose_exclusion_folder(self) -> Dict[str, Any]:
         try:
-            import tkinter as tk
-            from tkinter import filedialog
-
-            root = tk.Tk()
-            root.withdraw()
-            folder = filedialog.askdirectory(title=_("Select folder to exclude"))
-            root.destroy()
+            folder = self._pick_folder()
 
             if folder:
                 return self.add_exclusion(folder)
@@ -225,9 +223,11 @@ class GuiServer:
                 background_color="#3d3d3d",
             )
             self.running = True
+            self.api._window = self.window
             # Prefer the native Windows backend. Forcing CEF requires an extra
             # cefpython3 runtime that is not bundled in our one-file build.
-            pywebview.start(debug=False, gui="edgechromium")
+            debug = os.environ.get("TRASH_COMPACTOR_GUI_DEBUG") == "1"
+            pywebview.start(debug=debug, gui="edgechromium")
         except Exception as e:
             logging.exception("Error starting GUI: %s", e)
 

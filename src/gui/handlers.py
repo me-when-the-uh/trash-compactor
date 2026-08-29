@@ -88,7 +88,6 @@ def _validate_target_path(backend: "GuiBackend", directory: str) -> Optional[Gui
 
 def _adopt_folder(backend: "GuiBackend", requested_path: str) -> None:
     backend.current_folder = requested_path
-    _apply_drive_recommendation(backend, requested_path)
     try:
         backend._send(backend._current_config_response())
     except Exception:

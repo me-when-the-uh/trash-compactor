@@ -156,7 +156,7 @@ def run_compactos_hidden(
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW | 0x00004000,  # BELOW_NORMAL_PRIORITY_CLASS
             text=True,
             encoding="utf-8",
             errors="replace",
