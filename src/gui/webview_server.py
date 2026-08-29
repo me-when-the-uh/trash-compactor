@@ -24,6 +24,7 @@ from .message_types import (
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
     AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest,
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
+    GetExclusionsRequest, AddExclusionRequest, RemoveExclusionRequest,
 )
 from ..i18n import _, get_current_locale, get_translations
 
@@ -106,6 +107,35 @@ class GuiApi:
         """Reset configuration to defaults."""
         req = ResetConfigRequest()
         return self.backend_handler(req)
+
+    def get_exclusions(self) -> Dict[str, Any]:
+        req = GetExclusionsRequest()
+        return self.backend_handler(req)
+
+    def add_exclusion(self, path: str) -> Dict[str, Any]:
+        req = AddExclusionRequest(path=path or "")
+        return self.backend_handler(req)
+
+    def remove_exclusion(self, path: str) -> Dict[str, Any]:
+        req = RemoveExclusionRequest(path=path or "")
+        return self.backend_handler(req)
+
+    def choose_exclusion_folder(self) -> Dict[str, Any]:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            folder = filedialog.askdirectory(title=_("Select folder to exclude"))
+            root.destroy()
+
+            if folder:
+                return self.add_exclusion(folder)
+            return self.get_exclusions()
+        except Exception as exc:
+            logging.exception("Error choosing exclusion folder: %s", exc)
+            return {"type": "Error", "message": str(exc)}
 
     def open_url(self, url: str) -> Dict[str, Any]:
         """Open URL in default browser."""

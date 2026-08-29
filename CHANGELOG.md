@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.0-beta] - 2026-08-29
+
+### Added
+- DirectStorage games are skipped before the entropy pass and listed in the analysis page and the log (based on dstorage.dll)
+- User path exclusions via `--exclude`, `TRASH_COMPACTOR_EXCLUDE`, and a Settings page editor
+- Extensionless SQLite files and `-wal`, `-shm`, `-journal` sidecars are skipped based on headers
+- Per-algorithm breakdown in the dry-run and compression summaries
+- `--log-file [PATH]` for scheduled or scripted runs
+- `--compactos-always` to opt into CompactOS in 1-click mode (default off, requires Administrator, ignored on a non-interactive console)
+
+### Changed
+- Size projection display is down to 0.01 GB instead of 0.1 GB
+- A non-interactive console without `--yes` refuses to run on an HDD and skips the 1-click countdown
+- Prompts that would block on a non-interactive console return a documented default on `EOFError` or `OSError`
+
+### Fixed
+- `compact.exe` no longer flashes a window on some ancient Windows 10 builds
+- A dedicated error is shown when `wof.sys` is not attached
+- A redirected stdin is preserved instead of being rebound to the parent console
+- The 1-click countdown now catches `Ctrl+C` on the Windows branch
+- `locale.getdefaultlocale` replaced with `locale.getlocale` for Python 3.15 compatibility
+
 ## [v0.7.1] - 2026-08-20
 
 ### Changed

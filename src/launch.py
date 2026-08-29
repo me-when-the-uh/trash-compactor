@@ -8,9 +8,9 @@ from typing import Optional
 from colorama import Fore, Style
 
 from . import config, benchmark
-from .console import EscapeExit, announce_cancelled, read_user_input
+from .console import EscapeExit, _interactive_console, announce_cancelled, cprint, read_user_input
 from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, get_volume_details
-from .file_utils import sanitize_path
+from .file_utils import hidden_startupinfo, sanitize_path
 from .launch_flags import (
     FLAG_HELP_COMMANDS,
     LaunchState,
@@ -36,18 +36,15 @@ def pick_directory_dialog() -> Optional[str]:
     """
     
     cmd = ["powershell", "-NoProfile", "-Command", ps_script]
-    
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    
+
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True, 
+            text=True,
             encoding='utf-8',
             errors='replace',
-            startupinfo=startupinfo
+            startupinfo=hidden_startupinfo()
         )
         path = result.stdout.strip()
         if not path:
@@ -98,21 +95,22 @@ def configure_lzx(
     return False
 
 
-def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
+def confirm_hdd_usage(directory: str, force_serial: bool, *, yes: bool = False) -> bool:
     from .drive_inspector import get_volume_details_fast
 
     details = get_volume_details_fast(directory)
     throttle_requested = force_serial  # Carry over manual single-worker overrides
     target_label = details.drive_letter or directory
+    non_interactive = not _interactive_console()
 
     if details.anchor is None:
         logging.error(_("Unable to resolve volume for %s"), directory)
-        print(Fore.RED + _("Unable to resolve the target volume. Please verify the path.") + Style.RESET_ALL)
+        cprint(Fore.RED, _("Unable to resolve the target volume. Please verify the path."))
         return False
 
     if details.drive_type == DRIVE_REMOTE:
         logging.error(_("Network shares are not supported for compression targets: %s"), directory)
-        print(Fore.RED + _("Network shares are not supported targets for compression.") + Style.RESET_ALL)
+        cprint(Fore.RED, _("Network shares are not supported targets for compression."))
         print(_("Please select a local NTFS volume instead."))
         return False
 
@@ -122,7 +120,7 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
             details.drive_letter or directory,
             details.filesystem,
         )
-        print(Fore.RED + _("Windows compression requires NTFS.") + Style.RESET_ALL)
+        cprint(Fore.RED, _("Windows compression requires NTFS."))
         print(_("Detected filesystem: {filesystem}").format(filesystem=details.filesystem or 'unknown'))
         return False
 
@@ -160,25 +158,40 @@ def confirm_hdd_usage(directory: str, force_serial: bool) -> bool:
     print(_("• Defragment the drive once compression finishes"))
     print(_("• Prefer compressing rarely modified folders on HDDs"))
 
+    if non_interactive:
+        if yes:
+            logging.info(
+                "Non-interactive console: proceeding on HDD %s with --yes override "
+                "(no single-worker prompt; using existing single-worker setting).",
+                target_label,
+            )
+        else:
+            logging.warning(
+                "Non-interactive console detected; refusing to run on HDD %s without --yes. "
+                "Re-run with --yes to override.",
+                target_label,
+            )
+            return False
 
-    print("\n" + Fore.YELLOW + _("\nDo you want to proceed anyway? (y/n): ") + Style.RESET_ALL, end="")
-    try:
-        response = read_user_input("").strip().lower()
-    except (KeyboardInterrupt, EscapeExit):
-        announce_cancelled()
-        return False
-    if response not in {"y", "yes"}:
-        print(Fore.CYAN + _("Operation cancelled.") + Style.RESET_ALL)
-        return False
-
-    if not throttle_requested:
-        print(Fore.YELLOW + _("\nThrottle compression to a single worker to avoid disk fragmentation? (Y/n): ") + Style.RESET_ALL, end="")
+    if not non_interactive:
+        print("\n" + Fore.YELLOW + _("\nDo you want to proceed anyway? (y/n): ") + Style.RESET_ALL, end="")
         try:
-            throttle_response = read_user_input("").strip().lower()
+            response = read_user_input("").strip().lower()
         except (KeyboardInterrupt, EscapeExit):
             announce_cancelled()
             return False
-        throttle_requested = throttle_response in {"", "y", "yes"}
+        if response not in {"y", "yes"}:
+            print(Fore.CYAN + _("Operation cancelled.") + Style.RESET_ALL)
+            return False
+
+        if not throttle_requested:
+            print(Fore.YELLOW + _("\nThrottle compression to a single worker to avoid disk fragmentation? (Y/n): ") + Style.RESET_ALL, end="")
+            try:
+                throttle_response = read_user_input("").strip().lower()
+            except (KeyboardInterrupt, EscapeExit):
+                announce_cancelled()
+                return False
+            throttle_requested = throttle_response in {"", "y", "yes"}
 
     from .workers import set_hdd_mode, set_worker_cap
     set_hdd_mode(True)
@@ -225,7 +238,7 @@ def _print_interactive_status(state: LaunchState) -> None:
 
 
 def _apply_composite_command(parts: list[str], state: LaunchState) -> bool:
-    # Returns True if a path was supplied, so the function caller can short-circuit the default handler
+    """True if the command contained a path that should replace the current directory."""
     if not parts:
         return False
     path_tokens, flag_tokens = split_path_and_flags(parts)
@@ -330,6 +343,7 @@ def _apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
     setattr(args, 'dry_run', state.dry_run)
     args.single_worker = state.single_worker
     args.min_savings = config.clamp_savings_percent(state.min_savings)
+    setattr(args, 'exclude', list(state.excludes))
     return args
 
 
@@ -343,6 +357,7 @@ def interactive_configure(args: Namespace) -> Namespace:
         dry_run=getattr(args, 'dry_run', False),
         single_worker=getattr(args, 'single_worker', False),
         min_savings=config.clamp_savings_percent(getattr(args, 'min_savings', config.DEFAULT_MIN_SAVINGS_PERCENT)),
+        excludes=list(getattr(args, 'exclude', None) or []),
     )
 
     print(Fore.YELLOW + _("\nInteractive launch detected.") + Style.RESET_ALL)
@@ -367,11 +382,9 @@ def acquire_directory(args: Namespace, interactive_launch: bool) -> tuple[str, N
         if candidate:
             print(Fore.RED + _("Directory '{candidate}' does not exist.").format(candidate=candidate) + Style.RESET_ALL)
         else:
-            print(Fore.RED + _("No directory provided.") + Style.RESET_ALL)
+            cprint(Fore.RED, _("No directory provided."))
 
-        # Without a console there is no user to ask; fail instead of looping.
-        from .console import _interactive_console
-
+        # Fail instead of looping if non-interactive
         if not _interactive_console():
             return "", args
 

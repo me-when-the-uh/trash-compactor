@@ -1,5 +1,5 @@
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Optional
 
 from colorama import Fore, Style
@@ -17,6 +17,7 @@ FLAG_METADATA: dict[str, tuple[str, str]] = {
         '-m/--min-savings=<percent>',
         f"Set minimum expected savings percentage ({config.MIN_SAVINGS_PERCENT:.0f}-{config.MAX_SAVINGS_PERCENT:.0f})",
     ),
+    'exclude': ('--exclude PATH', 'Skip a directory (repeatable)'),
 }
 
 SHORT_FLAG_KEYS: dict[str, str] = {
@@ -35,6 +36,7 @@ LONG_FLAG_KEYS: dict[str, str] = {
     'dry-run': 'dry_run',
     'single-worker': 'single_worker',
     'min-savings': 'min_savings',
+    'exclude': 'exclude',
 }
 
 START_COMMANDS: set[str] = {'s', 'start'}
@@ -55,6 +57,7 @@ class LaunchState:
     dry_run: bool = False
     single_worker: bool = False
     min_savings: float = config.DEFAULT_MIN_SAVINGS_PERCENT
+    excludes: list[str] = field(default_factory=list)
 
     MAX_VERBOSITY: ClassVar[int] = 3
 
@@ -68,6 +71,11 @@ class LaunchState:
     def set_min_savings(self, percent: float) -> None:
         self.min_savings = config.clamp_savings_percent(percent)
 
+    def add_exclude(self, path: str) -> None:
+        cleaned = path.strip().strip(" '\"")
+        if cleaned and cleaned not in self.excludes:
+            self.excludes.append(cleaned)
+
     def _silence_conflicts(self, key: str) -> None:
         for primary, secondary in _MUTUALLY_EXCLUSIVE:
             if key == primary and getattr(self, secondary):
@@ -76,7 +84,7 @@ class LaunchState:
                 setattr(self, primary, False)
 
     def toggle(self, key: str) -> None:
-        if key == 'min_savings':
+        if key == 'min_savings' or key == 'exclude':
             return
         if key == 'verbose':
             self.set_verbose_level(1)
@@ -93,10 +101,14 @@ def format_active_flags(state: LaunchState) -> str:
         items.append(_("Verbose level {level} (-{flags})").format(level=state.verbose, flags='v' * state.verbose))
 
     for key, (flag, description) in FLAG_METADATA.items():
-        if key == 'verbose' or key == 'min_savings':
+        if key == 'verbose' or key == 'min_savings' or key == 'exclude':
             continue
         if getattr(state, key):
             items.append(f"{_(description)} ({flag})")
+    if state.excludes:
+        items.append(
+            _("Skip a directory (repeatable)") + f" ({', '.join(state.excludes)})"
+        )
     return ", ".join(items) if items else _("<none>")
 
 
@@ -143,6 +155,9 @@ def _handle_long_option(option: str, value: Optional[str], state: LaunchState) -
             )
             return
         state.set_min_savings(parsed)
+    elif key == 'exclude':
+        if value:
+            state.add_exclude(value)
     elif key:
         state.toggle(key)
 
@@ -210,6 +225,10 @@ def split_path_and_flags(tokens: list[str]) -> tuple[list[str], list[str]]:
                 if raw_value.startswith('='):
                     raw_value = raw_value[1:]
                 if raw_value == "" and index + 1 < len(tokens) and not tokens[index + 1].startswith('-'):
+                    flag_tokens.append(tokens[index + 1])
+                    index += 1
+            elif lowered in {'--exclude', '--min-savings', '--language'} or lowered.startswith(('--exclude=', '--min-savings=', '--language=')):
+                if '=' not in token and index + 1 < len(tokens) and not tokens[index + 1].startswith('-'):
                     flag_tokens.append(tokens[index + 1])
                     index += 1
             index += 1

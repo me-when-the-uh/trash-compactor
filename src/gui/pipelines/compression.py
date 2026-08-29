@@ -109,7 +109,6 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
             execute_compression_plan(
                 plan,
                 stats,
-                monitor,
                 verbosity=0,
                 xp_workers=xp_worker_count(),
                 lzx_workers=lzx_worker_count(),
@@ -245,7 +244,6 @@ def _run_quick_compression_loop(
                 execute_compression_plan(
                     plan,
                     stats,
-                    monitor,
                     verbosity=0,
                     xp_workers=xp_worker_count(),
                     lzx_workers=lzx_worker_count(),
@@ -253,7 +251,7 @@ def _run_quick_compression_loop(
                     progress_callback=_exec_progress,
                 )
 
-            from ..summary import accumulate_stats
+            from ...stats import accumulate_stats
             accumulate_stats(total_stats, stats)
 
             backend._send_folder_summary(

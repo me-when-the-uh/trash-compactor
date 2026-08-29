@@ -9,43 +9,6 @@ from typing import Any, Dict, Optional
 
 
 @dataclass
-class FolderSummary:
-    """Summary statistics for a folder analysis."""
-    logical_size: int = 0
-    physical_size: int = 0
-    compressed_count: int = 0
-    compressed_logical: int = 0
-    compressed_physical: int = 0
-    compressible_count: int = 0
-    compressible_logical: int = 0
-    compressible_physical: int = 0
-    skipped_count: int = 0
-    skipped_logical: int = 0
-    skipped_physical: int = 0
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "logical_size": self.logical_size,
-            "physical_size": self.physical_size,
-            "compressed": {
-                "count": self.compressed_count,
-                "logical_size": self.compressed_logical,
-                "physical_size": self.compressed_physical,
-            },
-            "compressible": {
-                "count": self.compressible_count,
-                "logical_size": self.compressible_logical,
-                "physical_size": self.compressible_physical,
-            },
-            "skipped": {
-                "count": self.skipped_count,
-                "logical_size": self.skipped_logical,
-                "physical_size": self.skipped_physical,
-            },
-        }
-
-
-@dataclass
 class GuiRequest:
     """Base class for all GUI -> Backend requests."""
     type: str = field(init=False, default="")
@@ -115,6 +78,29 @@ class SaveConfigRequest(GuiRequest):
 @dataclass
 class ResetConfigRequest(GuiRequest):
     type: str = field(init=False, default="ResetConfig")
+
+
+@dataclass
+class GetExclusionsRequest(GuiRequest):
+    type: str = field(init=False, default="GetExclusions")
+
+
+@dataclass
+class AddExclusionRequest(GuiRequest):
+    type: str = field(init=False, default="AddExclusion")
+    path: str = ""
+
+
+@dataclass
+class RemoveExclusionRequest(GuiRequest):
+    type: str = field(init=False, default="RemoveExclusion")
+    path: str = ""
+
+
+@dataclass
+class ExclusionsResponse(GuiResponse):
+    type: str = field(init=False, default="Exclusions")
+    paths: list[str] = field(default_factory=list)
 
 
 @dataclass

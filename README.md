@@ -8,12 +8,10 @@
 [![NTFS](https://img.shields.io/badge/filesystem-NTFS%20only-blueviolet?style=for-the-badge&labelColor=1b1f27&color=7d5cfc)](#limitations)<!-- [![Python](https://img.shields.io/badge/python-3.11%20-%203.13-yellow?style=for-the-badge&logo=python&logoColor=white&labelColor=1b1f27&color=f0c94a)](#option-2-running-from-source)
 [![Rust](https://img.shields.io/badge/rust%20engine-fast__walk-orange?style=for-the-badge&logo=rust&logoColor=white&labelColor=1b1f27&color=f0753a)](#native-rust-engine) -->
 [![License](https://img.shields.io/badge/license-MIT-brightgreen?style=for-the-badge&labelColor=1b1f27&color=4bc34b)](LICENSE)
-[![Release](https://img.shields.io/badge/latest-v0.7.1-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
+[![Release](https://img.shields.io/badge/latest-v0.8.0_beta-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
 [![Build date](https://img.shields.io/badge/build%20date-who%20cares-blue?style=for-the-badge&labelColor=1b1f27&color=6cb6ff)](src/version.py)
-[![RAM](https://img.shields.io/badge/RAM%20usage-25%25%20lower-brightgreen?style=for-the-badge&labelColor=1b1f27&color=4bc34b)](#native-rust-engine)
-<!-- [![Stars](https://img.shields.io/github/stars/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=2f81f7&logo=star&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/stargazers)
-[![Issues](https://img.shields.io/github/issues/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=e5534b&logo=github&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/issues)
-[![Forks](https://img.shields.io/github/forks/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=8f9bb3&logo=git&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/network/members) -->
+[![Stars](https://img.shields.io/github/stars/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=2f81f7&logo=star&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/stargazers)
+
 *A utility for intelligent file compression on Windows 10/11 using the built-in NTFS compression algorithms and Windows' built-in `compact.exe` utility.*
 
 <!-- ### Ten thousand stars can't be wrong
@@ -54,20 +52,18 @@ Compressing large directories to gain extra storage space will be so free and wi
 | | Trash-Compactor (NTFS) | ZIP / 7Z archive |
 |---|---|---|
 | Visible to apps | ✅ Fully transparent - apps read files normally | ❌ Files hidden inside an archive |
-| Space freed | ✅ Immediately on disk | ✅ Only while archive exists |
-| Original file | ✅ Stays in place, smaller | ❌ Moved into a `.zip`, originals deleted |
-| One-time vs ongoing | ✅ Compress once, forget forever | ❌ Re-archive every time data changes |
-| Nothing to remember | ✅ No "open the archive" step | ❌ Must remember where things are |
-| SSD wear | ✅ Skipped unless clearly worth it | ⚠️ Writes everything again |
+| Space freed | ✅ Immediately on disk | ❌ Requires removing original files |
+| Original file | ✅ Stays in place, smaller | ❌ Copied into `.zip`, original files need to be deleted |
+| SSD wear | ✅ Skips certain files unless clearly worth compressing | ⚠️ Will attempt to compress even uncompressible files |
 
 ### Performance by the numbers
 
 > **Warning:** the following chart was conjured up with a level of statistical rigour usually reserved for marketing departments. Values are real, methodology is... *flexible*
 
-| Metric | Improvement |
+| Metric | Improvement compared to competition |
 |---|---|
-| RAM usage during scan | **25% lower** (sliding-window algorithm) |
-| Directory scan throughput | **~60% faster** (Rust 🚀🚀🚀🚀🚀🚀🚀🚀) |
+| RAM usage during scan | **25% lower** (sliding window algorithm) |
+| Directory scan throughput | **up to 60% faster** (Rust 🚀🚀🚀🚀🚀🚀🚀🚀) |
 | Entropy scan speed | **exists** |
 | Compression batches | **50% faster** (multi-threaded `compact.exe`) |
 
@@ -77,16 +73,16 @@ Compressing large directories to gain extra storage space will be so free and wi
 
 ## The Competition
 
-Let's be real - this isn't a one-horse race. Two other tools do roughly the same thing with `compact.exe`:
+There are two other tools do roughly the same thing with `compact.exe`:
 
-- **[CompactGUI](https://github.com/IridiumIO/CompactGUI)** - a GUI that compresses whatever you point it at. No scanning, no entropy analysis, no guardrails. It's the sledgehammer; we're the scalpel. With a laser. And a spreadsheet.
-- **[Compactor](https://github.com/Freaky/Compactor)** - compresses Steam games. Great if all you do is play Steam games. If you want the whole drive re-architected for density, that's where Trash-Compactor comes in.
+- **[Compactor](https://github.com/Freaky/Compactor)**- a GUI that compresses whatever you point it at. No scanning, no entropy analysis, no guardrails. It's the sledgehammer; we're the scalpel. With a temperature-sensing laser. And a spreadsheet.
+- **[CompactGUI](https://github.com/IridiumIO/CompactGUI)** - primarily targets compressing Steam games and does the same thing that Compactor does. Great if all you do is play Steam games. But if you want the whole drive re-architected for density, that's where Trash-Compactor comes in.
 
 ### Head-to-head
 
 | | Trash-Compactor | Compactor | CompactGUI |
 |---|---|---|---|
-| Automatic scan | ✅ | ❌ | ❌ |
+| Automated scanning | ✅ | ❌ | ❌ |
 | Entropy analysis | ✅ | ❌ | ❌ |
 | Smart algorithm per file | ✅ | ❌ | ❌ |
 | Whole-drive focus | ✅ | ❌ | Steam-only |
@@ -106,11 +102,12 @@ Let's be real - this isn't a one-horse race. Two other tools do roughly the same
 - **Multiple operation modes** for different use cases
 - **Skips poorly-compressible formats** (zip, media files, etc.)
 - **Skips already-compressed files**
+- **User path exclusions** — skip folders 
 - **Skips LZX compression** on computers identified as too slow to handle it without performance losses *(taking care of users)*
 - **Detailed compression and file throughput stats**
-- **GUI** with progress bar, scan/entropy timing breakdown, and Defender performance notice
+- **GUI** with progress bar, scan/entropy timing breakdown, space savings estimation, and stats
 - **Native Rust scan and entropy engine** (`fast_walk`) for high-throughput directory analysis
-- **HDD mode** - a gentler single-worker pipeline for spinning drives with a defrag hint after the run
+- **HDD mode** - a gentler single-worker mode for spinning drives to avoid excessive disk fragmentation
 - **Deterministic CLI exit codes** and a `-y` flag for scripted dry-runs
 - **Shared path validation** for CLI and GUI before any scanning begins
 
@@ -118,9 +115,10 @@ Let's be real - this isn't a one-horse race. Two other tools do roughly the same
 
 ## Limitations
 
-- It's only for storage devices with an **NTFS** file system, like your system drive and external flash drives and SSDs if they're formatted to use NTFS. If it's FAT32, exFAT or ReFS - it won't work for you.
+- It's only for storage devices with an **NTFS** file system, like your system drive and external flash drives and SSDs if they're formatted to use NTFS. If it's FAT32 or exFAT - it won't work for you.
 - It's best to assume that it likely won't work on **network drives** even if they are formatted to NTFS *(haven't tested it)*.
 - **Spinning hard drives** might get fragmented, negatively impacting read performance - that's why HDD mode exists, and why it gives you a defrag hint afterwards.
+- **DirectStorage or BypassIO API videogames may break**, the latest changes are targeted to detect and avoid compressing games utilising DirectStorage API 
 
 ---
 
@@ -140,11 +138,11 @@ Let's be real - this isn't a one-horse race. Two other tools do roughly the same
 
 ### Option 2: Running from Source
 
-Supported on Windows 10/11 (64-bit). The native `fast_walk` extension is **required** - the pure-Python fallback was removed.
+Supported on Windows 10/11 (64-bit). The native `fast_walk` extension is **required**
 
 #### The easy way: let the build script do it
 
-The only prerequisites are **Python 3.11-3.13 (64-bit)** from [python.org](https://www.python.org/downloads/windows/) and **Rust** via [rustup](https://rustup.rs) (MSVC toolchain, with Visual Studio Build Tools). The script checks for both and tells you exactly what's missing if you forgot.
+The only prerequisites are **Python 3.11+ (64-bit) or above** from [python.org](https://www.python.org/downloads/windows/) and **Rust** via [rustup](https://rustup.rs) (MSVC toolchain, with Visual Studio Build Tools). The script checks for both and tells you exactly what's missing if you forgot.
 
 1. Clone and navigate to the repository:
 
@@ -163,9 +161,9 @@ The only prerequisites are **Python 3.11-3.13 (64-bit)** from [python.org](https
    ./build.ps1
    ```
 
-   That single command installs the Python dependencies, builds the Rust extension, bundles the single-file executable, and verifies the frozen build before calling it done.
+   The script installs Python dependencies, builds the Rust extension, bundles the single-file executable, and verifies the frozen build before calling it done.
 
-3. Let it cook. After a while, `dist\trash-compactor.exe` is ready for action.
+3. Let it cook. After a while, you'd find the executable in the `./dist` directory.
 
 (The exit-code ladder of every possible failure mode lives in the [Development](#development) section. Also, even though malware rarely happens nowadays, don't just blindly build or run stuff even if the code is out in the open...)
 
@@ -173,7 +171,7 @@ The only prerequisites are **Python 3.11-3.13 (64-bit)** from [python.org](https
 
 If you'd rather download dependencies and type out the build commands on your own, or you want to run from source instead of bundling an executable, here's how it goes:
 
-1. Install **Python 3.11-3.13 (64-bit)** from [python.org](https://www.python.org/downloads/windows/). The Rust extension is built for the interpreter you run with.
+1. Install **Python 3.11+ (64-bit) or above** from [python.org](https://www.python.org/downloads/windows/). The Rust extension is built for the interpreter you run with.
 2. Install **Rust** via [rustup](https://rustup.rs) (MSVC toolchain) and ensure Visual Studio Build Tools with the *"Desktop development with C++"* workload is present.
 3. Clone and navigate to the repository:
 
@@ -289,7 +287,7 @@ Be aware that temporarily disabling the anti-virus or whitelisting this program 
 
 #### Dry-run Mode (`-d`)
 
-To check how well a directory will compress **without writing anything** to the drive. SSDs have a finite amount of data that can be written, so some users might check if it's worth bothering to compress their directory.
+To check how well a directory will compress **without writing anything** to the drive. SSDs have a finite amount of data that can be written, which is why some users might want to check if it's worth bothering to compress a given directory.
 
 ```powershell
 .\trash-compactor.exe -d C:\path\to\compress
@@ -299,13 +297,11 @@ To check how well a directory will compress **without writing anything** to the 
 
 LZX compression is turned **on** for large files by default.
 
-LZX compression is resource-intensive and files will take some time to compress, though it does result in better compression of both compressible binaries and the files that XPRESS16K doesn't compress as well. But if you have a computer that was built or made before AD 2021, or if battery life is absolutely critical for you *(a big problem on Intel Coffee Lake laptops)*, you may want to disable it.
+LZX compression is resource-intensive and files will take some time to compress, though it does result in better compression of compressible binaries and the files that XPRESS16K is unable to compress as effectively. But if you have a computer that was built or made before AD 2021, or if battery life is absolutely critical for you *(a very big problem on Intel Coffee Lake laptops)*, you may want to disable it.
 
 #### Running with a single worker (`-s`) for HDDs
 
-HDDs read data sequentially and can't handle the random I/O that parallel queries generate - every seek costs more IOPS than parallelism gains. When a spinning drive is detected, **HDD mode** runs the whole pipeline single-worker: the scan visits directories in discovery order, entropy sampling reads files in order, and compression uses smaller batches, so the disk head moves forward instead of jumping between folders.
-
-Use `-s` to additionally force sequential scan/entropy on very old drives where even ordered reads thrash *(HDD mode already does this)*.
+HDDs read data sequentially and can't handle the random I/O that parallel queries generate - every seek costs more IOPS than parallelism gains. When a spinning drive is detected, or when it's enabled in the settings, **HDD mode** runs the whole pipeline with a single worker, so that the disk head moves forward instead of constantly jumping between files and folders.
 
 ### Additional Scripting Options
 
@@ -313,6 +309,7 @@ Use `-s` to additionally force sequential scan/entropy on very old drives where 
 |---|---|
 | `-v` / `--verbose` | Show exclusion decisions with entropy sampling. Supports 3 levels of verbosity, up to `-vvv` for debug logs. |
 | `-m` / `--min-savings <percent>` | Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically. |
+| `--exclude PATH` | Skip a directory (repeatable). Combined with the persisted Settings list and `TRASH_COMPACTOR_EXCLUDE` (`;`-separated). |
 | `-y` / `--yes` / `--no-prompt` | Proceed with compression after a dry-run analysis without prompting. |
 
 ### Exit Codes
@@ -330,10 +327,10 @@ Deterministic exit codes for scripting:
 
 Trash-compactor stores high-entropy directory decisions in an on-disk cache to avoid re-sampling the same low-value directories on future runs. It's an append-only text file, one entry per line: `xxhash64(path + volume serial) [mtime]`
 
-- **Located in** `%APPDATA%\TrashCompactor\incompressible.db`
+- Located in `%APPDATA%\TrashCompactor\incompressible.db`
 - **Fallback path**, if `%APPDATA%` is not set: `~/.cache/TrashCompactor/incompressible.db`
-- The **volume serial binds an entry to its drive**, so the same path on a different drive never collides
-- Each entry records the directory's time when it was modified; a newer `mtime` resets the cache entry
+- The **volume serial binds an entry to its drive** to make sure that the same path on a different drive never collides
+- Each entry records the directory's time when it was modified, and a newer `mtime` resets the cache entry
 
 The cache is loaded into memory when the program is started. New high-entropy entries are staged during analysis and written to disk only after a compression run completes.
 
@@ -344,14 +341,14 @@ The cache is loaded into memory when the program is started. New high-entropy en
 ### The pipeline
 
 1. **Scan** - a native Rust walker (`fast_walk`) traverses the tree with a pool of threads, classifying every file by extension, size, and whether it's already compressed, and grabbing the NTFS on-disk size in the same pass.
-2. **Entropy analysis** - candidate directories are sampled (LZ4 gate, then zlib level 2) on multiple 16 KiB windows placed at the start, middle, and end of the largest files. Directories that can't clear the Minimum Savings % threshold are skipped in bulk. Every candidate file that survives the directory gate (≥ 8 KiB) is then probed individually, largest first per directory; a file is dropped only when **every** sampled window fails the LZ4 gate (certainly incompressible), so a pre-compressed multi-GB archive next to compressible files doesn't drag the whole directory through `compact.exe` for nothing.
+2. **Entropy analysis** - candidate directories are sampled with LZ4 (used as a gate) and zlib level 2 (evaluates the compressibility further after passing through the LZ4 gate) on multiple 16 KiB windows placed at the start, middle, and end of the largest files. Directories that can't clear the Minimum Savings % threshold are skipped in bulk. Every candidate file that survives the directory gate (≥ 8 KiB) is then probed individually, starting from the first largest file per directory; a file is dropped only when **every** sampled window fails the LZ4 gate (meaning that it's certainly incompressible), which is to make sure that a pre-compressed multi-GB archive next to compressible files doesn't drag the whole directory through `compact.exe` for nothing.
 3. **Compression** - the plan is grouped by algorithm and executed in batches of `compact.exe` calls, with per-algorithm concurrency limits and a timeout on every invocation.
 
 ### Native Rust engine
 
-The two hottest phases - walking and entropy probing - are extracted into a small Rust crate, `fast_walk`, exposed to Python via PyO3. It uses **rayon** for parallelism and **mmap** for large files, and streams results back to Python as small batches so the GUI stays responsive without buffering an entire multi-gigabyte tree in memory. Measured effects: higher absolute throughput *and* lower RAM residency.
+The two hottest phases - walking and entropy probing - are extracted into a small Rust crate, `fast_walk`, exposed to Python via PyO3. It uses **rayon** for parallelism and **mmap** for large files, and streams results back to Python as small batches. The GUI stays responsive without buffering an entire multi-gigabyte tree in memory. Measured effects: higher absolute throughput *and* lower RAM residency.
 
-> **Heads-up for packagers:** the wheel is *mandatory* for source runs. `fast_walk/__init__.py` re-exports the native module from site-packages and raises a clear error with build instructions when the wheel is missing.
+> **If you're a packager:** the wheel is *mandatory* for source runs. `fast_walk/__init__.py` re-exports the native module from site-packages and raises an error with build instructions when the wheel is missing.
 
 ### The pipeline, but with more arrows
 
@@ -365,47 +362,8 @@ Because every project needs a diagram:
         │                    │                        │
         │  "compressible?"   │  "worth it?"           │  "done!"
         ▼                    ▼                        ▼
-    skip stuff          skip more stuff           victory over Big AI's SSD bribes
+   skip stuff         skip more stuff        victory over Big AI's SSD bribes
 ```
-
-<!-- ---
-
-## Trophy Gallery
-
-**Awards so prestigious that I made them up myself:**
-
-<div align="center">
-
-[![Award](https://img.shields.io/badge/🏆-Best%20in%20Show%20(e%2Dwaste%20division)-gold?style=for-the-badge&labelColor=1b1f27)](https://github.com/me-when-the-uh/trash-compactor)
-[![Award](https://img.shields.io/badge/🥇-Gold%20Medal%20for%20Free%20Real%20Estate-silver?style=for-the-badge&labelColor=1b1f27)](https://github.com/me-when-the-uh/trash-compactor)
-[![Award](https://img.shields.io/badge/🎖️-Honorary%20PhD%20in%20Squeezing-silver?style=for-the-badge&labelColor=1b1f27)](https://github.com/me-when-the-uh/trash-compactor)
-
-</div>
-
-**And the physical trophies I didn't have budget for:**
-
-```text
-        ___
-       /   \          ╭─────────╮          ╱╲╱╲
-      |  🏆  |         │  DRY    │         ╲╱╲╱
-       \___/          │  LEGEND │          │  │
-        | |           ╰─────────╯          ╰──╯
-   Best in Show      Best Practices       Free Real Estate
-```
-
----
-
-## Hall of Fame of Technical Details
-
-The kind of details that belong in a README's README:
-
-- The **first byte** of every file is read with the same enthusiasm as the last - that's what NTFS compression is built on.
-- The scan runs in **Rust**, the GUI runs in **webview**, and the whole thing is orchestrated by **Python**. It's the tech-stack equivalent of a three-legged race, and somehow it wins.
-- Files below **8 KiB** are never even considered - they're too small to matter, and they know it.
-- The **incompressible cache** remembers every directory you've ever written off. It's the only grudge this tool holds.
-- **CompactOS** is offered only when you're an Administrator - because compressing `C:\Windows` without permission is a one-way ticket to a blue screen.
-- Every `compact.exe` call has a **timeout**, because some files are so stubborn they'd rather hang than compress.
-- **HDD mode** reads directories in discovery order so the disk head moves forward like it's walking a hallway, not playing ping-pong. -->
 
 <details>
 <summary>📚 Read the fine print (technical specifications)</summary>
@@ -479,19 +437,28 @@ Put a "star" if you find this project helpful or cool. I don't know what they do
 Yes. NTFS compression is fully transparent - every program reads the files exactly as before, Windows just stores them more compactly.
 
 **Will this wear out my SSD?**
-That's the whole point of the entropy analysis. The program only compresses files that are clearly worth it, skipping low-yield and already-compressed data. You can also check before committing with dry-run mode.
+Even though compressing naturally requires rewriting data on the SSD (which is what wears SSDs out), the point of the entropy analysis is to check which files are compressible, skipping low-yield and already-compressed data. Only the compressible files get compressed, skipping 
 
 **Do I need to run as Administrator?**
 Only if you want the 1-click mode to also compress Windows system binaries via CompactOS. Everything else works as a normal user.
 
-**What about my spinning hard drive?**
-HDD mode runs the whole pipeline single-worker so the disk head moves forward instead of jumping between folders, and it nudges you to defragment afterwards.
-
 **Does it work with non-NTFS drives?**
-No. FAT32, exFAT and ReFS are out - NTFS only.
+No. FAT32 and exFAT are out - NTFS only. (If you somehow get it working on ReFS, there are 0 guarantees it will do anything)
 
-**Can I schedule it?**
-Yes - it's a CLI. Pair the deterministic exit codes with a scheduled task or a script, point it at your directories, and let it run.
+**Can I schedule the compression to be done once a month?**
+Yes - it's a CLI. Pair the deterministic exit codes with a scheduled task or a script, point it at your directories, and let it run. Use `--exclude` or `TRASH_COMPACTOR_EXCLUDE` to keep scheduled runs away from folders you do not want touched.
+
+**What if an app misbehaves after compression?**
+Add its folder under **Excluded folders** in Settings (or pass `--exclude`) and re-run. Compression is reversible: `compact /u /exe /s:"C:\path"`. Database files (`.db`, `.sqlite`, …) are already skipped; extensionless SQLite files are skipped by header.
+
+**I copied a compressed folder and it grew back.**
+WOF compression does not survive copy or move. That is typical Windows behaviour and not a bug. Re-run on the destination if you still want it compacted.
+
+**Updates undid the savings.**
+WOF `/exe` does not re-apply when a file is rewritten. Re-running Trash-Compactor is safe (already-compressed files are skipped). Do not treat the freed space as permanently empty if the software patches in place.
+
+**compact.exe says the filesystem does not support compression on an NTFS data volume.**
+On some Server 2016/2019 volumes `wof.sys` is only attached to `C:`. From an elevated prompt: `fltmc attach Wof X:` then retry.
 
 ---
 
@@ -524,8 +491,6 @@ Yes - it's a CLI. Pair the deterministic exit codes with a scheduled task or a s
 - Security and Reliability:
   - Improve handling and messaging for network/NAS paths
   - Add verification of filesystem compatibility
-- Backburner:
-  - DirectStorage detection research
 
 ---
 
