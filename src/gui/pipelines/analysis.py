@@ -183,6 +183,8 @@ def run_analysis_pipeline(
         backend.last_analysis_plan = []
         backend.last_analysis_stats = stats
         backend.last_analysis_monitor = monitor
+        backend.last_analysis_plan_count = 0
+        backend.last_analysis_total_size = 0
         monitor.end_operation()
         backend.last_analysis_timing = build_analysis_timing(
             monitor,
@@ -211,6 +213,8 @@ def run_analysis_pipeline(
     backend.last_analysis_plan = plan
     backend.last_analysis_stats = stats
     backend.last_analysis_monitor = monitor
+    backend.last_analysis_plan_count = plan_count
+    backend.last_analysis_total_size = total_compressible_size
 
     apply_entropy_projection(stats, plan)
     monitor.end_operation()

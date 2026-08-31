@@ -4,6 +4,7 @@ Handles IPC between HTML/JS frontend and Python compression backend.
 """
 
 import logging
+import os
 import threading
 import queue
 import json
@@ -24,6 +25,7 @@ from .message_types import (
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
     AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest,
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
+    GetExclusionsRequest, AddExclusionRequest, RemoveExclusionRequest,
 )
 from ..i18n import _, get_current_locale, get_translations
 
@@ -34,17 +36,20 @@ class GuiApi:
     def __init__(self, backend_handler: Callable):
         self.backend_handler = backend_handler
         self.current_folder = ""
+        self._window: Optional[Any] = None
+
+    def _pick_folder(self) -> Optional[str]:
+        if self._window is None:
+            return None
+        result = self._window.create_file_dialog(pywebview.FileDialog.FOLDER)
+        if not result:
+            return None
+        return result[0]
 
     def choose_folder(self) -> Dict[str, Any]:
         """Show folder picker dialog."""
         try:
-            import tkinter as tk
-            from tkinter import filedialog
-
-            root = tk.Tk()
-            root.withdraw()
-            folder = filedialog.askdirectory(title=_("Select folder to compress"))
-            root.destroy()
+            folder = self._pick_folder()
 
             if folder:
                 self.current_folder = folder
@@ -106,6 +111,29 @@ class GuiApi:
         """Reset configuration to defaults."""
         req = ResetConfigRequest()
         return self.backend_handler(req)
+
+    def get_exclusions(self) -> Dict[str, Any]:
+        req = GetExclusionsRequest()
+        return self.backend_handler(req)
+
+    def add_exclusion(self, path: str) -> Dict[str, Any]:
+        req = AddExclusionRequest(path=path or "")
+        return self.backend_handler(req)
+
+    def remove_exclusion(self, path: str) -> Dict[str, Any]:
+        req = RemoveExclusionRequest(path=path or "")
+        return self.backend_handler(req)
+
+    def choose_exclusion_folder(self) -> Dict[str, Any]:
+        try:
+            folder = self._pick_folder()
+
+            if folder:
+                return self.add_exclusion(folder)
+            return self.get_exclusions()
+        except Exception as exc:
+            logging.exception("Error choosing exclusion folder: %s", exc)
+            return {"type": "Error", "message": str(exc)}
 
     def open_url(self, url: str) -> Dict[str, Any]:
         """Open URL in default browser."""
@@ -195,9 +223,11 @@ class GuiServer:
                 background_color="#3d3d3d",
             )
             self.running = True
+            self.api._window = self.window
             # Prefer the native Windows backend. Forcing CEF requires an extra
             # cefpython3 runtime that is not bundled in our one-file build.
-            pywebview.start(debug=False, gui="edgechromium")
+            debug = os.environ.get("TRASH_COMPACTOR_GUI_DEBUG") == "1"
+            pywebview.start(debug=debug, gui="edgechromium")
         except Exception as e:
             logging.exception("Error starting GUI: %s", e)
 

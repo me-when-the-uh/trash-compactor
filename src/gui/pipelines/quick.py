@@ -6,9 +6,9 @@ from ...exceptions import WorkerStopped
 from ...file_utils import is_admin
 from ...i18n import _
 from ...one_click import resolve_targets, run_compactos_hidden
-from ...stats import CompressionStats
+from ...stats import CompressionStats, accumulate_stats
 from ..message_types import CompactOSIndicatorResponse, FolderSummaryResponse, WarningResponse
-from ..summary import accumulate_stats, build_live_analysis_timing, make_stats_summary
+from ..summary import build_live_analysis_timing, make_stats_summary
 from .analysis import run_analysis_pipeline
 
 if TYPE_CHECKING:

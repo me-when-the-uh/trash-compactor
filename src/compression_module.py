@@ -57,7 +57,7 @@ def create_compression_plan(
     interactive_output = verbosity_level == 0
 
     discovered = CountingDirEntryIter(
-        iter_files(base_dir, stats, verbosity_level, min_savings_percent, debug_scan_all=debug_scan_all)
+        iter_files(base_dir, stats, debug_scan_all=debug_scan_all)
     )
 
     timer: Optional[ProgressTimer] = None
@@ -126,8 +126,6 @@ def execute_compression_plan_wrapper(
     interactive_output: bool,
     min_savings_percent: float,
 ) -> tuple[CompressionStats, PerformanceMonitor]:
-    monitor.stats.files_skipped = stats.skipped_files
-
     stage_items: list[tuple[str, list[tuple[str, int]]]] = []
     stage_states: list[str] = []
     stage_progress: list[dict[str, int]] = []
@@ -245,7 +243,6 @@ def execute_compression_plan_wrapper(
                 execute_compression_plan(
                     plan,
                     stats,
-                    monitor,
                     verbosity_level,
                     xp_workers,
                     lzx_workers,

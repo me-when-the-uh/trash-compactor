@@ -110,7 +110,7 @@ class GuiDiscoveryStream:
             self._walk_start = time.perf_counter()
             self._last_scan_update = self._walk_start
             self._last_summary_update = self._walk_start
-            for index, entry in enumerate(iter_files(self._base_dir, self._stats, 0, self._backend.min_savings)):
+            for index, entry in enumerate(iter_files(self._base_dir, self._stats)):
                 self.count += 1
                 if index % SCAN_STOP_CHECK_EVERY_FILES == 0:
                     self._backend._check_pause_stop()

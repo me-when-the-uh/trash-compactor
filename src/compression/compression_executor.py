@@ -1,17 +1,20 @@
 import logging
+import os
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Callable, Iterator, Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from ..i18n import _
-from ..config import COMPRESSION_ALGORITHMS
+from ..directstorage import compact_failure_is_bypassio, is_under, normalize_path
 from ..exceptions import WorkerStopped
-from ..file_utils import is_file_compressed
-from ..stats import CompressionStats
-from ..timer import PerformanceMonitor
+from ..file_utils import hidden_startupinfo, is_file_compressed
+from ..stats import CompressionStats, _algo_field
 from ..workers import hdd_mode
+
+_wof_unattached_warned: set[str] = set()
+_wof_warn_lock = threading.Lock()
 
 _BATCH_SIZE = 100
 _HDD_BATCH_SIZE = 25
@@ -19,6 +22,9 @@ _MAX_COMMAND_CHARS = 4000
 _HDD_MAX_COMMAND_CHARS = 1500
 _COMPACT_TIMEOUT_SECONDS = 600
 _SINGLE_FILE_TIMEOUT_SECONDS = 60
+
+# Below Normal process priority for compact.exe
+_BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
 
 
 def _batch_limits() -> tuple[int, int]:
@@ -28,52 +34,86 @@ def _batch_limits() -> tuple[int, int]:
 
 
 def _compact_path(path_str: str) -> str:
-    resolved = str(Path(path_str).resolve())
-    if resolved.startswith("\\\\?\\"):
-        stripped = resolved[4:]
+    if not os.path.isabs(path_str):
+        path_str = str(Path(path_str).resolve())
+    if path_str.startswith("\\\\?\\"):
+        stripped = path_str[4:]
         if len(stripped) < 260:
             return stripped
-    return resolved
-
-
-def _hidden_startupinfo() -> subprocess.STARTUPINFO:
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    return startupinfo
+    return path_str
 
 
 def _run_compact(
     args: Sequence[str],
     *,
-    capture: bool = False,
     timeout: int = _COMPACT_TIMEOUT_SECONDS,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
-        stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-        stderr=subprocess.PIPE if capture else subprocess.DEVNULL,
-        startupinfo=_hidden_startupinfo(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        startupinfo=hidden_startupinfo(),
+        creationflags=subprocess.CREATE_NO_WINDOW | _BELOW_NORMAL_PRIORITY_CLASS,
         shell=False,
-        text=capture,
+        text=True,
         timeout=timeout,
     )
 
 
-def compress_file(file_path: Path, algorithm: str, *, timeout: int = _COMPACT_TIMEOUT_SECONDS) -> bool:
+def _compact_text(result: subprocess.CompletedProcess) -> str:
+    return f"{result.stderr or ''}{result.stdout or ''}"
+
+
+def _volume_label(path_str: str) -> str:
+    drive = os.path.splitdrive(path_str)[0]
+    if not drive:
+        return path_str
+    return drive if drive.endswith(("\\", "/")) else f"{drive}\\"
+
+
+def _maybe_warn_wof_unattached(path_str: str, result: subprocess.CompletedProcess) -> None:
+    if result.returncode == 0:
+        return
+    text = _compact_text(result).lower()
+    if "does not support compression" not in text:
+        return
+    volume = _volume_label(path_str)
+    with _wof_warn_lock:
+        if volume in _wof_unattached_warned:
+            return
+        _wof_unattached_warned.add(volume)
+    logging.error(
+        _(
+            "The filesystem on {volume} reported NTFS but compact.exe /exe failed "
+            "because the Windows Overlay Filter (wof.sys) is not attached. "
+            "From an elevated prompt run: fltmc attach Wof {volume}"
+        ).format(volume=volume)
+    )
+
+
+def compress_file_with_reason(
+    file_path: Path,
+    algorithm: str,
+    *,
+    timeout: int = _COMPACT_TIMEOUT_SECONDS,
+) -> tuple[bool, Optional[str]]:
     try:
-        # compact /c /a /exe:{algorithm} "{file_path}"
         command = ['compact', '/c', '/a', f'/exe:{algorithm}', _compact_path(str(file_path))]
         result = _run_compact(command, timeout=timeout)
-        return result.returncode == 0
+        _maybe_warn_wof_unattached(str(file_path), result)
+        if result.returncode == 0:
+            return True, None
+        if compact_failure_is_bypassio(_compact_text(result)):
+            return False, _("Skipped because BypassIO is active on this file")
+        return False, None
     except (OSError, subprocess.SubprocessError) as exc:
         logging.error("Error compressing %s: %s", file_path, exc)
-        return False
+        return False, None
 
 
 def execute_compression_plan(
     plan: Sequence[tuple[str, int, str]],
     stats: CompressionStats,
-    monitor: PerformanceMonitor,
     verbosity: int,
     xp_workers: int,
     lzx_workers: int,
@@ -87,24 +127,19 @@ def execute_compression_plan(
 
     stats_lock = threading.Lock()
     progress_lock = threading.Lock()
+    blocked_dirs: set[str] = set()
+    bypassio_reason = _("Skipped because BypassIO is active on this file")
+    bypassio_warned = False
 
-    def _chunk(entries: Sequence[tuple[str, int]]) -> Iterator[list[tuple[str, int]]]:
-        current = []
-        current_length = 0
-        batch_size, max_chars = _batch_limits()
+    def _block_parent(path_str: str) -> None:
+        parent = normalize_path(os.path.dirname(path_str))
+        if parent:
+            blocked_dirs.add(parent)
 
-        for path_str, file_size in entries:
-            path_length = len(_compact_path(path_str)) + 3  # for quotes and space
-            if current and (len(current) >= batch_size or current_length + path_length > max_chars):
-                yield current
-                current = []
-                current_length = 0
-
-            current.append((path_str, file_size))
-            current_length += path_length
-
-        if current:
-            yield current
+    def _is_blocked(path_str: str) -> bool:
+        if not blocked_dirs:
+            return False
+        return any(is_under(path_str, blocked) for blocked in blocked_dirs)
 
     def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
         # compact /c /a /exe:{algo} path1 path2 ...
@@ -121,6 +156,9 @@ def execute_compression_plan(
             with stats_lock:
                 stats.compressed_files += 1
                 stats.total_compressed_size += compressed_size
+                bucket = _algo_field(stats, algo)
+                bucket.files_compressed += 1
+                bucket.bytes_compressed += compressed_size
             logging.debug("Compressed %s using %s", path, algo)
         else:
             # Verification failed to show size change, so we don't count it as compressed
@@ -175,10 +213,24 @@ def execute_compression_plan(
         *,
         timeout: int = _SINGLE_FILE_TIMEOUT_SECONDS,
     ) -> None:
-        success = compress_file(path, algo, timeout=timeout)
+        if _is_blocked(str(path)):
+            _record_failure(path, file_size, algo, bypassio_reason)
+            return
+
+        success, reason = compress_file_with_reason(path, algo, timeout=timeout)
 
         if not success:
-            _record_failure(path, file_size, algo)
+            if reason:
+                nonlocal bypassio_warned
+                _block_parent(str(path))
+                if not bypassio_warned:
+                    bypassio_warned = True
+                    logging.warning(
+                        _("Skipping DirectStorage game {path}; compact.exe would disable BypassIO").format(
+                            path=path.parent
+                        )
+                    )
+            _record_failure(path, file_size, algo, reason)
             return
 
         _finalize_success(path, file_size, algo, context='fallback')
@@ -186,10 +238,13 @@ def execute_compression_plan(
     grouped: dict[str, list[tuple[str, int]]] = {}
     for path_str, size, algorithm in plan:
         grouped.setdefault(algorithm, []).append((path_str, size))
+        bucket = _algo_field(stats, algorithm)
+        bucket.files_planned += 1
+        bucket.bytes_planned += size
 
     for algorithm, entries in grouped.items():
         workers = lzx_workers if algorithm == 'LZX' else xp_workers
-        batches = list(_chunk(entries))
+        batch_size, max_chars = _batch_limits()
 
         if stage_callback:
             try:
@@ -198,14 +253,21 @@ def execute_compression_plan(
                 logging.debug("Stage callback failed for %s", algorithm, exc_info=True)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(
-                    _compact_batch,
-                    algorithm,
-                    [path_str for path_str, _ in batch],
-                ): batch
-                for batch in batches
-            }
+            futures: dict = {}
+            batch: list[tuple[str, int]] = []
+            batch_chars = 0
+            for path_str, file_size in entries:
+                path_length = len(_compact_path(path_str)) + 3  # for quotes and space
+                if batch and (len(batch) >= batch_size or batch_chars + path_length > max_chars):
+                    futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = batch
+                    batch = []
+                    batch_chars = 0
+
+                batch.append((path_str, file_size))
+                batch_chars += path_length
+
+            if batch:
+                futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = batch
 
             for future in as_completed(futures):
                 batch = futures[future]
@@ -234,7 +296,12 @@ def execute_compression_plan(
                         algorithm,
                         len(batch),
                     )
+                    if batch:
+                        _maybe_warn_wof_unattached(batch[0][0], result)
                     for path_str, file_size in batch:
+                        if _is_blocked(path_str):
+                            _record_failure(Path(path_str), file_size, algorithm, bypassio_reason)
+                            continue
                         _compress_single(Path(path_str), file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
                     continue
 

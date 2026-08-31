@@ -1,3 +1,4 @@
+import logging
 import os
 import re
 import subprocess
@@ -11,14 +12,16 @@ from typing import Optional
 from colorama import Fore, Style
 
 from . import entropy_dry_run, execute_compression_plan_wrapper
+from .cli_log import pretty_size
+from .console import _interactive_console, cprint
 from .i18n import _
 from .skip_logic import log_directory_skips
 from .stats import (
     CompressionStats,
+    accumulate_stats,
     log_estimated_savings,
     print_compression_summary,
     print_dry_run_summary,
-    print_entropy_dry_run,
 )
 from .timer import PerformanceMonitor, TimingStats
 from .config import COMPRESSION_ALGORITHMS
@@ -70,55 +73,6 @@ def _compactos_log_path() -> Path:
     import tempfile
 
     return Path(tempfile.gettempdir()) / f"compactos_result_{os.getpid()}.txt"
-
-
-def _encoded_ps_command(script: str) -> str:
-    """Encode a PowerShell command as -EncodedCommand (base64 UTF-16LE).
-
-    Avoids quoting/injection issues when the script embeds paths derived from
-    environment variables (e.g. TMP).
-    """
-    import base64
-
-    return base64.b64encode(script.encode("utf-16-le")).decode("ascii")
-
-
-def _spawn_compactos_window() -> None:
-    """Spawn a visible CompactOS window (CLI fallback)."""
-    if os.name != "nt":
-        return
-
-    comp_log = _compactos_log_path()
-    os.environ["COMPACTOS_LOG"] = str(comp_log)
-
-    # Keep a separate window open so the user can see CompactOS output
-    ps_command = (
-        f"Write-Host -ForegroundColor Cyan 'Compressing OS binaries... This may take a while.'; "
-        f"compact.exe /compactos:always | Tee-Object -FilePath '{comp_log}'; "
-        f"Write-Host ''; Write-Host -ForegroundColor Green 'Compression finished. This window will close in 5 minutes...'; "
-        f"Start-Sleep -Seconds 300"
-    )
-
-    try:
-        subprocess.Popen(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-EncodedCommand",
-                _encoded_ps_command(ps_command),
-            ],
-            creationflags=subprocess.CREATE_NEW_CONSOLE
-        )
-    except OSError:
-        # Fallback to cmd if PowerShell isn't available
-        try:
-            msg = "Compressing OS binaries... This may take a while."
-            cmd = f'echo {msg} & compact.exe /compactos:always > "{comp_log}" & type "{comp_log}" & echo. & echo Compression finished. This window will close in 5 minutes... & timeout /t 300'
-            subprocess.Popen(["cmd.exe", "/c", "start", "cmd.exe", "/c", cmd])
-        except OSError:
-            return
 
 
 def _parse_int_token(token: str) -> int:
@@ -173,16 +127,6 @@ def _parse_compactos_summary(output: str) -> dict[str, object]:
     return info
 
 
-def _human_bytes(n: int) -> str:
-    if n >= (1 << 30):
-        return f"{n / (1 << 30):.1f} GiB"
-    if n >= (1 << 20):
-        return f"{n / (1 << 20):.1f} MiB"
-    if n >= (1 << 10):
-        return f"{n / (1 << 10):.1f} KiB"
-    return f"{n} B"
-
-
 COMPACTOS_TIMEOUT_SECONDS = 2 * 60 * 60  # CompactOS can run for over an hour
 
 
@@ -212,7 +156,7 @@ def run_compactos_hidden(
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW,
+            creationflags=subprocess.CREATE_NO_WINDOW | 0x00004000,  # BELOW_NORMAL_PRIORITY_CLASS
             text=True,
             encoding="utf-8",
             errors="replace",
@@ -344,68 +288,95 @@ def countdown_to_compress(seconds: int = 300) -> bool:
     deadline = time.monotonic() + seconds
     last_shown: Optional[int] = None
 
-    while True:
-        remaining = max(0, int(round(deadline - time.monotonic())))
-        if remaining != last_shown:
-            if remaining in {300, 120, 60, 30, 10, 5, 4, 3, 2, 1}:
-                _attention_beep()
-            sys.stdout.write("\r" + _( "Time remaining: {remaining:3d}s" ).format(remaining=remaining) + " " * 10)
-            sys.stdout.flush()
-            last_shown = remaining
+    try:
+        while True:
+            remaining = max(0, int(round(deadline - time.monotonic())))
+            if remaining != last_shown:
+                if remaining in {300, 120, 60, 30, 10, 5, 4, 3, 2, 1}:
+                    _attention_beep()
+                sys.stdout.write("\r" + _( "Time remaining: {remaining:3d}s" ).format(remaining=remaining) + " " * 10)
+                sys.stdout.flush()
+                last_shown = remaining
 
-        if remaining <= 0:
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            return True
-
-        if msvcrt.kbhit():
-            key = msvcrt.getwch()
-            key = key.lower()
-
-            if key in {"y", "\r", "\n"}:
+            if remaining <= 0:
                 sys.stdout.write("\n")
                 sys.stdout.flush()
                 return True
-            if key in {"n", "\x1b"}:
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                return False
 
-        time.sleep(0.1)
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+                key = key.lower()
+
+                if key in {"y", "\r", "\n"}:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return True
+                if key in {"n", "\x1b"}:
+                    sys.stdout.write("\n")
+                    sys.stdout.flush()
+                    return False
+
+            time.sleep(0.1)
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        return False
 
 
-def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: bool = False) -> None:
+def run_one_click_mode(
+    *,
+    verbosity: int,
+    min_savings: float,
+    compactos_requested: bool = False,
+    yes: bool = False,
+) -> list[str]:
+    """1-click compression. Returns the resolved target paths for the log file."""
     targets = resolve_targets()
+    target_paths = [str(p) for p in targets.directories]
+    non_interactive = not _interactive_console()
+    if non_interactive:
+        logging.info(
+            "Non-interactive console detected; running 1-click unattended. "
+            "Pass --no to abort."
+        )
 
     _clear_screen()
     print(Fore.CYAN + Style.BRIGHT + _("1-click mode (unattended)") + Style.RESET_ALL)
     if not targets.directories:
         print(Fore.YELLOW + _("No default targets were found on this system.") + Style.RESET_ALL)
-        return
+        return target_paths
 
     print(_("The following directories will be analysed for compression:"))
     for directory in targets.directories:
         print(f"  - {directory}")
 
     print()
-    if allow_compactos:
+    if compactos_requested and not non_interactive:
         should_compress_windows = _prompt_yes_no(
             _("Compress Windows binaries now for extra memory savings?"),
             default=False,
         )
         if should_compress_windows:
-            print(Fore.YELLOW + _("Starting Windows compression in a separate window...") + Style.RESET_ALL)
-            _spawn_compactos_window()
+            print(
+                Fore.YELLOW
+                + _("Starting Windows binaries compression in the background...")
+                + Style.RESET_ALL
+            )
+            threading.Thread(target=run_compactos_hidden, daemon=True).start()
         else:
             print(
                 Fore.YELLOW
                 + _("Skipping Windows binaries compression by user choice.")
                 + Style.RESET_ALL
             )
-    else:
+    elif compactos_requested and non_interactive:
+        logging.info(
+            "1-click: ignoring --compactos-always on a non-interactive console."
+        )
+    elif not compactos_requested:
         print(
             Fore.YELLOW
-            + _("Skipping Windows compression: administrator privileges are required to run 'compact.exe /compactos:always'.")
+            + _("Skipping Windows compression: pass --compactos-always (requires Administrator privileges) to run 'compact.exe /compactos:always'.")
             + Style.RESET_ALL
         )
         print(
@@ -429,7 +400,12 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
             min_savings_percent=min_savings,
         )
 
-        print_entropy_dry_run(stats, min_savings, verbosity)
+        print_dry_run_summary(
+            min_savings_percent=min_savings,
+            projected_original_bytes=stats.entropy_projected_original_bytes,
+            projected_compressed_lzx_bytes=stats.entropy_projected_size,
+            projected_compressed_xpress_bytes=stats.entropy_projected_size_conservative,
+        )
         log_directory_skips(stats, verbosity, min_savings)
         # Intentionally do not print per-directory performance summaries in 1-click mode.
 
@@ -453,9 +429,12 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
     )
     total_timing.print_dry_run_metrics(min_percent=0.5)
 
-    if not countdown_to_compress(300):
-        print(Fore.CYAN + _( "\nCompression cancelled." ) + Style.RESET_ALL)
-        return
+    if not non_interactive:
+        if yes:
+            logging.info("1-click: skipping the 300-second countdown (--yes).")
+        elif not countdown_to_compress(300):
+            print(Fore.CYAN + _( "\nCompression cancelled." ) + Style.RESET_ALL)
+            return target_paths
 
     print(Fore.CYAN + _( "\nStarting compression..." ) + Style.RESET_ALL)
 
@@ -490,15 +469,7 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
 
         monitor.print_summary()
 
-        total_comp_stats.compressed_files += stats.compressed_files
-        total_comp_stats.skipped_files += stats.skipped_files
-        total_comp_stats.already_compressed_files += stats.already_compressed_files
-        total_comp_stats.total_original_size += stats.total_original_size
-        total_comp_stats.total_compressed_size += stats.total_compressed_size
-        total_comp_stats.total_skipped_size += stats.total_skipped_size
-        total_comp_stats.skip_extension_files += stats.skip_extension_files
-        total_comp_stats.skip_low_savings_files += stats.skip_low_savings_files
-        total_comp_stats.errors.extend(stats.errors)
+        accumulate_stats(total_comp_stats, stats)
 
         total_comp_timing.total_time += monitor.stats.total_time
         total_comp_timing.compression_time += monitor.stats.compression_time
@@ -518,7 +489,7 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
             if parsed.get("saved_bytes"):
                 print(
                     Fore.GREEN
-                    + f"CompactOS: {parsed.get('files', '?')} files, saved {_human_bytes(int(parsed['saved_bytes']))}"
+                    + f"CompactOS: {parsed.get('files', '?')} files, saved {pretty_size(int(parsed['saved_bytes']))}"
                     + (f" (ratio {parsed['ratio']:.1f})" if parsed.get("ratio") else "")
                     + Style.RESET_ALL
                 )
@@ -531,3 +502,4 @@ def run_one_click_mode(*, verbosity: int, min_savings: float, allow_compactos: b
             pass
 
     print(Fore.CYAN + _( "\n1-click mode finished." ) + Style.RESET_ALL)
+    return target_paths

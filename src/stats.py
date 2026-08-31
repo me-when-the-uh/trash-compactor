@@ -134,6 +134,28 @@ class DirectorySkipRecord:
     sampled_files: int = 0
     sampled_bytes: int = 0
 
+    def display_name(self) -> str:
+        """Relative path under the scan root, or the absolute path when that would be '.'."""
+        relative = (self.relative_path or "").strip()
+        if not relative or relative in {".", os.curdir}:
+            return self.path
+        return relative
+
+    def format_line(self) -> str:
+        name = self.display_name()
+        if os.path.normcase(os.path.normpath(name)) == os.path.normcase(os.path.normpath(self.path)):
+            return self.path
+        return f"{name} ({self.path})"
+
+
+_SKIP_BUCKET_FIELDS: dict = {
+    "extension": ("extension", "extension_logical", "extension_hint"),
+    "too_small": ("too_small", "too_small_logical", "too_small_hint"),
+    "already_compressed": ("already_compressed", "already_compressed_logical", "already_compressed_hint"),
+    "error": ("error", "error_logical", "error_hint"),
+    "magic": ("magic", "magic_logical", "magic_hint"),
+}
+
 
 @dataclass
 class SkipBulkLedger:
@@ -149,25 +171,18 @@ class SkipBulkLedger:
     error: int = 0
     error_logical: int = 0
     error_hint: int = 0
+    magic: int = 0
+    magic_logical: int = 0
+    magic_hint: int = 0
 
     def add(self, category: str, hint: int, logical: int) -> None:
-        resolved_hint = hint if hint > 0 else logical
-        if category == "extension":
-            self.extension += 1
-            self.extension_logical += logical
-            self.extension_hint += resolved_hint
-        elif category == "too_small":
-            self.too_small += 1
-            self.too_small_logical += logical
-            self.too_small_hint += resolved_hint
-        elif category == "already_compressed":
-            self.already_compressed += 1
-            self.already_compressed_logical += logical
-            self.already_compressed_hint += resolved_hint
-        elif category == "error":
-            self.error += 1
-            self.error_logical += logical
-            self.error_hint += resolved_hint
+        fields = _SKIP_BUCKET_FIELDS.get(category)
+        if fields is None:
+            return
+        count_field, logical_field, hint_field = fields
+        setattr(self, count_field, getattr(self, count_field) + 1)
+        setattr(self, logical_field, getattr(self, logical_field) + logical)
+        setattr(self, hint_field, getattr(self, hint_field) + (hint if hint > 0 else logical))
 
 
 @dataclass
@@ -182,6 +197,15 @@ class EntropySampleRecord:
     lz4_certain_files: int = 0
     sampled_paths: List[str] = field(default_factory=list)
     lz4_certain_paths: List[str] = field(default_factory=list)
+
+
+@dataclass
+class AlgorithmStats:
+    files_planned: int = 0
+    files_compressed: int = 0
+    bytes_planned: int = 0
+    bytes_projected: int = 0
+    bytes_compressed: int = 0
 
 
 @dataclass
@@ -213,6 +237,29 @@ class CompressionStats:
     entropy_projected_size: int = 0
     entropy_projected_size_conservative: int = 0
     lz4_certain_incompressible_files: int = 0
+    algo_lzx: AlgorithmStats = field(default_factory=AlgorithmStats)
+    algo_xpress16k: AlgorithmStats = field(default_factory=AlgorithmStats)
+    algo_xpress8k: AlgorithmStats = field(default_factory=AlgorithmStats)
+    algo_xpress4k: AlgorithmStats = field(default_factory=AlgorithmStats)
+
+    def by_algorithm_breakdown(self) -> List[dict]:
+        buckets = [
+            ("LZX", self.algo_lzx),
+            ("XPRESS16K", self.algo_xpress16k),
+            ("XPRESS8K", self.algo_xpress8k),
+            ("XPRESS4K", self.algo_xpress4k),
+        ]
+        out: List[dict] = []
+        for name, b in buckets:
+            if b.files_planned == 0 and b.files_compressed == 0:
+                continue
+            out.append({
+                "name": name,
+                "files": b.files_compressed or b.files_planned,
+                "original": b.bytes_planned,
+                "post": b.bytes_compressed or b.bytes_projected,
+            })
+        return out
 
     def set_base_dir(self, base_dir: Path) -> None:
         self.base_dir = base_dir
@@ -273,6 +320,13 @@ class CompressionStats:
             already_compressed=False,
             category="error",
         )
+        self._record_skip_batch(
+            ledger.magic,
+            ledger.magic_hint,
+            ledger.magic_logical,
+            already_compressed=False,
+            category="magic",
+        )
 
     def _record_skip_batch(
         self,
@@ -314,27 +368,14 @@ class CompressionStats:
         category: Optional[str],
     ) -> None:
         resolved_hint = size_hint if size_hint > 0 else original_size
-        self.skipped_files += 1
-        if resolved_hint > 0:
-            self.total_skipped_physical_size += resolved_hint
-            self.total_compressed_size += resolved_hint
-        if original_size > 0:
-            self.total_skipped_size += original_size
-        if already_compressed:
-            self.already_compressed_files += 1
-            if original_size > 0:
-                self.already_compressed_logical_size += original_size
-            if resolved_hint > 0:
-                self.already_compressed_physical_size += resolved_hint
-        else:
-            self.excluded_files += 1
-            if original_size > 0:
-                self.excluded_logical_size += original_size
-            if resolved_hint > 0:
-                self.excluded_physical_size += resolved_hint
-        if category == 'extension':
-            self.skip_extension_files += 1
-        elif category == 'high_entropy':
+        self._record_skip_batch(
+            1,
+            resolved_hint,
+            original_size,
+            already_compressed=already_compressed,
+            category=category,
+        )
+        if category == 'high_entropy':
             self.skip_low_savings_files += 1
 
     def _classify_skip(
@@ -356,6 +397,28 @@ class CompressionStats:
         return 'generic'
 
 
+def accumulate_stats(target: CompressionStats, source: CompressionStats) -> None:
+    target.compressed_files += source.compressed_files
+    target.skipped_files += source.skipped_files
+    target.already_compressed_files += source.already_compressed_files
+    target.total_original_size += source.total_original_size
+    target.total_compressed_size += source.total_compressed_size
+    target.total_skipped_size += source.total_skipped_size
+    target.total_skipped_physical_size += source.total_skipped_physical_size
+    target.already_compressed_logical_size += source.already_compressed_logical_size
+    target.already_compressed_physical_size += source.already_compressed_physical_size
+    target.skip_extension_files += source.skip_extension_files
+    target.skip_low_savings_files += source.skip_low_savings_files
+    target.errors.extend(source.errors)
+    target.entropy_projected_original_bytes += source.entropy_projected_original_bytes or source.total_original_size
+    target.entropy_projected_size += source.entropy_projected_size or source.total_compressed_size
+    target.entropy_projected_size_conservative += (
+        source.entropy_projected_size_conservative or source.total_compressed_size
+    )
+    target.lz4_certain_incompressible_files += source.lz4_certain_incompressible_files
+    target.directory_skips.extend(source.directory_skips)
+
+
 def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int, str]]) -> None:
     from .config import DRY_RUN_CONSERVATIVE_FACTORS, SIZE_THRESHOLDS
 
@@ -369,6 +432,9 @@ def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int,
     projected_xpress = 0.0
     for path_str, size, algo in plan:
         record = entropy_map.get(Path(path_str).parent)
+        bucket = _algo_field(stats, algo)
+        bucket.files_planned += 1
+        bucket.bytes_planned += size
         if record:
             factor = max(0.0, record.estimated_savings / 100.0)
             base_compressed = size * (1.0 - factor)
@@ -380,24 +446,32 @@ def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int,
                 xpress_factor = DRY_RUN_CONSERVATIVE_FACTORS.get('XPRESS16K', 1.0)
                 projected_lzx += base_compressed * lzx_factor
                 projected_xpress += base_compressed * xpress_factor
+                bucket.bytes_projected += int(round(base_compressed * (
+                    lzx_factor if algo == 'LZX' else xpress_factor
+                )))
             else:
                 # Non-large files: same factor for both projections.
                 algo_factor = DRY_RUN_CONSERVATIVE_FACTORS.get(algo, 1.0)
                 projected_lzx += base_compressed * algo_factor
                 projected_xpress += base_compressed * algo_factor
+                bucket.bytes_projected += int(round(base_compressed * algo_factor))
         else:
             projected_lzx += size
             projected_xpress += size
+            bucket.bytes_projected += size
 
     skipped = stats.total_compressed_size
     stats.entropy_projected_size = int(round(projected_lzx + skipped))
     stats.entropy_projected_size_conservative = int(round(projected_xpress + skipped))
 
 
-def _format_summary_size(value: int) -> str:
-    if value >= 1024 * 1024 * 1024:
-        return f"{value / (1024 * 1024 * 1024):.1f}GB"
-    return f"{value / (1024 * 1024):.1f}MB"
+def _algo_field(stats: CompressionStats, name: str) -> "AlgorithmStats":
+    return {
+        "LZX": stats.algo_lzx,
+        "XPRESS16K": stats.algo_xpress16k,
+        "XPRESS8K": stats.algo_xpress8k,
+        "XPRESS4K": stats.algo_xpress4k,
+    }[name]
 
 
 def log_estimated_savings(
@@ -407,6 +481,8 @@ def log_estimated_savings(
     *,
     active_large_algorithm: str = "LZX",
 ) -> None:
+    from .cli_log import pretty_size
+
     original = max(0, int(original_bytes))
     lzx = max(0, int(compressed_lzx_bytes))
     xpress = max(0, int(compressed_xpress_bytes))
@@ -420,8 +496,8 @@ def log_estimated_savings(
         ratio = round((savings / original) * 100) if original > 0 else 0
         logging.info(
             "\t%s -> %s (%d%% %s)",
-            _format_summary_size(original),
-            _format_summary_size(comp_bytes),
+            pretty_size(original),
+            pretty_size(comp_bytes),
             ratio,
             label,
         )
@@ -456,31 +532,17 @@ def print_dry_run_summary(
     )
 
 
-def print_entropy_dry_run(stats: CompressionStats, min_savings_percent: float, verbosity: int = 0) -> None:
-    # Kept for API compatibility; this is the dry-run summary output.
-    print_dry_run_summary(
-        min_savings_percent=min_savings_percent,
-        projected_original_bytes=stats.entropy_projected_original_bytes,
-        projected_compressed_lzx_bytes=stats.entropy_projected_size,
-        projected_compressed_xpress_bytes=stats.entropy_projected_size_conservative,
-    )
-
-
 def print_compression_summary(stats: CompressionStats) -> None:
+    from .cli_log import pretty_size
+
     logging.info(_("\nCompression Summary"))
     logging.info("------------------")
     logging.info(_("Files compressed: %s"), stats.compressed_files)
     logging.info(_("Files skipped: %s"), stats.skipped_files)
+    logging.info(_("  %s are compressed with Trash-Compactor"), stats.already_compressed_files)
+    logging.info(_("  %s have compressed file types"), stats.skip_extension_files)
     logging.info(
-        _("     %s are compressed with Trash-Compactor"),
-        stats.already_compressed_files,
-    )
-    logging.info(
-        _("     %s have compressed file types"),
-        stats.skip_extension_files,
-    )
-    logging.info(
-        _("     %s fall below %.1f%% projected savings"),
+        _("  %s fall below %.1f%% projected savings"),
         stats.skip_low_savings_files,
         stats.min_savings_percent,
     )
@@ -491,17 +553,55 @@ def print_compression_summary(stats: CompressionStats) -> None:
 
     total_original = stats.total_original_size
     total_compressed = stats.total_compressed_size
-    logging.info(_("\nOriginal size: %.2f MB"), total_original / (1024 * 1024))
+    logging.info(_("\nOriginal size: %s"), pretty_size(total_original))
 
     if total_original > 0:
         space_saved = max(0, total_original - total_compressed)
         ratio = (space_saved / total_original) * 100
-        logging.info(_("Space saved: %.2f MB"), space_saved / (1024 * 1024))
+        logging.info(_("Space saved: %s"), pretty_size(space_saved))
         logging.info(_("Overall compression ratio: %.2f%%"), ratio)
-        logging.info(_("Size after compression: %.2f MB"), total_compressed / (1024 * 1024))
+        logging.info(_("Size after compression: %s"), pretty_size(total_compressed))
 
     if stats.errors:
         logging.info(_("\nErrors encountered:"))
         for error in stats.errors:
             logging.error(error)
+
+
+def log_by_algorithm(
+    stats: CompressionStats,
+    lzx_disabled: bool,
+    lzx_disabled_reason: Optional[str] = None,
+) -> None:
+    from .cli_log import pretty_size
+
+    logging.info("")
+    logging.info(_("By algorithm:"))
+    if lzx_disabled:
+        reason = lzx_disabled_reason or "disabled"
+        logging.info("  LZX       : %s", _("disabled ({reason})").format(reason=reason))
+    for name, b in [
+        ("LZX", stats.algo_lzx),
+        ("XPRESS16K", stats.algo_xpress16k),
+        ("XPRESS8K", stats.algo_xpress8k),
+        ("XPRESS4K", stats.algo_xpress4k),
+    ]:
+        if lzx_disabled and name == "LZX":
+            continue
+        if b.files_planned == 0 and b.files_compressed == 0:
+            continue
+        files = b.files_compressed or b.files_planned
+        post = b.bytes_compressed or b.bytes_projected
+        if b.bytes_planned > 0 and post > 0:
+            saved_pct = (1 - post / b.bytes_planned) * 100
+        else:
+            saved_pct = 0.0
+        logging.info(
+            "  %-10s: %5d files, %s -> %s (%5.1f%% saved)",
+            name,
+            files,
+            pretty_size(b.bytes_planned),
+            pretty_size(post),
+            saved_pct,
+        )
 
