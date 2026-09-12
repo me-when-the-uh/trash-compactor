@@ -120,6 +120,7 @@ def execute_compression_plan(
     *,
     stage_callback: Optional[Callable[[str, int], None]] = None,
     progress_callback: Optional[Callable[[Path, str], None]] = None,
+    batch_callback: Optional[Callable[[str, int], None]] = None,
 ) -> None:
     total = len(plan)
     if not total:
@@ -142,6 +143,13 @@ def execute_compression_plan(
         return any(is_under(path_str, blocked) for blocked in blocked_dirs)
 
     def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
+        if batch_callback:
+            try:
+                batch_callback(algo, len(path_strs))
+            except WorkerStopped:
+                raise
+            except Exception:
+                logging.debug("Batch-start callback failed for %s", algo, exc_info=True)
         # compact /c /a /exe:{algo} path1 path2 ...
         args = ['compact', '/c', '/a', f'/exe:{algo}']
         args.extend(_compact_path(path_str) for path_str in path_strs)
@@ -161,7 +169,6 @@ def execute_compression_plan(
                 bucket.bytes_compressed += compressed_size
             logging.debug("Compressed %s using %s", path, algo)
         else:
-            # Verification failed to show size change, so we don't count it as compressed
             if verbosity >= 1:
                 logging.warning(
                     "Compressed %s using %s but verification reported no size change",

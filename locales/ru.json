@@ -181,6 +181,7 @@
     "Total {total_seconds}s": "Всего {total_seconds} с",
     "Nothing to compress!": "Нечего сжимать!",
     "Compressing... {compressed}/{total} ({rate:.0f} files/s)": "Сжатие... {compressed}/{total} ({rate:.0f} файлов/с)",
+    "Compressing {count} files with {algorithm}...": "Сжатие {count} файлов ({algorithm})...",
     "Complete!": "Готово!",
     "Please analyze the folder before compressing.": "Пожалуйста, проанализируйте папку перед сжатием.",
     "Please run quick analysis before compressing.": "Пожалуйста, запустите быстрый анализ перед сжатием.",

@@ -168,6 +168,19 @@ var Response = (function() {
 	"use strict";
 
 	return {
+		batch: function(msgs) {
+			if (!msgs) {
+				return;
+			}
+			if (!Array.isArray(msgs)) {
+				Response.dispatch(msgs);
+				return;
+			}
+			for (var i = 0; i < msgs.length; i++) {
+				Response.dispatch(msgs[i]);
+			}
+		},
+
 		dispatch: function(msg) {
 			switch(msg.type) {
 				case "Config":
@@ -179,7 +192,7 @@ var Response = (function() {
 					break;
 
 				case "Status":
-						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final);
 					break;
 
 				case "Paused":
@@ -201,7 +214,7 @@ var Response = (function() {
 					break;
 
 				case "ProgressUpdate":
-						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final);
 					break;
 
 				case "CompactOSIndicator":
@@ -312,8 +325,49 @@ var Gui = (function() {
 		});
 	}
 
+	var flush_raf = 0;
+	var flush_timer = null;
+
+	function _cancel_scheduled_flush() {
+		if (flush_raf && typeof cancelAnimationFrame === "function") {
+			cancelAnimationFrame(flush_raf);
+			flush_raf = 0;
+		}
+		if (flush_timer) {
+			clearTimeout(flush_timer);
+			flush_timer = null;
+		}
+	}
+
+	function schedule_flush() {
+		if (flush_raf || flush_timer) {
+			return;
+		}
+		if (typeof requestAnimationFrame === "function") {
+			flush_raf = requestAnimationFrame(function() {
+				flush_raf = 0;
+				if (flush_timer) {
+					clearTimeout(flush_timer);
+					flush_timer = null;
+				}
+				_flush_queued_updates();
+			});
+		}
+		flush_timer = setTimeout(function() {
+			flush_timer = null;
+			if (flush_raf && typeof cancelAnimationFrame === "function") {
+				cancelAnimationFrame(flush_raf);
+				flush_raf = 0;
+			}
+			_flush_queued_updates();
+		}, 50);
+	}
+
 	function _flush_queued_updates() {
 		var activateQuickHistory = false;
+		var had_work = !!(current_summary_queue || total_summary_queue || directory_summary_pending.length || status_queue);
+
+		_cancel_scheduled_flush();
 
 		if (current_summary_queue) {
 			current_summary_state = current_summary_queue.data;
@@ -341,7 +395,9 @@ var Gui = (function() {
 				directory_summary_index = 0;
 			}
 		}
-		Gui.render_summaries();
+		if (had_work) {
+			Gui.render_summaries();
+		}
 	}
 
 	return {
@@ -483,7 +539,6 @@ var Gui = (function() {
 				}
 			});
 
-			setInterval(_flush_queued_updates, 125);
 			Gui.apply_boot_config();
 			Gui.request_initial_config();
 		},
@@ -495,6 +550,7 @@ var Gui = (function() {
 				quick_history: !!quick_history,
 				final: !!final
 			};
+			schedule_flush();
 		},
 
 		queue_folder_summary: function(data) {
@@ -516,6 +572,7 @@ var Gui = (function() {
 				current_summary_queue = payload;
 				total_summary_queue = payload;
 			}
+			schedule_flush();
 		},
 
 		is_busy: function() {

@@ -5,12 +5,12 @@ Handles IPC between HTML/JS frontend and Python compression backend.
 
 import logging
 import os
-import threading
-import queue
 import json
 from pathlib import Path
 from typing import Optional, Callable, Any, Dict
 import webbrowser
+
+from .bridge import GuiBridge
 
 try:
     import webview as pywebview  # type: ignore[reportMissingImports]
@@ -154,6 +154,7 @@ class GuiServer:
         self.window = None
         self.running = False
         self.initial_config: Dict[str, Any] = {}
+        self._bridge = GuiBridge()
 
     def _handle_request(self, request: GuiRequest) -> Dict[str, Any]:
         """Call backend handler and convert response to dict."""
@@ -224,25 +225,34 @@ class GuiServer:
             )
             self.running = True
             self.api._window = self.window
+            self._bridge.start(self._emit_batch)
             # Prefer the native Windows backend. Forcing CEF requires an extra
             # cefpython3 runtime that is not bundled in our one-file build.
             debug = os.environ.get("TRASH_COMPACTOR_GUI_DEBUG") == "1"
-            pywebview.start(debug=debug, gui="edgechromium")
+            try:
+                pywebview.start(debug=debug, gui="edgechromium")
+            finally:
+                self.stop()
         except Exception as e:
             logging.exception("Error starting GUI: %s", e)
+            self.stop()
 
     def stop(self) -> None:
         """Stop the GUI server."""
         self.running = False
+        self._bridge.stop()
+
+    def _emit_batch(self, items: list) -> None:
+        if not self.window or not items:
+            return
+        payload = json.dumps(items, ensure_ascii=True)
+        self.window.evaluate_js(f"Response.batch({payload})")
 
     def send_response(self, response: GuiResponse) -> None:
-        """Send response to GUI (if window exists)."""
-        if self.window:
-            try:
-                json_str = response.to_json()
-                self.window.evaluate_js(f"Response.dispatch({json_str})")
-            except Exception as e:
-                logging.debug("Could not send response to GUI: %s", e)
+        """Enqueue a response for the GUI pump. Never calls evaluate_js."""
+        if not self.running:
+            return
+        self._bridge.enqueue(response)
 
 
 def create_gui_app(request_handler: Callable[[GuiRequest], GuiResponse]) -> GuiServer:

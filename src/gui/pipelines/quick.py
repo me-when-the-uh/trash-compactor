@@ -164,6 +164,7 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
             _("Scanned in {elapsed:.1f}s").format(elapsed=quick_elapsed),
             100.0,
             quick_history=True,
+            final=True,
         )
     except WorkerStopped:
         quick_results.clear()

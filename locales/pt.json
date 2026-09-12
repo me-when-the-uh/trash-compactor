@@ -180,6 +180,7 @@
     "Total {total_seconds}s": "Total {total_seconds}s",
     "Nothing to compress!": "Nada para comprimir!",
     "Compressing... {compressed}/{total} ({rate:.0f} files/s)": "Compactando... {compressed}/{total} ({rate:.0f} arquivos/s)",
+    "Compressing {count} files with {algorithm}...": "Compactando {count} arquivos com {algorithm}...",
     "Complete!": "Concluído!",
     "Please analyze the folder before compressing.": "Analise a pasta antes de compactar.",
     "Please run quick analysis before compressing.": "Execute a análise rápida antes de compactar.",

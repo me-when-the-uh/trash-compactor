@@ -34,4 +34,4 @@ htmlcov/
 
 # Rust build artifacts
 fast_walk/target
-Cargo.lock
+fast_walk/Cargo.lock

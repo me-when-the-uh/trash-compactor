@@ -72,8 +72,6 @@ class GuiDiscoveryStream:
         return True
 
     def _stream_scan_progress(self, count: int) -> None:
-        # Count-gated: a time gate lets one through every ~20ms when the GUI
-        # bridge is slow, serialising the whole walk on the webview.
         if count % SCAN_PROGRESS_EVERY_FILES != 0 and not self.complete:
             return
         now = time.perf_counter()

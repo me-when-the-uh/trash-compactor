@@ -2,10 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v0.8.0-beta] - 2026-08-30
+## [v0.8.0] - 2026-09-12
+
+### Added
+- Extra logic and filters to skip DirectStorage games under Steam, Epic Games Studio, and EA Origin
+
 ### Changed
+- Compression shows a batch-start status while `compact.exe` is running a file batch
 - Hard drive type check now runs at the beginning to avoid any hangups
 - Process priority changed to Below Normal to avoid slowdowns
+- Other small behavioural tweaks 
+
+### Fixed
+- Improved responsiveness and update speed of the GUI
+- Progress bar completion (`final`) now reaches the frontend instead of being dropped on dispatch
+
+## [v0.8.0-beta] - 2026-08-30
 
 ## [v0.8.0-alpha] - 2026-08-29
 

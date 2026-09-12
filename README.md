@@ -2,7 +2,7 @@
 
 # 🗑️ Trash-Compactor
 
-**Intelligent filesystem-level compression for Windows 10/11** - find the compressible files nobody knew were there, and shrink them without touching a thing you care about.
+**More free space on Windows 10/11, without zip files or deleting anything** — find the compressible files nobody knew were there, and shrink them in place.
 
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-blue?style=for-the-badge&logo=windows&logoColor=white&labelColor=1b1f27&color=2f81f7)](https://www.microsoft.com/windows)
 [![NTFS](https://img.shields.io/badge/filesystem-NTFS%20only-blueviolet?style=for-the-badge&labelColor=1b1f27&color=7d5cfc)](#limitations)<!-- [![Python](https://img.shields.io/badge/python-3.11%20-%203.13-yellow?style=for-the-badge&logo=python&logoColor=white&labelColor=1b1f27&color=f0c94a)](#option-2-running-from-source)
@@ -14,47 +14,28 @@
 
 *A utility for intelligent file compression on Windows 10/11 using the built-in NTFS compression algorithms and Windows' built-in `compact.exe` utility.*
 
-<!-- ### Ten thousand stars can't be wrong
-
-<sup>*(stars may not exist yet, but the ambition is there)*</sup> -->
 
 </div>
 
 ---
 
-## Table of Contents
-
-- [What is this, actually?](#what-is-this-actually)
-- [Features](#but-for-real-though-here-are-the-features)
-- [The Competition](#the-competition)
-- [Limitations](#limitations)
-- [Requirements](#requirements)
-- [Installation](#installation)
-- [Usage](#usage)
-- [How it works (under the hood)](#how-it-works-under-the-hood)
-- [Development](#development)
-- [FAQ](#faq)
-- [Fun Facts](#fun-facts)
-- [To-Do](#to-do)
-
----
-
 ## What is this, actually?
 
-Compressing files at the **filesystem level** is quite different from your average `.zip` or `.7z` compression - which is strictly for archival purposes. NTFS compression is **seamless**: you won't see a difference, but the apps will shrink in size without deleting anything. Every program that can read the file still can. Windows just stores it more cleverly.
+Trash-Compactor's goal is to free up disk space on Windows 10/11 by compressing files in place, using the transparent compression of files that is supported by the NTFS filesystem. All files, apps and games open up as usual.
 
-Unlike [CompactGUI](https://github.com/IridiumIO/CompactGUI) and [Compactor](https://github.com/Freaky/Compactor) - tools based on `compact.exe` and primarily designed for compressing Steam games - this program **automatically scans through the files**, evaluating their compressibility with a complex but fast algorithm, and picking the optimal compression algorithm based on file size. This lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression, maximising overall system performance in comparison with the aforementioned tools, and preventing excessive SSD wear, keeping things DRY.
+You may have heard of [CompactGUI](https://github.com/IridiumIO/CompactGUI) and [Compactor](https://github.com/Freaky/Compactor) before - they wrap the same API behind this compression, which works on top of `compact.exe`. This program's purpose is to fix all of their apparent downsides. It **automatically** scans through the files, evaluating their compressibility with a complex but fast algorithm, and picking the optimal compression algorithm based on file size. This, in turn, lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression, maximising overall system performance in comparison with the aforementioned tools, and preventing excessive SSD wear.
 
-Compressing large directories to gain extra storage space will be so free and without downsides that it'll be the closest thing to having **"free real estate"**.
+The latest version, 0.8.0, also takes DirectStorage API into account, to avoid compressing games that rely on DirectStorage API or BypassIO to stream uncompressed assets directly to the GPU to drastically increase loading speeds. Accidentally compressing them would otherwise negate all performance gains, which is the only case when compressing files with `compact.exe` noticeably hinders performance.
 
-### Why filesystem compression beats archives
+
+### Why this is not a zip
 
 | | Trash-Compactor (NTFS) | ZIP / 7Z archive |
 |---|---|---|
 | Visible to apps | ✅ Fully transparent - apps read files normally | ❌ Files hidden inside an archive |
 | Space freed | ✅ Immediately on disk | ❌ Requires removing original files |
 | Original file | ✅ Stays in place, smaller | ❌ Copied into `.zip`, original files need to be deleted |
-| SSD wear | ✅ Skips certain files unless clearly worth compressing | ⚠️ Will attempt to compress even uncompressible files |
+| SSD wear | ✅ Skips files unless they are clearly worth compressing | ⚠️ Will try to compress even incompressible files |
 
 ### Performance by the numbers
 
@@ -67,7 +48,21 @@ Compressing large directories to gain extra storage space will be so free and wi
 | Entropy scan speed | **exists** |
 | Compression batches | **50% faster** (multi-threaded `compact.exe`) |
 
+---
 
+## Table of Contents
+
+- [Features](#but-for-real-though-here-are-the-features)
+- [The Competition](#the-competition)
+- [Limitations](#limitations)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Inner workings](#inner-workings)
+- [Development](#development)
+- [FAQ](#faq)
+- [Fun Facts](#fun-facts)
+- [To-Do](#to-do)
 
 ---
 
@@ -92,7 +87,7 @@ There are two other tools do roughly the same thing with `compact.exe`:
 
 ---
 
-## But for real, though. Here are the features
+## The actual features
 
 - **Automated compression** using Windows NTFS compression
 - **Simple and intuitive interface** - a GUI that a grandparent could operate, and a CLI for the rest of us
@@ -118,7 +113,6 @@ There are two other tools do roughly the same thing with `compact.exe`:
 - It's only for storage devices with an **NTFS** file system, like your system drive and external flash drives and SSDs if they're formatted to use NTFS. If it's FAT32 or exFAT - it won't work for you.
 - It's best to assume that it likely won't work on **network drives** even if they are formatted to NTFS *(haven't tested it)*.
 - **Spinning hard drives** might get fragmented, negatively impacting read performance - that's why HDD mode exists, and why it gives you a defrag hint afterwards.
-- **DirectStorage or BypassIO API videogames may break**, the latest changes are targeted to detect and avoid compressing games utilising DirectStorage API 
 
 ---
 

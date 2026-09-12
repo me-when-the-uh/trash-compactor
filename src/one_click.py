@@ -407,7 +407,6 @@ def run_one_click_mode(
             projected_compressed_xpress_bytes=stats.entropy_projected_size_conservative,
         )
         log_directory_skips(stats, verbosity, min_savings)
-        # Intentionally do not print per-directory performance summaries in 1-click mode.
 
         total_original += int(stats.entropy_projected_original_bytes or 0)
         total_compressed_lzx += int(stats.entropy_projected_size or 0)

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-# Keep package on disk next to the .pyd - do not archive __init__.py into PYZ.
+# __init__.py has to sit next to the .pyd.
 module_collection_mode = {
     "fast_walk": "py",
 }

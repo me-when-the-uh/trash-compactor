@@ -182,6 +182,7 @@
     "Total {total_seconds}s": "Total {total_seconds}s",
     "Nothing to compress!": "Nothing to compress!",
     "Compressing... {compressed}/{total} ({rate:.0f} files/s)": "Compressing... {compressed}/{total} ({rate:.0f} files/s)",
+    "Compressing {count} files with {algorithm}...": "Compressing {count} files with {algorithm}...",
     "Complete!": "Complete!",
     "Please analyze the folder before compressing.": "Please analyze the folder before compressing.",
     "Please run quick analysis before compressing.": "Please run quick analysis before compressing.",
