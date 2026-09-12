@@ -341,6 +341,7 @@ def _apply_state_to_args(args: Namespace, state: LaunchState) -> Namespace:
     args.no_lzx = state.no_lzx
     args.force_lzx = state.force_lzx
     setattr(args, 'dry_run', state.dry_run)
+    setattr(args, 'decompress', getattr(state, 'decompress', False))
     args.single_worker = state.single_worker
     args.min_savings = config.clamp_savings_percent(state.min_savings)
     setattr(args, 'exclude', list(state.excludes))
@@ -355,6 +356,7 @@ def interactive_configure(args: Namespace) -> Namespace:
         no_lzx=args.no_lzx,
         force_lzx=args.force_lzx,
         dry_run=getattr(args, 'dry_run', False),
+        decompress=getattr(args, 'decompress', False),
         single_worker=getattr(args, 'single_worker', False),
         min_savings=config.clamp_savings_percent(getattr(args, 'min_savings', config.DEFAULT_MIN_SAVINGS_PERCENT)),
         excludes=list(getattr(args, 'exclude', None) or []),

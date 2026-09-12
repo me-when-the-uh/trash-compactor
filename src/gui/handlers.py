@@ -74,10 +74,15 @@ def _apply_drive_recommendation(backend: "GuiBackend", directory: str) -> None:
         logging.debug("Drive recommendation skipped: %s", exc)
 
 
-def _validate_target_path(backend: "GuiBackend", directory: str) -> Optional[GuiResponse]:
+def _validate_target_path(
+    backend: "GuiBackend",
+    directory: str,
+    *,
+    allow_user_exclusion: bool = False,
+) -> Optional[GuiResponse]:
     from ..file_utils import validate_target_path
 
-    reason = validate_target_path(directory)
+    reason = validate_target_path(directory, allow_user_exclusion=allow_user_exclusion)
     if reason:
         return WarningResponse(_("Warning"), reason)
 
@@ -154,6 +159,19 @@ def _start_quick_compression(backend: "GuiBackend", request: GuiRequest) -> GuiR
     return _launch(backend, lambda: backend._run_quick_compression(compactos=compactos))
 
 
+def _start_decompression(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    requested_path = backend._requested_path(request)
+    validation = _validate_target_path(backend, requested_path, allow_user_exclusion=True)
+    if validation is not None:
+        return validation
+
+    backend._clear_quick_analysis_results()
+    backend._clear_analysis_state()
+    _adopt_folder(backend, requested_path)
+    add_exclusion = getattr(request, "add_exclusion", True)
+    return _launch(backend, lambda: backend._run_decompression(add_exclusion=add_exclusion))
+
+
 def _pause(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
     backend.pause_event.set()
     return StateResponse("Paused")
@@ -204,6 +222,7 @@ _DISPATCH: dict[str, Callable[["GuiBackend", GuiRequest], GuiResponse]] = {
     "AnalyseFolder": _analyse_folder,
     "GetQuickCompressionTargets": _quick_targets,
     "StartQuickCompression": _start_quick_compression,
+    "StartDecompression": _start_decompression,
     "PauseCompression": _pause,
     "ResumeCompression": _resume,
     "StopCompression": _stop,

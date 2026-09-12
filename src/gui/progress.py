@@ -13,6 +13,12 @@ _PROGRESS_SCAN_END = 100.0 / 3.0  # Scan is tracked until 33%
 _PROGRESS_ENTROPY_END = 100.0
 
 
+def remaining_progress_percent(done: int, total: int) -> float:
+    if total <= 0:
+        return 0.0
+    return max(0.0, 100.0 * (1.0 - done / total))
+
+
 def scan_progress_percent(file_count: int) -> float:
     if file_count <= 0:
         return 0.0

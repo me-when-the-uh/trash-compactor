@@ -83,7 +83,7 @@ if ($LASTEXITCODE -ne 0) { Fail 5 "Wheel install failed." }
 Write-Step "Stopping any running Trash-Compactor processes"
 Get-Process -Name "trash-compactor" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 
-Write-Step "Building single-file executable (PyInstaller)"
+Write-Step "Building the portable executable (PyInstaller)"
 & $pythonPath -m PyInstaller --clean --noconfirm trash-compactor.spec 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) { Fail 6 "PyInstaller build failed." }
 $exe = Join-Path $root "dist\trash-compactor.exe"

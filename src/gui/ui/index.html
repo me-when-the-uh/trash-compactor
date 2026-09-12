@@ -47,6 +47,7 @@
           <button id="Button_Quick" class="quick" onclick="Action.quick_compression()">Quick compression</button>
           <span id="Quick_Action_Or">or</span>
           <button id="Button_Folder" class="secondary" onclick="Action.choose_folder()">Choose a folder</button>
+          <button id="Button_Decompress" class="decompress-icon" type="button" onclick="Action.show_decompression()" title="Decompress" aria-label="Decompress">↩</button>
         </div>
       </section>
 
@@ -66,6 +67,25 @@
           <div class="ctr">
             <button id="Button_Quick_Start" class="quick" onclick="Action.start_quick_compression()">Start quick analysis</button>
             <button id="Button_Quick_Cancel" class="cancel" onclick="Gui.hide_quick_mode()">Cancel</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="Decompress_Mode" style="display: none;">
+        <div class="quick-mode-panel">
+          <div class="quick-mode-title">Decompress</div>
+          <div class="quick-mode-note">Normally, you don't have to decompress any directories.</div>
+          <div id="Decompress_Mode_Message" class="quick-mode-message"></div>
+          <div class="setting-item" id="Decompress_Exclusion_Container">
+            <label class="setting-row setting-toggle" for="Decompress_Add_Exclusion">
+              <span class="setting-label" id="Decompress_Add_Exclusion_Label">Exclude this folder from being compressed in the future</span>
+              <input type="checkbox" id="Decompress_Add_Exclusion" name="decompress_add_exclusion" checked>
+            </label>
+            <div id="Decompress_Add_Exclusion_Help" class="setting-help">The folder is added to Excluded folders.</div>
+          </div>
+          <div class="ctr">
+            <button id="Button_Decompress_Start" class="analyse" onclick="Action.start_decompression()">Choose a folder</button>
+            <button id="Button_Decompress_Cancel" class="cancel" onclick="Gui.hide_decompress_mode()">Cancel</button>
           </div>
         </div>
       </section>

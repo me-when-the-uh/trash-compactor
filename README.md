@@ -2,13 +2,13 @@
 
 # 🗑️ Trash-Compactor
 
-**More free space on Windows 10/11, without zip files or deleting anything** — find the compressible files nobody knew were there, and shrink them in place.
+**More free space on Windows 10/11, without zip files or deleting anything** - find the compressible files nobody knew were there, and shrink them in place.
 
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-blue?style=for-the-badge&logo=windows&logoColor=white&labelColor=1b1f27&color=2f81f7)](https://www.microsoft.com/windows)
 [![NTFS](https://img.shields.io/badge/filesystem-NTFS%20only-blueviolet?style=for-the-badge&labelColor=1b1f27&color=7d5cfc)](#limitations)<!-- [![Python](https://img.shields.io/badge/python-3.11%20-%203.13-yellow?style=for-the-badge&logo=python&logoColor=white&labelColor=1b1f27&color=f0c94a)](#option-2-running-from-source)
 [![Rust](https://img.shields.io/badge/rust%20engine-fast__walk-orange?style=for-the-badge&logo=rust&logoColor=white&labelColor=1b1f27&color=f0753a)](#native-rust-engine) -->
 [![License](https://img.shields.io/badge/license-MIT-brightgreen?style=for-the-badge&labelColor=1b1f27&color=4bc34b)](LICENSE)
-[![Release](https://img.shields.io/badge/latest-v0.8.0_beta-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
+[![Release](https://img.shields.io/badge/latest-v0.8.0-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
 [![Build date](https://img.shields.io/badge/build%20date-who%20cares-blue?style=for-the-badge&labelColor=1b1f27&color=6cb6ff)](src/version.py)
 [![Stars](https://img.shields.io/github/stars/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=2f81f7&logo=star&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/stargazers)
 
@@ -70,7 +70,7 @@ The latest version, 0.8.0, also takes DirectStorage API into account, to avoid c
 
 There are two other tools do roughly the same thing with `compact.exe`:
 
-- **[Compactor](https://github.com/Freaky/Compactor)**- a GUI that compresses whatever you point it at. No scanning, no entropy analysis, no guardrails. It's the sledgehammer; we're the scalpel. With a temperature-sensing laser. And a spreadsheet.
+- **[Compactor](https://github.com/Freaky/Compactor)** - a GUI that compresses whatever you point it at. No scanning, no entropy analysis, no guardrails. It's the sledgehammer; we're the scalpel. With a temperature-sensing laser. And a spreadsheet.
 - **[CompactGUI](https://github.com/IridiumIO/CompactGUI)** - primarily targets compressing Steam games and does the same thing that Compactor does. Great if all you do is play Steam games. But if you want the whole drive re-architected for density, that's where Trash-Compactor comes in.
 
 ### Head-to-head
@@ -97,7 +97,7 @@ There are two other tools do roughly the same thing with `compact.exe`:
 - **Multiple operation modes** for different use cases
 - **Skips poorly-compressible formats** (zip, media files, etc.)
 - **Skips already-compressed files**
-- **User path exclusions** — skip folders 
+- **User path exclusions** - skip folders 
 - **Skips LZX compression** on computers identified as too slow to handle it without performance losses *(taking care of users)*
 - **Detailed compression and file throughput stats**
 - **GUI** with progress bar, scan/entropy timing breakdown, space savings estimation, and stats
@@ -155,7 +155,7 @@ The only prerequisites are **Python 3.11+ (64-bit) or above** from [python.org](
    ./build.ps1
    ```
 
-   The script installs Python dependencies, builds the Rust extension, bundles the single-file executable, and verifies the frozen build before calling it done.
+   The script installs Python dependencies, builds the Rust extension, bundles the portable executable, and verifies the frozen build before calling it done.
 
 3. Let it cook. After a while, you'd find the executable in the `./dist` directory.
 
@@ -196,7 +196,7 @@ If you'd rather download dependencies and type out the build commands on your ow
    python main.py C:\path\to\compress
    ```
 
-   Or bundle a single-file executable:
+   Or bundle a portable executable:
 
    ```powershell
    python -m PyInstaller --clean --noconfirm trash-compactor.spec
@@ -246,7 +246,7 @@ Launching **without arguments** opens a GUI window that lets you browse to the t
 
 ### CLI-based Scripting Operation Modes
 
-Trash-Compactor offers three distinct operation modes to handle different scenarios:
+Trash-Compactor offers these CLI modes:
 
 #### 1-Click / Unattended Mode (Preferred)
 
@@ -279,6 +279,14 @@ Be aware that temporarily disabling the anti-virus or whitelisting this program 
 .\trash-compactor.exe C:\path\to\compress
 ```
 
+#### Decompress (`--decompress`)
+
+Undo NTFS compression on a folder. Already-compressed files are expanded. The folder is added to **Excluded folders**.
+
+```powershell
+.\trash-compactor.exe --decompress C:\path\to\folder
+```
+
 #### Dry-run Mode (`-d`)
 
 To check how well a directory will compress **without writing anything** to the drive. SSDs have a finite amount of data that can be written, which is why some users might want to check if it's worth bothering to compress a given directory.
@@ -304,6 +312,7 @@ HDDs read data sequentially and can't handle the random I/O that parallel querie
 | `-v` / `--verbose` | Show exclusion decisions with entropy sampling. Supports 3 levels of verbosity, up to `-vvv` for debug logs. |
 | `-m` / `--min-savings <percent>` | Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically. |
 | `--exclude PATH` | Skip a directory (repeatable). Combined with the persisted Settings list and `TRASH_COMPACTOR_EXCLUDE` (`;`-separated). |
+| `--decompress` | Decompress files in the target directory. The folder is added to Excluded folders. |
 | `-y` / `--yes` / `--no-prompt` | Proceed with compression after a dry-run analysis without prompting. |
 
 ### Exit Codes
@@ -443,7 +452,7 @@ No. FAT32 and exFAT are out - NTFS only. (If you somehow get it working on ReFS,
 Yes - it's a CLI. Pair the deterministic exit codes with a scheduled task or a script, point it at your directories, and let it run. Use `--exclude` or `TRASH_COMPACTOR_EXCLUDE` to keep scheduled runs away from folders you do not want touched.
 
 **What if an app misbehaves after compression?**
-Add its folder under **Excluded folders** in Settings (or pass `--exclude`) and re-run. Compression is reversible: `compact /u /exe /s:"C:\path"`. Database files (`.db`, `.sqlite`, …) are already skipped; extensionless SQLite files are skipped by header.
+Add its folder under **Excluded folders** in Settings (or pass `--exclude`) and re-run. Decompress with `--decompress C:\path`, or the gray return-icon button next to **Choose a folder**. Database files (`.db`, `.sqlite`, …) are already skipped; extensionless SQLite files are skipped by header.
 
 **I copied a compressed folder and it grew back.**
 WOF compression does not survive copy or move. That is typical Windows behaviour and not a bug. Re-run on the destination if you still want it compacted.

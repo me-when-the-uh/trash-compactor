@@ -2,10 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+- `--decompress` expands compressed files in a folder and adds it to Excluded folders.
+- Decompress checkbox: exclude the folder from later compression.
+
 ## [v0.8.0] - 2026-09-12
 
 ### Added
 - Extra logic and filters to skip DirectStorage games under Steam, Epic Games Studio, and EA Origin
+- Decompression runs
 
 ### Changed
 - Compression shows a batch-start status while `compact.exe` is running a file batch

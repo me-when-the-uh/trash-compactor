@@ -23,6 +23,10 @@ env/
 # Local development settings
 .env
 .env.local
+workdir/
+/AGENTS.md
+/CLAUDE.md
+/read_this_first.md
 
 # Logs
 *.log

@@ -196,7 +196,7 @@ def get_protection_reason(path: str | Path) -> Optional[str]:
     return reason
 
 
-def validate_target_path(directory: str) -> Optional[str]:
+def validate_target_path(directory: str, *, allow_user_exclusion: bool = False) -> Optional[str]:
     """Return a reason the target cannot be compressed, or None if it can.
 
     Covers the structural checks shared by the CLI and GUI: protected system
@@ -210,11 +210,12 @@ def validate_target_path(directory: str) -> Optional[str]:
     if protection_reason:
         return _("Cannot compress protected path: {reason}").format(reason=protection_reason)
 
-    from .exclusions import match_user_exclusion
+    if not allow_user_exclusion:
+        from .exclusions import match_user_exclusion
 
-    user_reason = match_user_exclusion(candidate)
-    if user_reason:
-        return _("Cannot compress excluded path: {reason}").format(reason=user_reason)
+        user_reason = match_user_exclusion(candidate)
+        if user_reason:
+            return _("Cannot compress excluded path: {reason}").format(reason=user_reason)
 
     from .drive_inspector import get_volume_details_fast
 
