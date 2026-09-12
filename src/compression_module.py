@@ -1,4 +1,5 @@
 import os
+import stat
 import sys
 import threading
 import time
@@ -7,8 +8,9 @@ from typing import Callable, Optional
 
 from colorama import Fore, Style
 
-from .compression.compression_executor import execute_compression_plan
+from .compression.compression_executor import execute_compression_plan, execute_decompression_plan
 from .compression.compression_planner import CountingDirEntryIter, PlanEntry, iter_files, plan_compression
+from .compression.file_scan import CAT_ALREADY_COMPRESSED
 from .config import (
     DEFAULT_MIN_SAVINGS_PERCENT,
     clamp_savings_percent,
@@ -22,6 +24,7 @@ from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
 
 
 REPORTABLE_DIRECTORY_MIN_BYTES = 5 * 1024 * 1024
+FILE_ATTRIBUTE_COMPRESSED = getattr(stat, "FILE_ATTRIBUTE_COMPRESSED", 0x800)
 
 
 def _setup_context(
@@ -116,6 +119,87 @@ def compress_directory(
     interactive_output = verbosity_level == 0
 
     return execute_compression_plan_wrapper(stats, monitor, plan, verbosity_level, interactive_output, min_savings_percent)
+
+
+def decompress_directory(
+    directory_path: str,
+    verbosity: int = 0,
+    *,
+    workers: Optional[int] = None,
+    progress_callback: Optional[Callable[[Path, bool], None]] = None,
+) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[str, int]]]:
+    import logging
+
+    stats, monitor, base_dir, _, verbosity_level = _setup_context(
+        directory_path, DEFAULT_MIN_SAVINGS_PERCENT, verbosity
+    )
+    interactive_output = verbosity_level == 0 and getattr(sys.stdout, "isatty", lambda: True)()
+    timer: Optional[ProgressTimer] = None
+    if interactive_output:
+        timer = ProgressTimer()
+        timer.set_label(_("Scanning directory..."))
+        timer.start(total=0)
+        timer.update(0, "")
+
+    compressed: list[tuple[str, int]] = []
+    processed = 0
+    try:
+        for path, size, attributes, _algo, category, hint in iter_files(
+            base_dir,
+            stats,
+            include_user_exclusions=False,
+        ):
+            processed += 1
+            if (
+                category == CAT_ALREADY_COMPRESSED
+                or attributes & FILE_ATTRIBUTE_COMPRESSED
+                or 0 < hint < size
+            ):
+                compressed.append((path, size))
+            if timer:
+                timer.update(processed, "")
+    finally:
+        monitor.stats.total_files = processed
+        if timer:
+            if compressed:
+                timer.stop(
+                    _("\n{count} compressed files found\n").format(count=len(compressed))
+                )
+            else:
+                timer.stop(_("\nNothing to decompress!\n"))
+            timer = None
+
+    if not compressed:
+        if not interactive_output:
+            logging.info(_("Nothing to decompress!"))
+        return stats, monitor, compressed
+
+    if interactive_output:
+        timer = ProgressTimer()
+        timer.set_label(_("Decompressing..."))
+        timer.start(total=len(compressed))
+        timer.update(0, "")
+
+    done = [0]
+
+    def _on_file(path: Path, ok: bool) -> None:
+        done[0] += 1
+        if timer:
+            timer.update(done[0], "")
+        if progress_callback is not None:
+            progress_callback(path, ok)
+
+    try:
+        execute_decompression_plan(
+            compressed,
+            workers=xp_worker_count() if workers is None else workers,
+            progress_callback=_on_file,
+        )
+    finally:
+        if timer:
+            timer.stop(_("\nDecompression complete\n"))
+
+    return stats, monitor, compressed
 
 
 def execute_compression_plan_wrapper(

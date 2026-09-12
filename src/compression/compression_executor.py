@@ -314,3 +314,83 @@ def execute_compression_plan(
 
                 for path_str, file_size in batch:
                     _finalize_success(Path(path_str), file_size, algorithm, context='batch')
+
+
+def _uncompact(path_strs: Sequence[str], *, exe: bool) -> subprocess.CompletedProcess:
+    args = ['compact', '/u', '/a']
+    if exe:
+        args.append('/exe')
+    args.extend(_compact_path(path_str) for path_str in path_strs)
+    return _run_compact(args)
+
+
+def execute_decompression_plan(
+    plan: Sequence[tuple[str, int]],
+    *,
+    workers: int,
+    progress_callback: Optional[Callable[[Path, bool], None]] = None,
+) -> None:
+    if not plan:
+        return
+
+    batch_size, max_chars = _batch_limits()
+    worker_count = max(1, workers)
+
+    def _decompress_one(path_str: str) -> None:
+        path = Path(path_str)
+        try:
+            result = _uncompact([path_str], exe=True)
+            still = is_file_compressed(path_str)[0]
+            if result.returncode != 0 or still:
+                result = _uncompact([path_str], exe=False)
+                still = is_file_compressed(path_str)[0]
+            if progress_callback is not None:
+                progress_callback(path, result.returncode == 0 and not still)
+        except WorkerStopped:
+            raise
+        except (OSError, subprocess.SubprocessError) as exc:
+            logging.error("Error decompressing %s: %s", path_str, exc)
+            if progress_callback is not None:
+                progress_callback(path, False)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures: dict = {}
+        batch: list[str] = []
+        batch_chars = 0
+        for path_str, _size in plan:
+            path_length = len(_compact_path(path_str)) + 3
+            if batch and (len(batch) >= batch_size or batch_chars + path_length > max_chars):
+                futures[executor.submit(_uncompact, list(batch), exe=True)] = list(batch)
+                batch = []
+                batch_chars = 0
+            batch.append(path_str)
+            batch_chars += path_length
+        if batch:
+            futures[executor.submit(_uncompact, list(batch), exe=True)] = list(batch)
+
+        leftover: list[str] = []
+        for future in as_completed(futures):
+            group = futures[future]
+            try:
+                result = future.result()
+            except WorkerStopped:
+                raise
+            except Exception as exc:
+                logging.error(
+                    "Batch decompress exception (%s files): %s. Retrying individually.",
+                    len(group),
+                    exc,
+                )
+                leftover.extend(group)
+                continue
+            if result.returncode != 0:
+                leftover.extend(group)
+                continue
+            for path_str in group:
+                if is_file_compressed(path_str)[0]:
+                    leftover.append(path_str)
+                elif progress_callback is not None:
+                    progress_callback(Path(path_str), True)
+
+        for path_str in leftover:
+            _decompress_one(path_str)

@@ -155,7 +155,7 @@ The only prerequisites are **Python 3.11+ (64-bit) or above** from [python.org](
    ./build.ps1
    ```
 
-   The script installs Python dependencies, builds the Rust extension, bundles the single-file executable, and verifies the frozen build before calling it done.
+   The script installs Python dependencies, builds the Rust extension, bundles the portable executable, and verifies the frozen build before calling it done.
 
 3. Let it cook. After a while, you'd find the executable in the `./dist` directory.
 
@@ -196,7 +196,7 @@ If you'd rather download dependencies and type out the build commands on your ow
    python main.py C:\path\to\compress
    ```
 
-   Or bundle a single-file executable:
+   Or bundle a portable executable:
 
    ```powershell
    python -m PyInstaller --clean --noconfirm trash-compactor.spec
@@ -246,7 +246,7 @@ Launching **without arguments** opens a GUI window that lets you browse to the t
 
 ### CLI-based Scripting Operation Modes
 
-Trash-Compactor offers three distinct operation modes to handle different scenarios:
+Trash-Compactor offers these CLI modes:
 
 #### 1-Click / Unattended Mode (Preferred)
 
@@ -279,6 +279,14 @@ Be aware that temporarily disabling the anti-virus or whitelisting this program 
 .\trash-compactor.exe C:\path\to\compress
 ```
 
+#### Decompress (`--decompress`)
+
+Undo NTFS compression on a folder. Already-compressed files are expanded. The folder is added to **Excluded folders**.
+
+```powershell
+.\trash-compactor.exe --decompress C:\path\to\folder
+```
+
 #### Dry-run Mode (`-d`)
 
 To check how well a directory will compress **without writing anything** to the drive. SSDs have a finite amount of data that can be written, which is why some users might want to check if it's worth bothering to compress a given directory.
@@ -304,6 +312,7 @@ HDDs read data sequentially and can't handle the random I/O that parallel querie
 | `-v` / `--verbose` | Show exclusion decisions with entropy sampling. Supports 3 levels of verbosity, up to `-vvv` for debug logs. |
 | `-m` / `--min-savings <percent>` | Set the minimum estimated savings (0-90, default 15%). Directories predicted to save less space are skipped automatically. |
 | `--exclude PATH` | Skip a directory (repeatable). Combined with the persisted Settings list and `TRASH_COMPACTOR_EXCLUDE` (`;`-separated). |
+| `--decompress` | Decompress files in the target directory. The folder is added to Excluded folders. |
 | `-y` / `--yes` / `--no-prompt` | Proceed with compression after a dry-run analysis without prompting. |
 
 ### Exit Codes
@@ -443,7 +452,7 @@ No. FAT32 and exFAT are out - NTFS only. (If you somehow get it working on ReFS,
 Yes - it's a CLI. Pair the deterministic exit codes with a scheduled task or a script, point it at your directories, and let it run. Use `--exclude` or `TRASH_COMPACTOR_EXCLUDE` to keep scheduled runs away from folders you do not want touched.
 
 **What if an app misbehaves after compression?**
-Add its folder under **Excluded folders** in Settings (or pass `--exclude`) and re-run. Compression is reversible: `compact /u /exe /s:"C:\path"`. Database files (`.db`, `.sqlite`, …) are already skipped; extensionless SQLite files are skipped by header.
+Add its folder under **Excluded folders** in Settings (or pass `--exclude`) and re-run. Decompress with `--decompress C:\path`, or the gray return-icon button next to **Choose a folder**. Database files (`.db`, `.sqlite`, …) are already skipped; extensionless SQLite files are skipped by header.
 
 **I copied a compressed folder and it grew back.**
 WOF compression does not survive copy or move. That is typical Windows behaviour and not a bug. Re-run on the destination if you still want it compacted.

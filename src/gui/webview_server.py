@@ -25,6 +25,7 @@ from .message_types import (
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
     AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest,
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
+    StartDecompressionRequest,
     GetExclusionsRequest, AddExclusionRequest, RemoveExclusionRequest,
 )
 from ..i18n import _, get_current_locale, get_translations
@@ -93,6 +94,25 @@ class GuiApi:
         """Start the one-click compression pipeline."""
         req = StartQuickCompressionRequest(compactos=compactos)
         return self.backend_handler(req)
+
+    def start_decompression(self, path: str = "", add_exclusion: bool = True) -> Dict[str, Any]:
+        folder = path or self.current_folder
+        req = StartDecompressionRequest(path=folder, add_exclusion=add_exclusion)
+        return self.backend_handler(req)
+
+    def choose_decompress_folder(self, add_exclusion: bool = True) -> Dict[str, Any]:
+        try:
+            folder = self._pick_folder()
+            if not folder:
+                return {"type": "Error", "message": _("No folder selected")}
+            self.current_folder = folder
+            started = self.start_decompression(folder, add_exclusion)
+            if started.get("type") in {"Warning", "Error"}:
+                return started
+            return {"type": "Folder", "path": folder}
+        except Exception as exc:
+            logging.exception("Error choosing decompress folder: %s", exc)
+            return {"type": "Error", "message": str(exc)}
 
     def save_config(self, config: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:
         """Save configuration."""

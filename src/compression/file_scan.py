@@ -1,7 +1,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional
+from typing import Iterable, Iterator
 
 from ..config import (
     MIN_COMPRESSIBLE_SIZE,
@@ -9,6 +9,7 @@ from ..config import (
     SKIP_EXTENSIONS,
 )
 from ..exclusions import iter_user_exclusions_under, merged_exclude_directories
+from ..file_utils import DEFAULT_EXCLUDE_DIRECTORIES, get_protection_reason
 from ..i18n import _
 from ..skip_logic import append_directory_skip_record, maybe_skip_directory
 from ..stats import CompressionStats, DirectorySkipRecord
@@ -46,8 +47,6 @@ def fast_walk_available() -> bool:
 
 
 class CountingDirEntryIter:
-    """Count scan results without materializing the full list elsewhere."""
-
     __slots__ = ("_source", "count")
 
     def __init__(self, source: Iterable) -> None:
@@ -64,36 +63,54 @@ def iter_files(
     root,
     stats: CompressionStats,
     debug_scan_all: bool = False,
+    *,
+    include_user_exclusions: bool = True,
 ) -> Iterator[tuple]:
-    """Yield (path, size, attributes, algo, category, hint) for every file.
-
-    Walk, extension/size classification, and NTFS on-disk checks happen in Rust.
-    """
-    if maybe_skip_directory(root, root, stats).skip:
-        return
+    """Walk, extension/size classification, and NTFS on-disk checks happen in Rust."""
+    root_path = Path(root)
+    if include_user_exclusions:
+        if maybe_skip_directory(root, root, stats).skip:
+            return
+    else:
+        reason = get_protection_reason(root_path)
+        if reason:
+            append_directory_skip_record(
+                stats,
+                DirectorySkipRecord(
+                    path=str(root_path),
+                    relative_path="",
+                    reason=reason,
+                    category="system",
+                ),
+            )
+            return
 
     if not fast_walk_available():
         raise RuntimeError("fast_walk extension is required for directory scanning")
 
     import fast_walk
 
-    root_path = root if isinstance(root, Path) else Path(root)
-    for display in iter_user_exclusions_under(root_path):
-        try:
-            relative = str(Path(display).relative_to(root_path))
-        except ValueError:
-            relative = display
-        append_directory_skip_record(
-            stats,
-            DirectorySkipRecord(
-                path=display,
-                relative_path=relative,
-                reason=_("User-excluded directory"),
-                category="user",
-            ),
-        )
+    if include_user_exclusions:
+        for display in iter_user_exclusions_under(root_path):
+            try:
+                relative = str(Path(display).relative_to(root_path))
+            except ValueError:
+                relative = display
+            append_directory_skip_record(
+                stats,
+                DirectorySkipRecord(
+                    path=display,
+                    relative_path=relative,
+                    reason=_("User-excluded directory"),
+                    category="user",
+                ),
+            )
 
-    excluded = merged_exclude_directories()
+    excluded = (
+        merged_exclude_directories()
+        if include_user_exclusions
+        else list(DEFAULT_EXCLUDE_DIRECTORIES)
+    )
     for batch in fast_walk.walk_and_filter(
         os.fspath(root),
         excluded,

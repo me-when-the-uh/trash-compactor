@@ -66,6 +66,13 @@ class StartQuickCompressionRequest(GuiRequest):
 
 
 @dataclass
+class StartDecompressionRequest(GuiRequest):
+    type: str = field(init=False, default="StartDecompression")
+    path: str = ""
+    add_exclusion: bool = True
+
+
+@dataclass
 class SaveConfigRequest(GuiRequest):
     type: str = field(init=False, default="SaveConfig")
     decimal: bool = False
@@ -144,6 +151,7 @@ class ProgressUpdateResponse(GuiResponse):
     pct: Optional[float] = None
     quick_history: bool = False
     final: bool = False
+    decompressing: bool = False
 
 
 @dataclass

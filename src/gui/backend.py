@@ -20,6 +20,7 @@ from .message_types import (
 )
 from .pipelines.analysis import run_analysis_pipeline
 from .pipelines.compression import run_compression_pipeline
+from .pipelines.decompression import run_decompression_pipeline
 from .pipelines.quick import run_quick_compression_pipeline
 from .progress import scale_quick_progress, scan_progress_percent
 from .summary import make_stats_summary
@@ -180,6 +181,7 @@ class GuiBackend:
         quick_dir_index: Optional[int] = None,
         quick_dir_total: Optional[int] = None,
         final: bool = False,
+        decompressing: bool = False,
     ) -> None:
         self._send(
             ProgressUpdateResponse(
@@ -187,6 +189,7 @@ class GuiBackend:
                 scale_quick_progress(pct, quick_dir_index, quick_dir_total),
                 quick_history=quick_history,
                 final=final,
+                decompressing=decompressing,
             )
         )
 
@@ -236,6 +239,12 @@ class GuiBackend:
 
     def _run_quick_compression(self, compactos: bool = False):
         self._run_pipeline("Quick compression", lambda: run_quick_compression_pipeline(self, compactos=compactos))
+
+    def _run_decompression(self, add_exclusion: bool = True):
+        self._run_pipeline(
+            "Decompression",
+            lambda: run_decompression_pipeline(self, add_exclusion=add_exclusion),
+        )
 
     def _discard_quick_pipeline_state(self) -> None:
         self._clear_quick_analysis_results()

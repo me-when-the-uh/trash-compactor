@@ -30,6 +30,7 @@
 	})();
 
 	var bootConfig = window.__TRASH_COMPACTOR_BOOT_CONFIG__ || {};
+	var ISSUES_URL = "https://github.com/me-when-the-uh/trash-compactor/issues";
 
 	var Util = (function()
 	{
@@ -127,6 +128,34 @@
 			pywebview.api.start_quick_compression(compactos).then(_dispatch_if_message);
 		},
 
+		show_decompression: function() {
+			if (Gui.is_busy()) {
+				return;
+			}
+			Gui.show_decompress_mode();
+		},
+
+		start_decompression: function() {
+			if (Gui.is_busy()) {
+				return;
+			}
+			var addExclusion = $("#Decompress_Add_Exclusion").is(":checked");
+			pywebview.api.choose_decompress_folder(addExclusion).then(function(res) {
+				if (res && res.type === "Folder") {
+					Gui.begin_decompression();
+					Response.dispatch(res);
+					Gui.exit_quick_history_mode();
+					Gui.hide_decompress_mode();
+					return;
+				}
+				if (res && res.type === "Error") {
+					Gui.show_warning(I18n.t("Warning"), res.message || I18n.t("No folder selected"));
+					return;
+				}
+				_dispatch_if_message(res);
+			});
+		},
+
 		pause: function() {
 			pywebview.api.pause_compression().then(_dispatch_if_message);
 		},
@@ -192,7 +221,7 @@ var Response = (function() {
 					break;
 
 				case "Status":
-						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final, !!msg.decompressing);
 					break;
 
 				case "Paused":
@@ -214,7 +243,7 @@ var Response = (function() {
 					break;
 
 				case "ProgressUpdate":
-						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final, !!msg.decompressing);
 					break;
 
 				case "CompactOSIndicator":
@@ -257,6 +286,7 @@ var Gui = (function() {
 	var ignore_config_changes = false;
 	var default_lzx_help = "";
 	var compactos_active = false;
+	var decompress_active = false;
 	var total_analysis_timing = null;
 	var last_lz4_certain_files = 0;
 
@@ -385,7 +415,7 @@ var Gui = (function() {
 		}
 		if (status_queue) {
 			activateQuickHistory = status_queue.quick_history;
-			Gui.set_status(status_queue.status, status_queue.pct, status_queue.final);
+			Gui.set_status(status_queue.status, status_queue.pct, status_queue.final, status_queue.decompressing);
 			status_queue = null;
 		}
 		if (activateQuickHistory) {
@@ -446,8 +476,19 @@ var Gui = (function() {
 			$("#Button_Quick").text(I18n.t("Quick compression"));
 			$("#Quick_Action_Or").text(I18n.t("or"));
 			$("#Button_Folder").text(I18n.t("Choose a folder"));
+			$("#Button_Decompress").attr("title", I18n.t("Decompress")).attr("aria-label", I18n.t("Decompress"));
 			$("#Quick_Mode .quick-mode-title").text(I18n.t("1-click mode"));
 			$("#Quick_Mode .quick-mode-note").text(I18n.t("This runs the analysis first before anything is compressed."));
+			$("#Decompress_Mode .quick-mode-title").text(I18n.t("Decompress"));
+			$("#Decompress_Mode .quick-mode-note").text(I18n.t("Normally, you don't have to decompress any directories."));
+			$("#Decompress_Mode_Message").html(I18n.t(
+				"However, if you stumble into an issue with a certain program, you can choose a directory to be decompressed. It would also be appreciated if you let the program maintainer know about it by opening an {link}. Tick the checkbox below to add the decompressed folder to exclusions.",
+				{link: '<a href="' + ISSUES_URL + '">' + I18n.t("Issue") + "</a>"}
+			));
+			$("#Decompress_Add_Exclusion_Label").text(I18n.t("Exclude this folder from being compressed in the future"));
+			$("#Decompress_Add_Exclusion_Help").text(I18n.t("The folder is added to Excluded folders."));
+			$("#Button_Decompress_Start").text(I18n.t("Choose a folder"));
+			$("#Button_Decompress_Cancel").text(I18n.t("Cancel"));
 			$("#Button_Quick_Start").text(I18n.t("Start quick analysis"));
 			$("#Button_Quick_Cancel").text(I18n.t("Cancel"));
 			$("#Quick_CompactOS_Label").text(I18n.t("Compress Windows binaries (CompactOS)"));
@@ -497,7 +538,7 @@ var Gui = (function() {
 
 		boot: function() {
 			Gui.localize();
-			$("a[href]").on("click", function(e) {
+			$(document).on("click", "a[href]", function(e) {
 				e.preventDefault();
 				Action.open_url($(this).attr("href"));
 				return false;
@@ -543,12 +584,13 @@ var Gui = (function() {
 			Gui.request_initial_config();
 		},
 
-		queue_status: function(status, pct, quick_history, final) {
+		queue_status: function(status, pct, quick_history, final, decompressing) {
 			status_queue = {
 				status: status,
 				pct: pct,
 				quick_history: !!quick_history,
-				final: !!final
+				final: !!final,
+				decompressing: !!decompressing
 			};
 			schedule_flush();
 		},
@@ -679,6 +721,20 @@ var Gui = (function() {
 			}, 120);
 		},
 
+		begin_decompression: function() {
+			decompress_active = true;
+		},
+
+		show_decompress_mode: function() {
+			Gui.hide_quick_mode();
+			$("#Decompress_Add_Exclusion").prop("checked", true);
+			$("#Decompress_Mode").show();
+		},
+
+		hide_decompress_mode: function() {
+			$("#Decompress_Mode").hide();
+		},
+
 		show_quick_mode: function(directories, allow_compactos) {
 			var list = $("#Quick_Mode_Targets");
 			var message = $("#Quick_Mode_Message");
@@ -708,6 +764,7 @@ var Gui = (function() {
 
 			message.text(note);
 
+			Gui.hide_decompress_mode();
 			$("#Quick_Mode").show();
 		},
 
@@ -730,10 +787,11 @@ var Gui = (function() {
 			Gui.scanning();
 		},
 
-		set_progress: function(pct, final) {
+		set_progress: function(pct, final, decompressing) {
 			var track = $("#Activity_Progress");
 			var fill = $("#Activity_Progress_Fill");
 			track.removeClass("indeterminate complete");
+			track.toggleClass("decompressing", !!decompressing);
 
 			if (pct == null || pct < 0) {
 				track.addClass("indeterminate");
@@ -745,21 +803,30 @@ var Gui = (function() {
 			var clamped = Math.max(0, Math.min(100, pct));
 			fill.css("width", clamped + "%");
 			track.attr("aria-valuenow", String(Math.round(clamped)));
-			if (clamped >= 100 && final) {
+			if (!decompressing && clamped >= 100 && final) {
 				track.addClass("complete");
 			}
 		},
 
-		set_status: function(status, pct, final) {
+		set_status: function(status, pct, final, decompressing) {
+			if (decompressing) {
+				decompress_active = true;
+				$("#Analysis").hide();
+			}
 			$("#Activity_Text").text(status);
-			Gui.set_progress(pct, final);
+			Gui.set_progress(pct, final, decompressing);
 		},
 
 		scanning: function() {
 			Gui.reset_folder_summary();
 			Gui.hide_quick_mode();
+			Gui.hide_decompress_mode();
 			$("#Activity").show();
-			$("#Analysis").show();
+			if (decompress_active) {
+				$("#Analysis").hide();
+			} else {
+				$("#Analysis").show();
+			}
 			Gui.set_progress(-1);
 
 			$("#Button_Pause").show();
@@ -772,6 +839,7 @@ var Gui = (function() {
 
 		compacting: function() {
 			Gui.hide_quick_mode();
+			Gui.hide_decompress_mode();
 			$("#Button_Pause").show();
 			$("#Button_Resume").hide();
 			$("#Button_Stop").show();
@@ -792,12 +860,15 @@ var Gui = (function() {
 		stopped: function() {
 			_flush_queued_updates();
 			Gui.hide_quick_mode();
+			Gui.hide_decompress_mode();
+			decompress_active = false;
 			$("#Activity").hide();
 			Gui.scanned();
 		},
 
 		scanned: function() {
 			Gui.hide_quick_mode();
+			Gui.hide_decompress_mode();
 			$("#Button_Pause").hide();
 			$("#Button_Resume").hide();
 			$("#Button_Stop").hide();

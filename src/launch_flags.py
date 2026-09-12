@@ -18,6 +18,7 @@ FLAG_METADATA: dict[str, tuple[str, str]] = {
         f"Set minimum expected savings percentage ({config.MIN_SAVINGS_PERCENT:.0f}-{config.MAX_SAVINGS_PERCENT:.0f})",
     ),
     'exclude': ('--exclude PATH', 'Skip a directory (repeatable)'),
+    'decompress': ('--decompress', 'Decompress files'),
 }
 
 SHORT_FLAG_KEYS: dict[str, str] = {
@@ -37,6 +38,7 @@ LONG_FLAG_KEYS: dict[str, str] = {
     'single-worker': 'single_worker',
     'min-savings': 'min_savings',
     'exclude': 'exclude',
+    'decompress': 'decompress',
 }
 
 START_COMMANDS: set[str] = {'s', 'start'}
@@ -44,6 +46,7 @@ FLAG_HELP_COMMANDS: set[str] = {'f', 'flags'}
 
 _MUTUALLY_EXCLUSIVE: tuple[tuple[str, str], ...] = (
     ('no_lzx', 'force_lzx'),
+    ('decompress', 'dry_run'),
 )
 
 
@@ -55,6 +58,7 @@ class LaunchState:
     no_lzx: bool = False
     force_lzx: bool = False
     dry_run: bool = False
+    decompress: bool = False
     single_worker: bool = False
     min_savings: float = config.DEFAULT_MIN_SAVINGS_PERCENT
     excludes: list[str] = field(default_factory=list)

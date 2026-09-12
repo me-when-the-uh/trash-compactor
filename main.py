@@ -79,6 +79,7 @@ def build_parser() -> argparse.ArgumentParser:
         Examples:
           trash-compactor.exe                         Launch interactive configuration
           trash-compactor.exe C:\\Games               Compress immediately using defaults
+          trash-compactor.exe --decompress C:\\Games  Decompress files in that folder
 
         Verbosity levels:
           -v    Summarise cache exclusions and entropy sampling
@@ -136,6 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help=_("Analyse directory entropy without compressing files"),
+    )
+    parser.add_argument(
+        "--decompress",
+        action="store_true",
+        help=_("Decompress files in the target directory"),
     )
     parser.add_argument(
         "-y",
@@ -196,6 +202,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def announce_mode(args: argparse.Namespace) -> None:
     notices: list[str] = []
+    if getattr(args, "decompress", False):
+        notices.append(_("Decompressing files."))
     if getattr(args, "dry_run", False):
         notices.append(_("Dry run: analysing entropy without compressing files."))
     if getattr(args, "single_worker", False):
@@ -262,7 +270,7 @@ def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
 
     from src import benchmark
     benchmark_ok: Optional[bool] = None
-    if not interactive_launch and not args.no_lzx:
+    if not interactive_launch and not args.no_lzx and not getattr(args, "decompress", False):
         benchmark_ok = benchmark.run_benchmark()
         if not benchmark_ok and not args.force_lzx:
             args.no_lzx = True
@@ -286,6 +294,13 @@ def _validate_modes(args: argparse.Namespace) -> bool:
     if args.no_lzx and args.force_lzx:
         cprint(Fore.RED, _("Error: Cannot disable and force LZX compression at the same time."))
         return False
+    if getattr(args, "decompress", False):
+        if args.dry_run or getattr(args, "one_click", False):
+            cprint(Fore.RED, _("Error: --decompress cannot be combined with --dry-run or --one-click."))
+            return False
+        if not args.directory:
+            cprint(Fore.RED, _("Error: --decompress requires a target directory."))
+            return False
     return True
 
 
@@ -322,7 +337,8 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
     announce_mode(args)
 
-    _apply_lzx_choice(args)
+    if not getattr(args, "decompress", False):
+        _apply_lzx_choice(args)
 
     directory, updated_args = acquire_directory(args, interactive_launch)
     args.directory = directory
@@ -331,9 +347,12 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
 
     protection_reason = get_protection_reason(directory) or validate_target_path(directory)
     if protection_reason:
-        logging.error(_("Cannot compress target: %s"), protection_reason)
-        if 'Windows' in protection_reason:
-            logging.error(_("To compress Windows system files, use 'compact.exe /compactos:always' instead"))
+        if getattr(args, "decompress", False):
+            logging.error(_("Cannot decompress target: %s"), protection_reason)
+        else:
+            logging.error(_("Cannot compress target: %s"), protection_reason)
+            if 'Windows' in protection_reason:
+                logging.error(_("To compress Windows system files, use 'compact.exe /compactos:always' instead"))
         return None
 
     if not confirm_hdd_usage(directory, force_serial=args.single_worker, yes=getattr(args, "yes", False)):
@@ -391,6 +410,8 @@ def main() -> int:
 
     if not _validate_modes(args):
         prompt_exit()
+        if getattr(args, "decompress", False) and not args.directory:
+            sys.exit(2)
         sys.exit(1)
 
     setup_logging(args.verbose)
@@ -497,7 +518,12 @@ def main() -> int:
         if directory is None:
             return 1
 
-        mode_name = "dry-run" if getattr(args, "dry_run", False) else "compress"
+        if getattr(args, "decompress", False):
+            mode_name = "decompress"
+        elif getattr(args, "dry_run", False):
+            mode_name = "dry-run"
+        else:
+            mode_name = "compress"
         _emit_cli_log_mode_and_settings(
             cli_log,
             mode_name=mode_name,
@@ -505,7 +531,11 @@ def main() -> int:
             args=args,
         )
 
-        if getattr(args, "dry_run", False):
+        if getattr(args, "decompress", False):
+            exit_code = _run_cli_decompress(
+                args=args, directory=directory, cli_log=cli_log
+            )
+        elif getattr(args, "dry_run", False):
             exit_code = _run_cli_dry_run(
                 args=args, directory=directory, cli_log=cli_log
             )
@@ -616,6 +646,30 @@ def _run_cli_dry_run(args, directory, cli_log) -> int:
         if isinstance(cli_log, CliLog):
             cli_log.errors(stats)
 
+    return 0
+
+
+def _run_cli_decompress(args, directory, cli_log) -> int:
+    from src.compression_module import decompress_directory
+    from src.exclusions import add_user_exclusion
+
+    logging.info(_("Starting decompression of directory: %s"), directory)
+    stats, monitor, plan = decompress_directory(
+        directory,
+        verbosity=args.verbose,
+    )
+    if plan:
+        error = add_user_exclusion(directory)
+        if error:
+            logging.warning(error)
+        else:
+            logging.info(_("Added %s to Excluded folders."), directory)
+        print(_("Decompressed {count} files.").format(count=len(plan)))
+    monitor.print_summary()
+
+    if isinstance(cli_log, CliLog):
+        cli_log.timing(monitor)
+        cli_log.errors(stats)
     return 0
 
 

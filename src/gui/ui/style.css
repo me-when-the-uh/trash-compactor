@@ -76,6 +76,15 @@ h1 span.side {
   background-color: #0079d6;
 }
 
+#Button_Decompress.decompress-icon {
+  background-color: rgb(118, 118, 118);
+}
+
+#Button_Decompress.decompress-icon:hover,
+#Button_Decompress.decompress-icon:active {
+  background-color: rgb(140, 140, 140);
+}
+
 #Button_Quick {
   flex: 1.2 1 340px;
   background-color: rgb(33, 186, 69);
@@ -109,8 +118,10 @@ input[type="number"] {
 
 input[type="checkbox"] {
   accent-color: #229af7;
+  box-sizing: border-box;
   width: 15px;
   height: 15px;
+  padding: 0;
   vertical-align: middle;
   margin: 0 6px 0 2px;
   flex-shrink: 0;
@@ -179,6 +190,10 @@ section button.quick:hover, section button.quick:active {
 
 .progress-track.complete .progress-fill {
   background: linear-gradient(90deg, #1a9e3f 0%, #2ecc55 60%, #7fdc9f 100%);
+}
+
+.progress-track.decompressing .progress-fill {
+  background: linear-gradient(90deg, #5a5a5a 0%, #8a8a8a 55%, #b8b8b8 100%);
 }
 
 @keyframes progress-indeterminate {
@@ -257,23 +272,36 @@ section button.quick:hover, section button.quick:active {
   font-weight: 500;
 }
 
-#Quick_CompactOS_Container {
-  margin: 2px 0;
+#Quick_CompactOS_Container,
+#Decompress_Exclusion_Container {
+  margin: 4px 0 2px;
+  border-top: 0;
 }
-#Quick_CompactOS_Container .setting-item {
-  padding: 2px 0;
-  gap: 2px;
+#Quick_CompactOS_Container .setting-item,
+#Decompress_Exclusion_Container.setting-item {
+  padding: 0;
+  gap: 4px;
+  border-top: 0;
 }
-#Quick_CompactOS_Container .setting-help {
+#Quick_CompactOS_Container .setting-toggle,
+#Decompress_Exclusion_Container .setting-toggle {
+  min-height: 28px;
+  padding: 0;
+  gap: 10px;
+}
+#Quick_CompactOS_Container .setting-help,
+#Decompress_Exclusion_Container .setting-help {
   font-size: 0.75em;
   line-height: 1.2;
   margin-top: 0;
 }
-input#Quick_CompactOS {
-  width: 18px;
-  height: 18px;
-  margin: 0 6px 0 2px;
-  transform: scale(1.35);
+input#Quick_CompactOS,
+input#Decompress_Add_Exclusion {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
+  transform: none;
   flex-shrink: 0;
 }
 
@@ -572,6 +600,8 @@ div.ctr {
 }
 
 #FolderChooser .action-row button {
+  box-sizing: border-box;
+  margin: 0;
   min-height: clamp(40px, 6vw, 48px);
   padding: clamp(6px, 1vw, 10px) clamp(10px, 2vw, 18px);
   font-size: clamp(0.85em, 0.8vw + 0.7em, 1.0em);
@@ -581,6 +611,39 @@ div.ctr {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#FolderChooser .action-row button.decompress-icon,
+#Button_Decompress.decompress-icon {
+  flex: 0 0 auto;
+  flex-shrink: 0;
+  align-self: stretch;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+  height: auto;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  font-size: 1.25em;
+  line-height: 1;
+  letter-spacing: 0;
+}
+
+#Quick_Mode .ctr,
+#Decompress_Mode .ctr {
+  margin-top: 6px;
+  gap: 8px;
+}
+
+#Quick_Mode .ctr button,
+#Decompress_Mode .ctr button {
+  box-sizing: border-box;
+  margin: 0;
+  min-height: 28px;
+  padding: 5px 12px;
 }
 
 .quick-mode-panel {
