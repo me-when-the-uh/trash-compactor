@@ -7,6 +7,7 @@ from .i18n import _
 from .config import savings_from_entropy
 from .compression.entropy import sample_directory_entropy
 from .compression.cache import IncompressibleCache
+from .exclusions import app_data_dir
 from .file_utils import DirectoryDecision, should_skip_directory
 from .stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord
 
@@ -17,14 +18,7 @@ def get_incompressible_cache() -> IncompressibleCache:
     global _cache
     if _cache is None:
         configured = os.getenv("TRASH_COMPACTOR_CACHE_PATH")
-        if configured:
-            cache_path = Path(configured)
-        else:
-            appdata = os.getenv("APPDATA")
-            if appdata:
-                cache_path = Path(appdata) / "TrashCompactor" / "incompressible.db"
-            else:
-                cache_path = Path.home() / ".cache" / "TrashCompactor" / "incompressible.db"
+        cache_path = Path(configured) if configured else app_data_dir() / "incompressible.db"
         _cache = IncompressibleCache(cache_path)
     return _cache
 
@@ -148,22 +142,20 @@ def maybe_skip_directory(
     directory: str | Path,
     base_dir: Path,
     stats: CompressionStats,
-    collect_entropy: bool,
-    min_savings_percent: float,
-    verbosity: int,
 ) -> DirectoryDecision:
     dir_path = directory if isinstance(directory, Path) else Path(directory)
     decision = should_skip_directory(directory)
     if decision.skip:
         reason = decision.reason or _("Excluded system directory")
+        category = decision.category or "system"
         record = DirectorySkipRecord(
             path=str(dir_path),
             relative_path=_relative_to_base(dir_path, base_dir),
             reason=reason,
-            category='system',
+            category=category,
         )
         append_directory_skip_record(stats, record)
-        return DirectoryDecision.deny(reason)
+        return DirectoryDecision.deny(reason, category=category)
 
     # Entropy decisions and the cache live in the planner, after the scan.
     return DirectoryDecision.allow_path()
@@ -171,23 +163,30 @@ def maybe_skip_directory(
 
 def append_directory_skip_record(stats: CompressionStats, record: DirectorySkipRecord) -> None:
     stats.directory_skips.append(record)
-    if record.category == 'system':
-        logging.debug("Skipping system directory %s: %s", record.path, record.reason)
-    elif record.category == 'high_entropy':
-        logging.debug("Skipping high entropy directory %s: %s", record.path, record.reason)
-    else:
-        logging.debug("Skipping directory %s: %s", record.path, record.reason)
+    prefix = {
+        'system': 'system directory',
+        'user': 'user-excluded directory',
+        'high_entropy': 'high entropy directory',
+        'directstorage': 'DirectStorage directory',
+    }.get(record.category, 'directory')
+    logging.debug("Skipping %s %s: %s", prefix, record.path, record.reason)
 
 
 def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_percent: float) -> None:
-    if verbosity < 1:
-        return
-
     buckets = {}
     for record in stats.directory_skips:
         buckets.setdefault(record.category, []).append(record)
 
     if not buckets:
+        return
+
+    if 'directstorage' in buckets:
+        ds_records = buckets['directstorage']
+        logging.info(_("Skipped %s DirectStorage game directories:"), len(ds_records))
+        for record in ds_records:
+            logging.info(" - %s", record.format_line())
+
+    if verbosity < 1:
         return
 
     if 'high_entropy' in buckets:
@@ -206,6 +205,12 @@ def log_directory_skips(stats: CompressionStats, verbosity: int, min_savings_per
                 record.average_entropy if record.average_entropy is not None else 0.0,
                 record.sampled_files,
             )
+
+    if 'user' in buckets:
+        user_records = buckets['user']
+        logging.info(_("Skipped %s user-excluded directories:"), len(user_records))
+        for record in user_records:
+            logging.info(" - %s - %s", record.relative_path, record.reason)
 
     if verbosity >= 3 and 'system' in buckets:
         system_records = buckets['system']

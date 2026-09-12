@@ -41,11 +41,6 @@ def clamp_savings_percent(value: float) -> float:
     return max(MIN_SAVINGS_PERCENT, min(MAX_SAVINGS_PERCENT, value))
 
 
-def entropy_from_savings(percent: float) -> float:
-    clamped = clamp_savings_percent(percent)
-    return max(0.0, 8.0 * (1 - clamped / 100.0))
-
-
 def savings_from_entropy(entropy: float) -> float:
     entropy = max(0.0, min(8.0, entropy))
     return max(0.0, (1 - entropy / 8.0) * 100.0)
@@ -84,17 +79,9 @@ ENTROPY_SAMPLING_PARAMS: Final[EntropySamplingParams] = EntropySamplingParams(
     target_window_size=_entropy_env_int("TRASH_COMPACTOR_ENTROPY_SAMPLE_WINDOW_SIZE", 16 * 1024),
 )
 
-# Backwards-compatible module-level constants
-ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE: Final[int] = ENTROPY_SAMPLING_PARAMS.dynamic_windows_min_file_size
-ENTROPY_DYNAMIC_WINDOWS_MAX_FILE_SIZE: Final[int] = ENTROPY_SAMPLING_PARAMS.dynamic_windows_max_file_size
-ENTROPY_HUGE_WINDOWS_FILE_SIZE: Final[int] = ENTROPY_SAMPLING_PARAMS.huge_windows_file_size
-ENTROPY_BASE_SAMPLE_WINDOWS: Final[int] = ENTROPY_SAMPLING_PARAMS.base_sample_windows
-ENTROPY_DYNAMIC_WINDOWS_MIN: Final[int] = ENTROPY_SAMPLING_PARAMS.dynamic_windows_min
-ENTROPY_DYNAMIC_WINDOWS_MAX: Final[int] = ENTROPY_SAMPLING_PARAMS.dynamic_windows_max
-ENTROPY_HUGE_WINDOWS_MAX: Final[int] = ENTROPY_SAMPLING_PARAMS.huge_windows_max
-ENTROPY_TARGET_WINDOW_SIZE: Final[int] = ENTROPY_SAMPLING_PARAMS.target_window_size
-
-ENTROPY_MAX_FILE_BUDGET: Final[int] = ENTROPY_DYNAMIC_WINDOWS_MAX * ENTROPY_TARGET_WINDOW_SIZE
+ENTROPY_MAX_FILE_BUDGET: Final[int] = (
+    ENTROPY_SAMPLING_PARAMS.dynamic_windows_max * ENTROPY_SAMPLING_PARAMS.target_window_size
+)
 
 
 ENTROPY_MAX_FILES: Final[int] = _entropy_env_int("TRASH_COMPACTOR_ENTROPY_MAX_FILES", 50)
@@ -112,7 +99,7 @@ SIZE_THRESHOLDS: Final[Tuple[Tuple[int, str], ...]] = (
 
 
 BENCHMARK_DURATION_LIMIT: Final[float] = 0.25
-BENCHMARK_WORKLOAD_ITERATIONS: Final[int] = 125_000
+BENCHMARK_WORKLOAD_ITERATIONS: Final[int] = 130_000
 
 from .file_utils import DEFAULT_EXCLUDE_DIRECTORIES
 

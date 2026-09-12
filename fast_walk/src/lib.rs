@@ -7,6 +7,7 @@ use rayon::ThreadPoolBuilder;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR, MAIN_SEPARATOR_STR};
+use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -19,6 +20,9 @@ const CAT_EXTENSION: u8 = 1;
 const CAT_TOO_SMALL: u8 = 2;
 const CAT_DEBUG_EXT: u8 = 3;
 const CAT_ALREADY_COMPRESSED: u8 = 4;
+const CAT_MAGIC: u8 = 6;
+
+const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x800;
 
@@ -139,12 +143,52 @@ fn skip_extension_name(name: &OsStr, skip_ext: &HashSet<String>) -> bool {
     })
 }
 
+fn is_sqlite_sidecar(name: &OsStr) -> bool {
+    let lower = name.to_string_lossy().to_ascii_lowercase();
+    lower.ends_with("-wal") || lower.ends_with("-shm") || lower.ends_with("-journal")
+}
+
+fn sqlite_header_match(path: &Path) -> bool {
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let mut buf = [0u8; 16];
+    match file.read_exact(&mut buf) {
+        Ok(()) => &buf == SQLITE_HEADER,
+        Err(_) => false,
+    }
+}
+
+fn looks_like_sqlite(path: &Path, name: &OsStr, size: u64, min_size: u64) -> bool {
+    if is_sqlite_sidecar(name) {
+        return true;
+    }
+    if Path::new(name).extension().is_some() {
+        return false;
+    }
+    if size < min_size.max(16) {
+        return false;
+    }
+    sqlite_header_match(path)
+}
+
 /// (algorithm byte, category byte). Algorithm index matches SIZE_THRESHOLDS
 /// ordering in Python: 0=XPRESS4K, 1=XPRESS8K, 2=XPRESS16K, 3=LZX.
-fn classify(size: u64, is_skip_ext: bool, ignore_ext: bool, min_size: u64, breaks: &[u64]) -> (u8, u8) {
+fn classify(
+    size: u64,
+    is_skip_ext: bool,
+    is_magic: bool,
+    ignore_ext: bool,
+    min_size: u64,
+    breaks: &[u64],
+) -> (u8, u8) {
     let algo = breaks.iter().filter(|&&b| size >= b).count() as u8;
     if !ignore_ext && is_skip_ext {
         return (algo, CAT_EXTENSION);
+    }
+    if is_magic {
+        return (algo, CAT_MAGIC);
     }
     if size < min_size {
         return (algo, CAT_TOO_SMALL);
@@ -193,8 +237,13 @@ fn scan_dir(
         }
 
         let size = metadata.len();
+        if exclusions.contains_path(entry_path.to_string_lossy().as_ref()) {
+            entry_path.pop();
+            continue;
+        }
         let is_skip_ext = skip_extension_name(&file_name, skip_ext);
-        let (algo, category) = classify(size, is_skip_ext, ignore_ext, min_size, breaks);
+        let is_magic = looks_like_sqlite(&entry_path, &file_name, size, min_size);
+        let (algo, category) = classify(size, is_skip_ext, is_magic, ignore_ext, min_size, breaks);
         let path_str = entry_path.to_string_lossy().into_owned();
         let attrs = file_attributes(&metadata);
         let (algo, category, hint) = finalize_entry(&path_str, size, attrs, algo, category);

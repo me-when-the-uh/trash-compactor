@@ -7,6 +7,7 @@ from ..file_utils import is_admin, sanitize_path
 from ..i18n import _
 from ..one_click import resolve_targets
 from .message_types import (
+    ExclusionsResponse,
     GuiRequest,
     GuiResponse,
     QuickCompressionTargetsResponse,
@@ -56,13 +57,11 @@ def _cached_volume_details(backend: "GuiBackend", directory: str) -> VolumeDetai
 
 def _apply_drive_recommendation(backend: "GuiBackend", directory: str) -> None:
     """If not user-overridden, auto-enable HDD mode for detected hard drives."""
-    from ..drive_inspector import get_volume_details, is_hard_drive
+    from ..drive_inspector import DRIVE_REMOTE, is_hard_drive
     from ..workers import set_hdd_mode
     try:
         fast = _cached_volume_details(backend, directory)
         if fast.drive_type != DRIVE_REMOTE and fast.anchor:
-            # do full probe (may be cached in future)
-            full = get_volume_details(directory)
             if is_hard_drive(directory) and not backend._user_overrode_single_worker:
                 set_hdd_mode(True)
                 backend.hdd_mode = True
@@ -87,6 +86,20 @@ def _validate_target_path(backend: "GuiBackend", directory: str) -> Optional[Gui
     return None
 
 
+def _adopt_folder(backend: "GuiBackend", requested_path: str) -> None:
+    backend.current_folder = requested_path
+    try:
+        backend._send(backend._current_config_response())
+    except Exception:
+        pass
+
+
+def _launch(backend: "GuiBackend", worker: Callable[[], None]) -> GuiResponse:
+    if not backend.start_worker(worker):
+        return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
+    return StateResponse("Scanning")
+
+
 def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
     requested_path = backend._requested_path(request)
     if not requested_path and backend.last_analysis_plan is None and not backend.quick_analysis_results:
@@ -103,20 +116,13 @@ def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiRespons
             backend._clear_analysis_state()
 
     if requested_path:
-        backend.current_folder = requested_path
-        _apply_drive_recommendation(backend, requested_path)
-        try:
-            backend._send(backend._current_config_response())
-        except Exception:
-            pass
+        _adopt_folder(backend, requested_path)
 
     min_savings = getattr(request, "min_savings", None)
     if min_savings is not None:
         backend.min_savings = min_savings
 
-    if not backend.start_worker(backend._run_compression):
-        return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
-    return StateResponse("Scanning")
+    return _launch(backend, backend._run_compression)
 
 
 def _analyse_folder(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
@@ -129,15 +135,8 @@ def _analyse_folder(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
     if requested_path and requested_path != backend.current_folder:
         backend._clear_analysis_state()
 
-    backend.current_folder = requested_path
-    _apply_drive_recommendation(backend, requested_path)
-    try:
-        backend._send(backend._current_config_response())
-    except Exception:
-        pass
-    if not backend.start_worker(backend._run_analysis):
-        return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
-    return StateResponse("Scanning")
+    _adopt_folder(backend, requested_path)
+    return _launch(backend, backend._run_analysis)
 
 
 def _quick_targets(_backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
@@ -152,9 +151,7 @@ def _start_quick_compression(backend: "GuiBackend", request: GuiRequest) -> GuiR
     compactos = getattr(request, "compactos", False)
     backend._clear_quick_analysis_results()
     backend._clear_analysis_state()
-    if not backend.start_worker(lambda: backend._run_quick_compression(compactos=compactos)):
-        return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
-    return StateResponse("Scanning")
+    return _launch(backend, lambda: backend._run_quick_compression(compactos=compactos))
 
 
 def _pause(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
@@ -172,6 +169,34 @@ def _stop(backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
     return StateResponse("Stopped")
 
 
+def _exclusions_response() -> ExclusionsResponse:
+    from ..exclusions import load_persisted_exclusions
+
+    return ExclusionsResponse(paths=load_persisted_exclusions())
+
+
+def _get_exclusions(_backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
+    return _exclusions_response()
+
+
+def _add_exclusion(_backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    from ..exclusions import add_user_exclusion
+
+    error = add_user_exclusion(getattr(request, "path", "") or "")
+    if error:
+        return WarningResponse(_("Warning"), error)
+    return _exclusions_response()
+
+
+def _remove_exclusion(_backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    from ..exclusions import remove_user_exclusion
+
+    error = remove_user_exclusion(getattr(request, "path", "") or "")
+    if error:
+        return WarningResponse(_("Warning"), error)
+    return _exclusions_response()
+
+
 _DISPATCH: dict[str, Callable[["GuiBackend", GuiRequest], GuiResponse]] = {
     "SaveConfig": _save_config,
     "ResetConfig": _reset_config,
@@ -182,6 +207,9 @@ _DISPATCH: dict[str, Callable[["GuiBackend", GuiRequest], GuiResponse]] = {
     "PauseCompression": _pause,
     "ResumeCompression": _resume,
     "StopCompression": _stop,
+    "GetExclusions": _get_exclusions,
+    "AddExclusion": _add_exclusion,
+    "RemoveExclusion": _remove_exclusion,
 }
 
 

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from ..i18n import _
+from ..cli_log import pretty_size
 from ..config import (
     COMPRESSION_ALGORITHMS,
     ENTROPY_MAX_BYTES,
@@ -12,11 +13,18 @@ from ..config import (
     ENTROPY_SAMPLING_PARAMS,
     savings_from_entropy,
 )
+from ..directstorage import (
+    game_roots_from_dlls,
+    is_directstorage_dll,
+    is_under,
+    normalize_path,
+)
 from ..skip_logic import (
     append_directory_skip_record,
     entropy_records_from_probe,
     evaluate_entropy_directory,
     get_incompressible_cache,
+    _relative_to_base,
 )
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
@@ -28,25 +36,12 @@ from .file_scan import (
     CAT_ELIGIBLE,
     CAT_ERROR,
     CAT_EXTENSION,
+    CAT_MAGIC,
     CountingDirEntryIter,
     iter_files,
 )  # noqa: F401
 
 PlanEntry = tuple[str, int, str]
-
-
-def _format_size(num_bytes: int) -> str:
-    try:
-        n = int(num_bytes)
-    except Exception:
-        return f"{num_bytes} B"
-    if n < 1024:
-        return f"{n} B"
-    for unit in ("KB", "MB", "GB", "TB"):
-        n /= 1024.0
-        if n < 1024.0:
-            return f"{n:.1f} {unit}"
-    return f"{n:.1f} PB"
 
 
 def plan_compression(
@@ -63,12 +58,25 @@ def plan_compression(
     debug_scan_all: bool = False,
 ) -> list[PlanEntry]:
     candidates: list[PlanEntry] = []
+    ds_dlls: list[str] = []
+    exe_dirs: set[str] = set()
     with monitor.time_file_scan():
         processed = 0
         bulk_skips = SkipBulkLedger()
         use_bulk_skips = verbosity < 3
+        # (bulk ledger key, already_compressed, progress message, debug line or None)
+        skip_buckets = {
+            CAT_ALREADY_COMPRESSED: ("already_compressed", True, _("File is already compressed"), "Skipping %s: already compressed"),
+            CAT_EXTENSION: ("extension", False, _("Skipped due to extension"), None),
+            CAT_MAGIC: ("magic", False, _("Skipped database file"), "Skipping %s: SQLite header"),
+        }
+        too_small_bucket = ("too_small", False, _("File too small"), "Skipping %s: file too small")
         for path, size, _attributes, algo, category, hint in files:
             processed += 1
+            if is_directstorage_dll(path):
+                ds_dlls.append(path)
+            if os.path.basename(path).lower().endswith(".exe"):
+                exe_dirs.add(normalize_path(os.path.dirname(path)))
 
             if category == CAT_ERROR:
                 reason = _("Error processing {file_path}").format(file_path=path)
@@ -91,32 +99,29 @@ def plan_compression(
                     _debug_extension_probe(path, size, min_savings_percent)
                 if progress_callback:
                     progress_callback(path, processed, True, None, size)
-            elif category == CAT_ALREADY_COMPRESSED:
-                if use_bulk_skips:
-                    bulk_skips.add("already_compressed", hint, size)
-                else:
-                    stats.record_file_skip_counters(hint, size, already_compressed=True, category="already_compressed")
-                    logging.debug("Skipping %s: already compressed", path)
-                if progress_callback:
-                    progress_callback(path, processed, False, _("File is already compressed"), size)
-            elif category == CAT_EXTENSION:
-                if use_bulk_skips:
-                    bulk_skips.add("extension", hint, size)
-                else:
-                    stats.record_file_skip_counters(hint, size, category="extension")
-                if progress_callback:
-                    progress_callback(path, processed, False, _("Skipped due to extension"), size)
+                continue
+
+            bulk_key, already_compressed, progress_message, debug_message = skip_buckets.get(category, too_small_bucket)
+            if use_bulk_skips:
+                bulk_skips.add(bulk_key, hint, size)
             else:
-                if use_bulk_skips:
-                    bulk_skips.add("too_small", hint, size)
-                else:
-                    stats.record_file_skip_counters(hint, size, category="too_small")
-                    logging.debug("Skipping %s: file too small", path)
-                if progress_callback:
-                    progress_callback(path, processed, False, _("File too small"), size)
+                stats.record_file_skip_counters(hint, size, already_compressed=already_compressed, category=bulk_key)
+                if debug_message:
+                    logging.debug(debug_message, path)
+            if progress_callback:
+                progress_callback(path, processed, False, progress_message, size)
 
         if use_bulk_skips:
             stats.record_bulk_skips(bulk_skips)
+
+    if ds_dlls:
+        candidates = _filter_directstorage_trees(
+            candidates,
+            ds_dlls,
+            exe_dirs,
+            base_dir=base_dir,
+            stats=stats,
+        )
 
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():
@@ -132,15 +137,53 @@ def plan_compression(
             )
 
     if COMPRESSION_ALGORITHMS.get('large') == 'XPRESS16K':
-        # LZX is disabled (benchmark or explicit toggle): the walker still
-        # tagged large files as LZX, so downgrade them here. The executor and
-        # the projection both read the plan's algo, so this is the single
-        # place that must agree with configure_lzx().
         candidates = [
             (path_str, size, 'XPRESS16K' if algo == 'LZX' else algo)
             for path_str, size, algo in candidates
         ]
     return candidates
+
+
+def _filter_directstorage_trees(
+    candidates: list[PlanEntry],
+    dll_paths: list[str],
+    exe_dirs: set[str],
+    *,
+    base_dir: Path,
+    stats: CompressionStats,
+) -> list[PlanEntry]:
+    roots = game_roots_from_dlls(dll_paths, base_dir, exe_dirs)
+    if not roots:
+        return candidates
+
+    reason = _("DirectStorage game (BypassIO)")
+    for root in roots:
+        record = DirectorySkipRecord(
+            path=str(root),
+            relative_path=_relative_to_base(root, base_dir),
+            reason=reason,
+            category="directstorage",
+        )
+        append_directory_skip_record(stats, record)
+        logging.warning(
+            _("Skipping DirectStorage game {path}; compact.exe would disable BypassIO").format(path=root)
+        )
+
+    filtered: list[PlanEntry] = []
+    for path_str, file_size, algorithm in candidates:
+        hit = next((root for root in roots if is_under(path_str, root)), None)
+        if hit is None:
+            filtered.append((path_str, file_size, algorithm))
+            continue
+        stats.record_file_skip(
+            Path(path_str),
+            reason,
+            file_size,
+            file_size,
+            category="directstorage",
+        )
+        logging.debug("Skipping %s: DirectStorage tree %s", path_str, hit)
+    return filtered
 
 
 def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float) -> None:
@@ -154,7 +197,7 @@ def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float
         projected = int(file_size * (1 - savings / 100))
         print(
             f"\n[DEBUG] File {os.path.basename(path)} has potential savings: {savings:.1f}% "
-            f"({_format_size(file_size)} -> {_format_size(projected)})"
+            f"({pretty_size(file_size)} -> {pretty_size(projected)})"
         )
 
 
@@ -312,7 +355,6 @@ def _filter_high_entropy_directories(
                 root_bytes_sampled,
             )
 
-            from ..skip_logic import _relative_to_base
             root_sample = EntropySampleRecord(
                 path=str(base_dir),
                 relative_path=_relative_to_base(base_dir, base_dir),
@@ -369,7 +411,6 @@ def _filter_high_entropy_directories(
         if not cache.contains(directory):
             continue
 
-        from ..skip_logic import _relative_to_base
         record = DirectorySkipRecord(
             path=str(directory),
             relative_path=_relative_to_base(directory, base_dir),
@@ -426,41 +467,24 @@ def _filter_high_entropy_directories(
             if sample_records_by_dir[directory].lz4_certain_files > 0:
                 directory_lz4_certain.add(directory)
 
+    def _skip_file(path_str: str, file_size: int, reason: str, category: str) -> None:
+        stats.record_file_skip(Path(path_str), reason, file_size, file_size, category=category)
+        logging.debug("Skipping %s due to %s", path_str, reason)
+
     filtered: list[PlanEntry] = []
     for path_str, file_size, algorithm in candidates:
         parent_str = os.path.dirname(path_str)
         parent = Path(parent_str)
         if root_skip_record is not None and parent_str == base_dir_str:
-            stats.record_file_skip(
-                Path(path_str),
-                root_skip_record.reason,
-                file_size,
-                file_size,
-                category=root_skip_record.category,
-            )
-            logging.debug("Skipping %s due to %s", path_str, root_skip_record.reason)
+            _skip_file(path_str, file_size, root_skip_record.reason, root_skip_record.category)
             continue
         if parent in directory_lz4_certain:
             # Dir probe already confirmed LZ4-certain; no re-probe.
-            stats.record_file_skip(
-                Path(path_str),
-                _("File is certainly incompressible (LZ4 gate)"),
-                file_size,
-                file_size,
-                category='high_entropy',
-            )
-            logging.debug("Skipping %s: certainly incompressible (LZ4 gate)", path_str)
+            _skip_file(path_str, file_size, _("File is certainly incompressible (LZ4 gate)"), 'high_entropy')
             continue
         skip_record = _locate_skip_record(parent, base_dir, skipped_directories)
         if skip_record is not None:
-            stats.record_file_skip(
-                Path(path_str),
-                skip_record.reason,
-                file_size,
-                file_size,
-                category=skip_record.category,
-            )
-            logging.debug("Skipping %s due to %s", path_str, skip_record.reason)
+            _skip_file(path_str, file_size, skip_record.reason, skip_record.category)
             continue
         filtered.append((path_str, file_size, algorithm))
 

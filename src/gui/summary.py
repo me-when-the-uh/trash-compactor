@@ -75,27 +75,6 @@ def build_analysis_timing(
     )
 
 
-def accumulate_stats(target: CompressionStats, source: CompressionStats) -> None:
-    target.compressed_files += source.compressed_files
-    target.skipped_files += source.skipped_files
-    target.already_compressed_files += source.already_compressed_files
-    target.total_original_size += source.total_original_size
-    target.total_compressed_size += source.total_compressed_size
-    target.total_skipped_size += source.total_skipped_size
-    target.total_skipped_physical_size += source.total_skipped_physical_size
-    target.already_compressed_logical_size += source.already_compressed_logical_size
-    target.already_compressed_physical_size += source.already_compressed_physical_size
-    target.skip_extension_files += source.skip_extension_files
-    target.skip_low_savings_files += source.skip_low_savings_files
-    target.errors.extend(source.errors)
-    target.entropy_projected_original_bytes += source.entropy_projected_original_bytes or source.total_original_size
-    target.entropy_projected_size += source.entropy_projected_size or source.total_compressed_size
-    target.entropy_projected_size_conservative += (
-        source.entropy_projected_size_conservative or source.total_compressed_size
-    )
-    target.lz4_certain_incompressible_files += source.lz4_certain_incompressible_files
-
-
 def make_stats_summary(
     stats: CompressionStats,
     plan_count: int,
@@ -191,4 +170,13 @@ def make_stats_summary(
             "logical_size": excluded_logical_size,
             "physical_size": excluded_logical_size,
         },
+        "directstorage_skips": [
+            {
+                "path": record.path,
+                "relative_path": record.relative_path,
+                "display_path": record.display_name(),
+            }
+            for record in stats.directory_skips
+            if record.category == "directstorage"
+        ],
     }

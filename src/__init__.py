@@ -10,7 +10,6 @@ __all__ = [
     "CompressionStats",
     "ProgressTimer",
     "print_compression_summary",
-    "print_entropy_dry_run",
     "PerformanceMonitor",
     "TimingStats",
 ]
@@ -30,7 +29,6 @@ def __getattr__(name: str):
         "CompressionStats",
         "ProgressTimer",
         "print_compression_summary",
-        "print_entropy_dry_run",
     }:
         module = import_module(".stats", __name__)
         return getattr(module, name)

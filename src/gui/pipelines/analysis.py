@@ -11,7 +11,6 @@ from ..progress import (
     ENTROPY_PROGRESS_GRANULARITY,
     PLAN_PROGRESS_GRANULARITY,
     UI_STATUS_INTERVAL_SECONDS,
-    UI_SUMMARY_INTERVAL_SECONDS,
     entropy_progress_percent,
     scan_progress_percent,
 )
@@ -74,8 +73,6 @@ def run_analysis_pipeline(
 
         discovery.notify_check_progress(processed)
         total_files = max(discovery.count, processed)
-        # Count-gated: time-gating lets a summary through every ~20ms when the
-        # GUI bridge is slow, serialising the scan on evaluate_js.
         if processed % PLAN_PROGRESS_GRANULARITY != 0 and not discovery.complete:
             return
         backend._check_pause_stop()
@@ -122,8 +119,6 @@ def run_analysis_pipeline(
             entropy_phase_start = now
         entropy_elapsed = max(0.001, now - entropy_phase_start)
 
-        # Count-gated summary: entropy dirs are few (one per subdirectory), so
-        # a count gate here bounds GUI bridge calls tightly.
         if processed % (ENTROPY_PROGRESS_GRANULARITY * 4) == 0 or processed == total:
             last_summary_update_time = now
             backend._send_folder_summary(
@@ -183,6 +178,8 @@ def run_analysis_pipeline(
         backend.last_analysis_plan = []
         backend.last_analysis_stats = stats
         backend.last_analysis_monitor = monitor
+        backend.last_analysis_plan_count = 0
+        backend.last_analysis_total_size = 0
         monitor.end_operation()
         backend.last_analysis_timing = build_analysis_timing(
             monitor,
@@ -202,6 +199,7 @@ def run_analysis_pipeline(
             backend._send_progress(
                 _("Scanned in {elapsed:.1f}s").format(elapsed=analysis_elapsed),
                 100.0,
+                final=True,
                 **progress_kwargs,
             )
         return
@@ -211,6 +209,8 @@ def run_analysis_pipeline(
     backend.last_analysis_plan = plan
     backend.last_analysis_stats = stats
     backend.last_analysis_monitor = monitor
+    backend.last_analysis_plan_count = plan_count
+    backend.last_analysis_total_size = total_compressible_size
 
     apply_entropy_projection(stats, plan)
     monitor.end_operation()
@@ -225,6 +225,7 @@ def run_analysis_pipeline(
         backend._send_progress(
             _("Scanned in {elapsed:.1f}s").format(elapsed=analysis_elapsed),
             100.0,
+            final=True,
             **progress_kwargs,
         )
     backend._send_folder_summary(

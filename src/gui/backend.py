@@ -49,6 +49,8 @@ class GuiBackend:
         self.last_analysis_stats = None
         self.last_analysis_monitor = None
         self.last_analysis_timing = None
+        self.last_analysis_plan_count = 0
+        self.last_analysis_total_size = 0
         self.quick_analysis_results: list[dict[str, Any]] = []
         self._cached_validation_path = ""
         self._cached_volume_details = None
@@ -81,11 +83,14 @@ class GuiBackend:
         return getattr(request, "path", "") or self.current_folder
 
     def _configure_worker_environment(self) -> None:
+        from ..benchmark import run_benchmark
         from ..launch import configure_lzx
         from ..workers import set_hdd_mode, set_worker_cap
 
         set_worker_cap(1 if self.single_worker else None)
         set_hdd_mode(self.hdd_mode)
+        if self.benchmark_ok is None:
+            self.benchmark_ok = run_benchmark()
         configure_lzx(
             choice_enabled=not self.no_lzx,
             force_lzx=self.force_lzx,
@@ -122,7 +127,13 @@ class GuiBackend:
         )
 
     def _run_pipeline(self, label: str, action: Callable[[], None]) -> None:
+        from .handlers import _apply_drive_recommendation
+
         try:
+            before = self.hdd_mode
+            _apply_drive_recommendation(self, self.current_folder)
+            if self.hdd_mode != before:
+                self._send(self._current_config_response())
             action()
         except WorkerStopped:
             logging.debug("%s stopped by user", label)
@@ -231,10 +242,23 @@ class GuiBackend:
         self._clear_analysis_state()
 
 
+def _prewarm_volume_probes() -> None:
+    """Resolve drive details for every fixed volume in the background at startup."""
+    from ..drive_inspector import get_volume_details
+    from ..file_utils import _fixed_drive_roots
+
+    for root in _fixed_drive_roots():
+        try:
+            get_volume_details(root)
+        except Exception as exc:
+            logging.debug("Background drive probe failed for %s: %s", root, exc)
+
+
 def run_gui(benchmark_ok: Optional[bool] = None):
     backend = GuiBackend(benchmark_ok=benchmark_ok)
     app = create_gui_app(backend.handle_request)
     app.initial_config = json.loads(backend._current_config_response().to_json())
     backend.bind_server(app)
+    threading.Thread(target=_prewarm_volume_probes, name="drive-probe", daemon=True).start()
     app.start()
     print(_("Exiting..."), flush=True)

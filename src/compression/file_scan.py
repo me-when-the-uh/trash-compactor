@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 from typing import Callable, Iterable, Iterator, Optional
 
 from ..config import (
@@ -7,9 +8,10 @@ from ..config import (
     SIZE_THRESHOLDS,
     SKIP_EXTENSIONS,
 )
-from ..file_utils import DEFAULT_EXCLUDE_DIRECTORIES, _normalize_for_compare
-from ..skip_logic import maybe_skip_directory
-from ..stats import CompressionStats
+from ..exclusions import iter_user_exclusions_under, merged_exclude_directories
+from ..i18n import _
+from ..skip_logic import append_directory_skip_record, maybe_skip_directory
+from ..stats import CompressionStats, DirectorySkipRecord
 from ..workers import scan_worker_count
 
 CAT_ELIGIBLE = 0
@@ -18,6 +20,7 @@ CAT_TOO_SMALL = 2
 CAT_DEBUG_EXT = 3
 CAT_ALREADY_COMPRESSED = 4
 CAT_ERROR = 5
+CAT_MAGIC = 6
 
 _ALGO_NAMES = ("XPRESS4K", "XPRESS8K", "XPRESS16K", "LZX")
 _SIZE_BREAKS = tuple(b for b, _ in SIZE_THRESHOLDS)
@@ -60,15 +63,13 @@ class CountingDirEntryIter:
 def iter_files(
     root,
     stats: CompressionStats,
-    verbosity: int,
-    min_savings_percent: float,
     debug_scan_all: bool = False,
 ) -> Iterator[tuple]:
     """Yield (path, size, attributes, algo, category, hint) for every file.
 
     Walk, extension/size classification, and NTFS on-disk checks happen in Rust.
     """
-    if maybe_skip_directory(root, root, stats, False, min_savings_percent, verbosity).skip:
+    if maybe_skip_directory(root, root, stats).skip:
         return
 
     if not fast_walk_available():
@@ -76,7 +77,23 @@ def iter_files(
 
     import fast_walk
 
-    excluded = [_normalize_for_compare(path) for path in DEFAULT_EXCLUDE_DIRECTORIES]
+    root_path = root if isinstance(root, Path) else Path(root)
+    for display in iter_user_exclusions_under(root_path):
+        try:
+            relative = str(Path(display).relative_to(root_path))
+        except ValueError:
+            relative = display
+        append_directory_skip_record(
+            stats,
+            DirectorySkipRecord(
+                path=display,
+                relative_path=relative,
+                reason=_("User-excluded directory"),
+                category="user",
+            ),
+        )
+
+    excluded = merged_exclude_directories()
     for batch in fast_walk.walk_and_filter(
         os.fspath(root),
         excluded,

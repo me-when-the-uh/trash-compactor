@@ -9,7 +9,7 @@ from ...skip_logic import commit_incompressible_cache
 from ...stats import CompressionStats
 from ...workers import lzx_worker_count, xp_worker_count
 from ..message_types import ProgressUpdateResponse, StateResponse, StatusResponse, WarningResponse
-from ..progress import COMPRESSION_PROGRESS_GRANULARITY
+from ..progress import COMPRESSION_PROGRESS_GRANULARITY, UI_STATUS_INTERVAL_SECONDS
 
 if TYPE_CHECKING:
     from ..backend import GuiBackend
@@ -24,7 +24,7 @@ def _exec_progress_factory(
     status_template: str,
     pct_fn: Callable[[int, int], float],
     summary_fn: Callable[[], None],
-    update_interval: float = 0.1,
+    update_interval: float = UI_STATUS_INTERVAL_SECONDS,
     use_send_progress: bool = False,
 ) -> Callable[[Path, str], None]:
     last_update = exec_start_time
@@ -58,6 +58,27 @@ def _exec_progress_factory(
     return _exec_progress
 
 
+def _batch_start_factory(
+    backend: "GuiBackend",
+    *,
+    compressed_count: list[int],
+    total: int,
+    pct_fn: Callable[[int, int], float],
+) -> Callable[[str, int], None]:
+    def _batch_start(algorithm: str, count: int) -> None:
+        n_done = compressed_count[0]
+        pct = pct_fn(n_done, total) if total else None
+        backend._send_progress(
+            _("Compressing {count} files with {algorithm}...").format(
+                count=count,
+                algorithm=algorithm,
+            ),
+            pct,
+        )
+
+    return _batch_start
+
+
 def run_compression_pipeline(backend: "GuiBackend") -> None:
     backend._configure_worker_environment()
 
@@ -74,13 +95,17 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
     monitor = backend.last_analysis_monitor
 
     if not plan:
-        backend._send(ProgressUpdateResponse(_("Nothing to compress!"), 100.0))
+        backend._send(ProgressUpdateResponse(_("Nothing to compress!"), 100.0, final=True))
         return
 
     backend._send(StateResponse("Compacting"))
 
-    total_to_compress = len(plan)
-    total_compressible_size = sum(p[1] for p in plan)
+    # Reuse the totals counted during analysis
+    total_to_compress = backend.last_analysis_plan_count
+    total_compressible_size = backend.last_analysis_total_size
+    if total_to_compress != len(plan):
+        total_to_compress = len(plan)
+        total_compressible_size = sum(p[1] for p in plan)
     compressed_count = [0]
     exec_start_time = time.perf_counter()
 
@@ -94,14 +119,21 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
             is_analysis=False,
         )
 
+    _pct_fn = lambda n, t: 60.0 + (n / t) * 40.0
     _exec_progress = _exec_progress_factory(
         backend,
         total=total_to_compress,
         compressed_count=compressed_count,
         exec_start_time=exec_start_time,
         status_template=_("Compressing... {compressed}/{total} ({rate:.0f} files/s)"),
-        pct_fn=lambda n, t: 60.0 + (n / t) * 40.0,
+        pct_fn=_pct_fn,
         summary_fn=_summary,
+    )
+    _on_batch = _batch_start_factory(
+        backend,
+        compressed_count=compressed_count,
+        total=total_to_compress,
+        pct_fn=_pct_fn,
     )
 
     try:
@@ -109,12 +141,12 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
             execute_compression_plan(
                 plan,
                 stats,
-                monitor,
                 verbosity=0,
                 xp_workers=xp_worker_count(),
                 lzx_workers=lzx_worker_count(),
-                stage_callback=lambda _algo, _total: None,
+                stage_callback=_on_batch,
                 progress_callback=_exec_progress,
+                batch_callback=_on_batch,
             )
     except Exception:
         from ...skip_logic import discard_staged_incompressible_cache
@@ -145,7 +177,7 @@ def run_quick_analysis_compression(backend: "GuiBackend") -> None:
 
     total_to_compress = sum(len(entry.get("plan") or []) for entry in entries)
     if total_to_compress <= 0:
-        backend._send(ProgressUpdateResponse(_("Nothing to compress!"), 100.0))
+        backend._send(ProgressUpdateResponse(_("Nothing to compress!"), 100.0, final=True))
         return
 
     backend._send(StateResponse("Compacting"))
@@ -229,31 +261,38 @@ def _run_quick_compression_loop(
                     is_analysis=False,
                 )
 
+            _pct_fn = lambda n, t: (n / t) * 100.0
             _exec_progress = _exec_progress_factory(
                 backend,
                 total=total_to_compress,
                 compressed_count=compressed_count,
                 exec_start_time=exec_start_time,
                 status_template=_("Quick compressing... {compressed}/{total} ({rate:.0f} files/s)"),
-                pct_fn=lambda n, t: (n / t) * 100.0,
+                pct_fn=_pct_fn,
                 summary_fn=_summary,
                 update_interval=0.0,
                 use_send_progress=True,
+            )
+            _on_batch = _batch_start_factory(
+                backend,
+                compressed_count=compressed_count,
+                total=total_to_compress,
+                pct_fn=_pct_fn,
             )
 
             with monitor.time_compression():
                 execute_compression_plan(
                     plan,
                     stats,
-                    monitor,
                     verbosity=0,
                     xp_workers=xp_worker_count(),
                     lzx_workers=lzx_worker_count(),
-                    stage_callback=lambda _algo, _total: None,
+                    stage_callback=_on_batch,
                     progress_callback=_exec_progress,
+                    batch_callback=_on_batch,
                 )
 
-            from ..summary import accumulate_stats
+            from ...stats import accumulate_stats
             accumulate_stats(total_stats, stats)
 
             backend._send_folder_summary(

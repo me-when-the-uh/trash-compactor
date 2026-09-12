@@ -1,6 +1,7 @@
 import ctypes
-import os
 import logging
+import os
+import re
 from ctypes import wintypes
 from dataclasses import dataclass
 from typing import Optional
@@ -24,14 +25,13 @@ IOCTL_STORAGE_QUERY_PROPERTY = 0x2D1400
 PROPERTY_STANDARD_QUERY = 0
 STORAGE_DEVICE_SEEK_PENALTY_PROPERTY = 7
 
-GENERIC_READ = 0x80000000
 FILE_SHARE_READ = 0x00000001
 FILE_SHARE_WRITE = 0x00000002
 OPEN_EXISTING = 3
 FILE_ATTRIBUTE_NORMAL = 0x00000080
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
 
-@dataclass(frozen=True)
+# Plain ctypes structures instead of a @dataclass(frozen=True)
 class STORAGE_PROPERTY_QUERY(ctypes.Structure):
     _fields_ = [
         ('PropertyId', ctypes.c_int),
@@ -39,7 +39,6 @@ class STORAGE_PROPERTY_QUERY(ctypes.Structure):
         ('AdditionalParameters', ctypes.c_byte * 1),
     ]
 
-@dataclass(frozen=True)
 class DEVICE_SEEK_PENALTY_DESCRIPTOR(ctypes.Structure):
     _fields_ = [
         ('Version', wintypes.DWORD),
@@ -95,9 +94,11 @@ def _filesystem_name(anchor: str) -> Optional[str]:
 
 def _open_physical_drive(number: int) -> Optional[wintypes.HANDLE]:
     device_path = f"\\\\.\\PhysicalDrive{number}"
+    # Access 0 (device query) is enough for IOCTL_STORAGE_QUERY_PROPERTY and
+    # does not require admin privileges.
     handle = KERNEL32.CreateFileW(
         device_path,
-        GENERIC_READ,
+        0,
         FILE_SHARE_READ | FILE_SHARE_WRITE,
         None,
         OPEN_EXISTING,
@@ -139,7 +140,24 @@ def get_volume_details_fast(path: str) -> VolumeDetails:
     return _volume_details_base(path)
 
 
+_VOLUME_DETAILS_CACHE: dict[str, VolumeDetails] = {}
+
+
 def get_volume_details(path: str) -> VolumeDetails:
+    letter = _drive_letter(path)
+    if letter:
+        cached = _VOLUME_DETAILS_CACHE.get(letter.upper())
+        if cached is not None:
+            return cached
+
+    details = _probe_volume_details(path)
+
+    if letter:
+        _VOLUME_DETAILS_CACHE[letter.upper()] = details
+    return details
+
+
+def _probe_volume_details(path: str) -> VolumeDetails:
     details = _volume_details_base(path)
     if details.anchor is None:
         return details
@@ -375,14 +393,22 @@ class DriveInspector:
 
         for relation in self.conn.Win32_LogicalDiskToPartition():
             try:
-                if relation.Dependent.DeviceID == self.drive_letter:
-                    antecedent = relation.Antecedent
-                    disk_id = antecedent.split('PHYSICALDRIVE')[1]
-                    number = int(''.join(filter(str.isdigit, disk_id)))
-                    logging.debug("Found physical disk number %s for drive %s", number, self.drive_letter)
-                    self._disk_number = number
-                    return number
-            except (AttributeError, IndexError, ValueError):
+                if relation.Dependent.DeviceID != self.drive_letter:
+                    continue
+                # The antecedent is a Win32_DiskPartition, not a Win32_DiskDrive reference
+                antecedent = relation.Antecedent
+                try:
+                    number = antecedent.DiskIndex
+                except Exception:
+                    match = re.search(r"Disk #(\d+)", str(antecedent))
+                    if match is None:
+                        continue
+                    number = match.group(1)
+                number = int(number)
+                logging.debug("Found physical disk number %s for drive %s", number, self.drive_letter)
+                self._disk_number = number
+                return number
+            except Exception:
                 logging.debug(
                     "Failed to extract physical disk number from antecedent: %s",
                     getattr(relation, 'Antecedent', 'N/A'),

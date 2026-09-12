@@ -4,12 +4,13 @@ Handles IPC between HTML/JS frontend and Python compression backend.
 """
 
 import logging
-import threading
-import queue
+import os
 import json
 from pathlib import Path
 from typing import Optional, Callable, Any, Dict
 import webbrowser
+
+from .bridge import GuiBridge
 
 try:
     import webview as pywebview  # type: ignore[reportMissingImports]
@@ -24,6 +25,7 @@ from .message_types import (
     PauseCompressionRequest, ResumeCompressionRequest, StopCompressionRequest,
     AnalyseFolderRequest, SaveConfigRequest, ResetConfigRequest,
     GetQuickCompressionTargetsRequest, StartQuickCompressionRequest,
+    GetExclusionsRequest, AddExclusionRequest, RemoveExclusionRequest,
 )
 from ..i18n import _, get_current_locale, get_translations
 
@@ -34,17 +36,20 @@ class GuiApi:
     def __init__(self, backend_handler: Callable):
         self.backend_handler = backend_handler
         self.current_folder = ""
+        self._window: Optional[Any] = None
+
+    def _pick_folder(self) -> Optional[str]:
+        if self._window is None:
+            return None
+        result = self._window.create_file_dialog(pywebview.FileDialog.FOLDER)
+        if not result:
+            return None
+        return result[0]
 
     def choose_folder(self) -> Dict[str, Any]:
         """Show folder picker dialog."""
         try:
-            import tkinter as tk
-            from tkinter import filedialog
-
-            root = tk.Tk()
-            root.withdraw()
-            folder = filedialog.askdirectory(title=_("Select folder to compress"))
-            root.destroy()
+            folder = self._pick_folder()
 
             if folder:
                 self.current_folder = folder
@@ -107,6 +112,29 @@ class GuiApi:
         req = ResetConfigRequest()
         return self.backend_handler(req)
 
+    def get_exclusions(self) -> Dict[str, Any]:
+        req = GetExclusionsRequest()
+        return self.backend_handler(req)
+
+    def add_exclusion(self, path: str) -> Dict[str, Any]:
+        req = AddExclusionRequest(path=path or "")
+        return self.backend_handler(req)
+
+    def remove_exclusion(self, path: str) -> Dict[str, Any]:
+        req = RemoveExclusionRequest(path=path or "")
+        return self.backend_handler(req)
+
+    def choose_exclusion_folder(self) -> Dict[str, Any]:
+        try:
+            folder = self._pick_folder()
+
+            if folder:
+                return self.add_exclusion(folder)
+            return self.get_exclusions()
+        except Exception as exc:
+            logging.exception("Error choosing exclusion folder: %s", exc)
+            return {"type": "Error", "message": str(exc)}
+
     def open_url(self, url: str) -> Dict[str, Any]:
         """Open URL in default browser."""
         try:
@@ -126,6 +154,7 @@ class GuiServer:
         self.window = None
         self.running = False
         self.initial_config: Dict[str, Any] = {}
+        self._bridge = GuiBridge()
 
     def _handle_request(self, request: GuiRequest) -> Dict[str, Any]:
         """Call backend handler and convert response to dict."""
@@ -195,24 +224,35 @@ class GuiServer:
                 background_color="#3d3d3d",
             )
             self.running = True
+            self.api._window = self.window
+            self._bridge.start(self._emit_batch)
             # Prefer the native Windows backend. Forcing CEF requires an extra
             # cefpython3 runtime that is not bundled in our one-file build.
-            pywebview.start(debug=False, gui="edgechromium")
+            debug = os.environ.get("TRASH_COMPACTOR_GUI_DEBUG") == "1"
+            try:
+                pywebview.start(debug=debug, gui="edgechromium")
+            finally:
+                self.stop()
         except Exception as e:
             logging.exception("Error starting GUI: %s", e)
+            self.stop()
 
     def stop(self) -> None:
         """Stop the GUI server."""
         self.running = False
+        self._bridge.stop()
+
+    def _emit_batch(self, items: list) -> None:
+        if not self.window or not items:
+            return
+        payload = json.dumps(items, ensure_ascii=True)
+        self.window.evaluate_js(f"Response.batch({payload})")
 
     def send_response(self, response: GuiResponse) -> None:
-        """Send response to GUI (if window exists)."""
-        if self.window:
-            try:
-                json_str = response.to_json()
-                self.window.evaluate_js(f"Response.dispatch({json_str})")
-            except Exception as e:
-                logging.debug("Could not send response to GUI: %s", e)
+        """Enqueue a response for the GUI pump. Never calls evaluate_js."""
+        if not self.running:
+            return
+        self._bridge.enqueue(response)
 
 
 def create_gui_app(request_handler: Callable[[GuiRequest], GuiResponse]) -> GuiServer:

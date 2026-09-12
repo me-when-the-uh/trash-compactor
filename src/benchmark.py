@@ -7,8 +7,8 @@ _benchmark_cached_result = None
 def run_benchmark() -> bool:
     """
     Runs a CPU benchmark simulating decompression workload.
-    If the machine is too slow and exceeds the configured duration limit, LZX compression will be disabled.
-    We don't want to make it even slower after compressing files with LZX which only gives additional 5-10% storage savings idk.
+    If the machine doesn't complete the benchmark in time because it's too slow, LZX compression will be disabled.
+    We surely don't want to make it even slower from using LZX which only gives additional 5-10% storage savings idk.
     """
     global _benchmark_cached_result
     if _benchmark_cached_result is not None:

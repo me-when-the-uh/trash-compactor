@@ -9,18 +9,23 @@ import os
 import sys
 from datetime import datetime
 from textwrap import dedent
-from typing import Optional, Sequence
+from typing import Optional, Sequence, TYPE_CHECKING
 
 from colorama import Fore, Style, init
 
 from src import config
-from src.console import EscapeExit, allocate_console, attach_to_parent_console, display_banner, prompt_exit, read_user_input
+from src.cli_log import CliLog, _NullCliLog, get_cli_log, set_cli_log
+from src.console import EscapeExit, allocate_console, attach_to_parent_console, cprint, display_banner, prompt_exit, read_user_input
 from src.launch import acquire_directory, interactive_configure, confirm_hdd_usage, configure_lzx
-from src.file_utils import describe_protected_path, is_admin, validate_target_path
+from src.file_utils import get_protection_reason, is_admin, validate_target_path
 from src.skip_logic import discard_staged_incompressible_cache, log_directory_skips
 from src.i18n import _, load_translations
 from src.version import BUILD_DATE, VERSION
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from src.stats import CompressionStats
+    from src.timer import PerformanceMonitor
 
 
 def setup_logging(verbosity: int) -> None:
@@ -153,6 +158,34 @@ def build_parser() -> argparse.ArgumentParser:
         help=_("Force a specific language (e.g., 'en', 'ru')"),
     )
     parser.add_argument(
+        "--exclude",
+        action="append",
+        default=None,
+        metavar="PATH",
+        help=_("Directory to skip (repeatable). Also TRASH_COMPACTOR_EXCLUDE."),
+    )
+    parser.add_argument(
+        "--log-file",
+        nargs="?",
+        const=None,
+        default=False,
+        metavar="PATH",
+        help=_(
+            "Write a structured run log to PATH (or to ./trash-compactor.log if PATH is omitted). "
+            "Truncated at the start of each run; UTF-8."
+        ),
+    )
+    parser.add_argument(
+        "--compactos-always",
+        action="store_true",
+        help=_(
+            "In 1-click mode, compress Windows system binaries with "
+            "'compact.exe /compactos:always'. Requires Administrator privileges. "
+            "No effect on a non-interactive console when executed from Task Scheduler, "
+            "or .bat or .ps1 scripts."
+        ),
+    )
+    parser.add_argument(
         "--debug-scan-all",
         action="store_true",
         help=argparse.SUPPRESS,
@@ -173,7 +206,7 @@ def announce_mode(args: argparse.Namespace) -> None:
 
     print()
     for line in notices:
-        print(Fore.YELLOW + line + Style.RESET_ALL)
+        cprint(Fore.YELLOW, line)
 
 
 def run_compression(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> None:
@@ -196,7 +229,7 @@ def run_compression(directory: str, verbosity: int, min_savings: float, debug_sc
 
 def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debug_scan_all: bool = False) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[str, int, str]]]:
     from src.compression_module import entropy_dry_run
-    from src.stats import CompressionStats, print_entropy_dry_run
+    from src.stats import CompressionStats, print_dry_run_summary
     from src.timer import PerformanceMonitor
 
     logging.info(_("Starting entropy dry run for directory: %s"), directory)
@@ -206,7 +239,12 @@ def run_entropy_dry_run(directory: str, verbosity: int, min_savings: float, debu
         min_savings_percent=min_savings,
         debug_scan_all=debug_scan_all,
     )
-    print_entropy_dry_run(stats, min_savings, verbosity)
+    print_dry_run_summary(
+        min_savings_percent=min_savings,
+        projected_original_bytes=stats.entropy_projected_original_bytes,
+        projected_compressed_lzx_bytes=stats.entropy_projected_size,
+        projected_compressed_xpress_bytes=stats.entropy_projected_size_conservative,
+    )
     log_directory_skips(stats, verbosity, min_savings)
     monitor.stats.print_dry_run_metrics(min_percent=0.5)
     return stats, monitor, plan
@@ -229,7 +267,7 @@ def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
         if not benchmark_ok and not args.force_lzx:
             args.no_lzx = True
             setattr(args, 'lzx_disabled_reason', 'benchmark')
-            print(Fore.YELLOW + _("\nNotice: LZX compression has been disabled to prevent slowdowns for compressed apps.\n(Your CPU is too slow)") + Style.RESET_ALL)
+            cprint(Fore.YELLOW, _("\nNotice: LZX compression has been disabled to prevent slow startup times for compressed applications."))
     setattr(args, 'benchmark_ok', benchmark_ok)
 
     return args, interactive_launch
@@ -246,7 +284,7 @@ def _apply_lzx_choice(args: argparse.Namespace) -> None:
 
 def _validate_modes(args: argparse.Namespace) -> bool:
     if args.no_lzx and args.force_lzx:
-        print(Fore.RED + _("Error: Cannot disable and force LZX compression at the same time.") + Style.RESET_ALL)
+        cprint(Fore.RED, _("Error: Cannot disable and force LZX compression at the same time."))
         return False
     return True
 
@@ -260,13 +298,20 @@ def _emit_verbosity_banner(level: int) -> None:
         3: _("Verbosity level 3: full debug logging enabled"),
     }
     label = verbose_labels.get(level, _("Verbosity level 3: full debug logging enabled"))
-    print(Fore.BLUE + label + Style.RESET_ALL)
+    cprint(Fore.BLUE, label)
+
+
+def _apply_session_excludes(args: argparse.Namespace) -> None:
+    from src.exclusions import set_session_excludes
+
+    set_session_excludes(getattr(args, "exclude", None) or [])
 
 
 def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Optional[str]:
     from src.workers import set_worker_cap
 
     set_worker_cap(1 if getattr(args, "single_worker", False) else None)
+    _apply_session_excludes(args)
 
     if is_admin():
         logging.info(_("Running with administrator privileges."))
@@ -284,14 +329,14 @@ def _configure_runtime(args: argparse.Namespace, interactive_launch: bool) -> Op
     for key, value in vars(updated_args).items():
         setattr(args, key, value)
 
-    protection_reason = describe_protected_path(directory) or validate_target_path(directory)
+    protection_reason = get_protection_reason(directory) or validate_target_path(directory)
     if protection_reason:
         logging.error(_("Cannot compress target: %s"), protection_reason)
         if 'Windows' in protection_reason:
             logging.error(_("To compress Windows system files, use 'compact.exe /compactos:always' instead"))
         return None
 
-    if not confirm_hdd_usage(directory, force_serial=args.single_worker):
+    if not confirm_hdd_usage(directory, force_serial=args.single_worker, yes=getattr(args, "yes", False)):
         return None
 
     return directory
@@ -301,17 +346,23 @@ def main() -> int:
     override_lang = _detect_language_override(sys.argv[1:])
     load_translations(override_lang)
 
-    # Console handling for the GUI-subsystem exe:
-    # - CLI mode (any argv): attach to the invoking terminal (cmd/PowerShell/
-    #   Windows Terminal) so output appears there and no second window spawns.
-    #   If there is no parent console (double-click), allocate one.
-    # - GUI mode (no argv): no console at all - Windows never allocated one.
+    # Force UTF-8 before any translated string is printed.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+    # CLI mode (argv present) attaches to the invoking terminal. GUI mode gets
+    # no console at all. --log-file skips allocate_console() since stdout is redirected.
     is_cli_mode = len(sys.argv) > 1
-    if is_cli_mode:
+    log_file_requested = "--log-file" in sys.argv
+    if is_cli_mode and not log_file_requested:
         if not attach_to_parent_console():
             allocate_console()
 
     args, interactive_launch = _prepare_arguments(sys.argv[1:])
+    _apply_session_excludes(args)
 
     if os.getenv("TRASH_COMPACTOR_DIAGNOSTIC", "").strip().lower() in {"1", "true", "yes"}:
         from src.compression.file_scan import fast_walk_available
@@ -347,6 +398,8 @@ def main() -> int:
     _emit_verbosity_banner(args.verbose)
 
     if interactive_launch:
+        if getattr(args, "log_file", False) is not False:
+            logging.info("--log-file is ignored in GUI mode")
         try:
             from src.benchmark import run_benchmark
 
@@ -373,94 +426,245 @@ def main() -> int:
                 sys.exit(1)
             args = interactive_configure(args)
             args.min_savings = config.clamp_savings_percent(args.min_savings)
+            _apply_session_excludes(args)
             if not getattr(args, "one_click", False) and not args.directory:
                 prompt_exit()
                 return 1
 
-    if getattr(args, 'one_click', False) and not args.directory:
-        _apply_lzx_choice(args)
+    # Build the CliLog for the CLI run.
+    log_path: Optional[Path] = None
+    if getattr(args, "log_file", False) is not False:
+        raw = args.log_file
+        if raw is None:
+            log_path = Path.cwd() / "trash-compactor.log"
+        else:
+            log_path = Path(raw)
+            if not log_path.is_absolute():
+                log_path = Path.cwd() / log_path
+        target_dir_str = args.directory
+        if target_dir_str:
+            try:
+                target_resolved = Path(target_dir_str).resolve()
+                log_resolved = log_path.resolve()
+                target_prefix = str(target_resolved)
+                if (
+                    str(log_resolved) == target_prefix
+                    or str(log_resolved).startswith(target_prefix + os.sep)
+                ):
+                    logging.error(
+                        _("--log-file cannot live inside the target directory: %s"),
+                        log_path,
+                    )
+                    prompt_exit()
+                    return 2
+            except OSError:
+                pass
 
-        from src.one_click import run_one_click_mode
-
-        run_one_click_mode(
-            verbosity=args.verbose,
-            min_savings=args.min_savings,
-            allow_compactos=is_admin(),
+    cli_log = CliLog.enable(log_path)
+    set_cli_log(cli_log)
+    if isinstance(cli_log, CliLog):
+        cli_log.header(VERSION)
+        logging.info(
+            _("Running in CLI log mode. Output is also being written to %s"), log_path
         )
-        print(_("\nOperation completed."))
-        prompt_exit()
-        return 0
 
-    directory = _configure_runtime(args, interactive_launch)
-    if directory is None:
-        prompt_exit()
-        return 1
-
+    exit_code = 0
     try:
-        if getattr(args, "dry_run", False):
-            stats, monitor, plan = run_entropy_dry_run(
-                directory,
+        if getattr(args, 'one_click', False) and not args.directory:
+            _apply_lzx_choice(args)
+
+            from src.one_click import run_one_click_mode
+
+            one_click_targets = run_one_click_mode(
                 verbosity=args.verbose,
                 min_savings=args.min_savings,
-                debug_scan_all=getattr(args, "debug_scan_all", False),
+                compactos_requested=is_admin() and getattr(args, "compactos_always", False),
+                yes=getattr(args, "yes", False),
             )
 
-            proceed = getattr(args, "yes", False)
-            if plan and not proceed:
-                print()
-                try:
-                    response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
-                except EscapeExit:
-                    discard_staged_incompressible_cache()
-                    print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-                    return 130
-                except KeyboardInterrupt:
-                    discard_staged_incompressible_cache()
-                    print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-                    return 130
-                proceed = response in ('y', 'yes')
-
-            if plan and proceed:
-                print(_("\nStarting compression..."))
-                monitor.start_operation()
-                from src.compression_module import execute_compression_plan_wrapper
-                from src.stats import print_compression_summary
-
-                stats, monitor = execute_compression_plan_wrapper(
-                    stats,
-                    monitor,
-                    plan,
-                    verbosity_level=args.verbose,
-                    interactive_output=True,
-                    min_savings_percent=args.min_savings
+            if isinstance(cli_log, CliLog) and one_click_targets:
+                _emit_cli_log_mode_and_settings(
+                    cli_log,
+                    mode_name="one-click",
+                    target=one_click_targets,
+                    args=args,
                 )
-                print_compression_summary(stats)
-                monitor.print_summary()
-                from src.launch import print_defrag_hint
 
-                print_defrag_hint(stats.compressed_files)
-            else:
-                discard_staged_incompressible_cache()
-                if plan:
-                    print(_("Compression cancelled."))
+            print(_("\nOperation completed."))
+            return 0
+
+        directory = _configure_runtime(args, interactive_launch)
+        if directory is None:
+            return 1
+
+        mode_name = "dry-run" if getattr(args, "dry_run", False) else "compress"
+        _emit_cli_log_mode_and_settings(
+            cli_log,
+            mode_name=mode_name,
+            target=directory,
+            args=args,
+        )
+
+        if getattr(args, "dry_run", False):
+            exit_code = _run_cli_dry_run(
+                args=args, directory=directory, cli_log=cli_log
+            )
         else:
-            run_compression(
-                directory,
-                verbosity=args.verbose,
-                min_savings=args.min_savings,
-                debug_scan_all=getattr(args, "debug_scan_all", False),
+            exit_code = _run_cli_compress(
+                args=args, directory=directory, cli_log=cli_log
             )
     except KeyboardInterrupt:
         discard_staged_incompressible_cache()
-        print(Fore.CYAN + _("\nOperation cancelled by user.") + Style.RESET_ALL)
-        return 130
+        cprint(Fore.CYAN, _("\nOperation cancelled by user."))
+        exit_code = 130
     except Exception:
         discard_staged_incompressible_cache()
         raise
+    finally:
+        cli_log.finish(exit_code)
+        set_cli_log(_NullCliLog())
 
     print(_("\nOperation completed."))
     prompt_exit()
+    return exit_code
+
+
+def _emit_cli_log_mode_and_settings(cli_log, mode_name, target, args) -> None:
+    if not isinstance(cli_log, CliLog):
+        return
+    lzx_status = (
+        "disabled (--no-lzx)" if args.no_lzx
+        else "disabled (benchmark)" if getattr(args, "lzx_disabled_reason", None) == "benchmark"
+        else "enabled"
+    )
+    hdd_status = "forced (-s)" if getattr(args, "single_worker", False) else "auto"
+    cli_log.mode(mode_name, target)
+    cli_log.settings(args.min_savings, lzx_status, hdd_status)
+
+
+def _run_cli_dry_run(args, directory, cli_log) -> int:
+    from src.config import COMPRESSION_ALGORITHMS
+    from src.stats import log_by_algorithm
+
+    stats, monitor, plan = run_entropy_dry_run(
+        directory,
+        verbosity=args.verbose,
+        min_savings=args.min_savings,
+        debug_scan_all=getattr(args, "debug_scan_all", False),
+    )
+
+    active_large = COMPRESSION_ALGORITHMS.get("large", "LZX")
+    lzx_disabled = active_large != "LZX"
+    lzx_reason = (
+        "benchmark" if getattr(args, "lzx_disabled_reason", None) == "benchmark"
+        else "--no-lzx" if args.no_lzx
+        else None
+    )
+
+    if isinstance(cli_log, CliLog):
+        cli_log.dry_run_summary(stats, args.min_savings, active_large)
+        cli_log.skipped_directories(stats, args.verbose)
+        cli_log.timing(monitor)
+        cli_log.by_algorithm(stats, lzx_disabled, lzx_reason)
+
+    log_by_algorithm(stats, lzx_disabled, lzx_reason)
+
+    proceed = getattr(args, "yes", False)
+    if plan and not proceed:
+        print()
+        try:
+            response = read_user_input(_("Do you want to proceed with compression? [y/N]: ")).strip().lower()
+        except EscapeExit:
+            discard_staged_incompressible_cache()
+            cprint(Fore.CYAN, _("\nOperation cancelled by user."))
+            return 130
+        except KeyboardInterrupt:
+            discard_staged_incompressible_cache()
+            cprint(Fore.CYAN, _("\nOperation cancelled by user."))
+            return 130
+        proceed = response in ('y', 'yes')
+
+    if plan and proceed:
+        print(_("\nStarting compression..."))
+        monitor.start_operation()
+        from src.compression_module import execute_compression_plan_wrapper
+        from src.stats import print_compression_summary
+
+        stats, monitor = execute_compression_plan_wrapper(
+            stats,
+            monitor,
+            plan,
+            verbosity_level=args.verbose,
+            interactive_output=True,
+            min_savings_percent=args.min_savings
+        )
+        print_compression_summary(stats)
+        monitor.print_summary()
+        from src.launch import print_defrag_hint
+
+        print_defrag_hint(stats.compressed_files)
+
+        if isinstance(cli_log, CliLog):
+            cli_log.compression_summary(stats)
+            cli_log.timing(monitor)
+            cli_log.by_algorithm(stats, lzx_disabled, lzx_reason)
+            cli_log.errors(stats)
+    else:
+        discard_staged_incompressible_cache()
+        if plan:
+            print(_("Compression cancelled."))
+        if isinstance(cli_log, CliLog):
+            cli_log.errors(stats)
+
     return 0
+
+
+def _run_cli_compress(args, directory, cli_log) -> int:
+    from src.config import COMPRESSION_ALGORITHMS
+    from src.stats import log_by_algorithm
+
+    active_large = COMPRESSION_ALGORITHMS.get("large", "LZX")
+    lzx_disabled = active_large != "LZX"
+    lzx_reason = (
+        "benchmark" if getattr(args, "lzx_disabled_reason", None) == "benchmark"
+        else "--no-lzx" if args.no_lzx
+        else None
+    )
+
+    stats, monitor = _compress_with_log(args, directory)
+
+    if isinstance(cli_log, CliLog):
+        cli_log.compression_summary(stats)
+        cli_log.skipped_directories(stats, args.verbose)
+        cli_log.timing(monitor)
+        cli_log.by_algorithm(stats, lzx_disabled, lzx_reason)
+        cli_log.errors(stats)
+
+    log_by_algorithm(stats, lzx_disabled, lzx_reason)
+    return 0
+
+
+def _compress_with_log(args, directory):
+    """Run compression and return the (stats, monitor) pair.
+
+    ``run_compression`` doesn't return them. The body runs inline here
+    rather than refactoring it to return.
+    """
+    from src.compression_module import compress_directory
+    from src.stats import print_compression_summary
+    from src.launch import print_defrag_hint
+
+    logging.info(_("Starting compression of directory: %s"), directory)
+    stats, monitor = compress_directory(
+        directory,
+        verbosity=args.verbose,
+        min_savings_percent=args.min_savings,
+        debug_scan_all=getattr(args, "debug_scan_all", False),
+    )
+    print_compression_summary(stats)
+    monitor.print_summary()
+    print_defrag_hint(stats.compressed_files)
+    return stats, monitor
 
 
 if __name__ == "__main__":

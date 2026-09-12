@@ -89,6 +89,7 @@
 
       <section id="Analysis" style="display: none;">
         <div id="Analysis_Timing"></div>
+        <div id="DirectStorage_Notice" class="directstorage-notice" style="display: none;"></div>
         <div id="Quick_Estimate">
           <div class="estimate-card total-card">
             <div class="estimate-card-title">Total</div>
@@ -177,7 +178,19 @@
             </select>
           </div>
         </div>
-        <div class="setting-help">Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.</div>
+        <div class="setting-help" id="Units_Help">Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves.</div>
+      </div>
+
+      <div class="setting-item" id="Exclusions_Item">
+        <div class="setting-row">
+          <span class="setting-label" id="Exclusions_Label">Excluded folders</span>
+        </div>
+        <div class="setting-help" id="Exclusions_Help">Folders in this list are never scanned or compressed. Protected system folders cannot be removed.</div>
+        <ul id="Exclusions_List" class="exclusions-list"></ul>
+        <div class="exclusions-empty" id="Exclusions_Empty">No excluded folders</div>
+        <div class="exclusions-actions">
+          <button id="Button_Exclusion_Add" class="secondary" type="button">Add folder</button>
+        </div>
       </div>
     </section>
 
@@ -190,7 +203,8 @@
 
       <p id="About_Description"></p>
 
-      <p>For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
+      <p id="About_Rarely_Change">For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
+      <p id="About_Exclusions">If an application misbehaves after compression, add its folder under Excluded folders in Settings. Database files and DirectStorage games are skipped automatically.</p>
 
       <p>Alternatively, the program can be used as a script to periodically run the compression on specific folders without calling the GUI window, which only appears if you launch the executable file without passing the directory that is to be compressed.</p>
 

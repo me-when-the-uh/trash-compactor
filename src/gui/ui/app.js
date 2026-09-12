@@ -36,60 +36,8 @@
 		"use strict";
 
 		var powers = '_KMGTPEZY';
-		var monotime = function() { return Date.now(); };
-
-		if (window.performance && window.performance.now)
-			monotime = function() { return window.performance.now(); };
 
 		return {
-			debounce: function(callback, delay) {
-				var timeout;
-				var fn = function() {
-					var context = this;
-					var args = arguments;
-
-					clearTimeout(timeout);
-					timeout = setTimeout(function() {
-						timeout = null;
-						callback.apply(context, args);
-					}, delay);
-				};
-				fn.clear = function() {
-					clearTimeout(timeout);
-					timeout = null;
-				};
-
-				return fn;
-			},
-
-			throttle: function(callback, delay) {
-				var timeout;
-				var last;
-				var fn = function() {
-					var context = this;
-					var args = arguments;
-					var now = monotime();
-
-					if (last && now < last + delay) {
-						clearTimeout(timeout);
-						timeout = setTimeout(function() {
-							timeout = null;
-							last = now;
-							callback.apply(context, args);
-						}, delay);
-					} else {
-						last = now;
-						callback.apply(context, args);
-					}
-				};
-				fn.clear = function() {
-					clearTimeout(timeout);
-					timeout = null;
-				};
-
-				return fn;
-			},
-
 			format_number: function(number, digits) {
 				if (digits === undefined) digits = 2;
 				return number.toLocaleString(I18n.locale || "en", {minimumFractionDigits: digits, maximumFractionDigits: digits});
@@ -115,54 +63,12 @@
 				return Util.format_number(bytes, 0) + ' B';
 			},
 
-			human_to_bytes: function(human) {
-				if (!human) return null;
-				var num = parseFloat(human);
-
-				var match = (/\s*([KMGTPEZY])(i)?([Bb])?\s*$/i).exec(human);
-				if (match) {
-					var pow = (match[2] == 'i') ? 1024 : 1000;
-					num *= Math.pow(pow, powers.indexOf(match[1].toUpperCase()));
-				}
-
-				return num;
-			},
-
-			number_to_human: function(num) {
-				for (var i = powers.length - 1; i > 0; i--) {
-					var div = Math.pow(10, 3*i);
-					if (num >= div) {
-						return Util.format_number(num / div, 2) + powers[i];
-					}
-				}
-				return num;
-			},
-
-			human_to_number: function(human) {
-				if (!human) return null;
-				var num = parseFloat(human);
-
-				var match = (/\s*([KMGTPEZY])\s*$/i).exec(human);
-
-				if (match) {
-					num *= Math.pow(1000, powers.indexOf(match[1].toUpperCase()));
-				}
-
-				return num;
-			},
-
-			sformat: function() {
-				var args = arguments;
-				return args[0].replace(/\{(\d+)\}/g, function (m, n) { return args[parseInt(n, 10) + 1]; });
-			},
-
-			range: function(a, b, step) {
-				if (!step) step = 1;
-				var arr = [];
-				for (var i = a; i < b; i += step) {
-					arr.push(i);
-				}
-				return arr;
+			escape_html: function(value) {
+				return String(value)
+					.replace(/&/g, "&amp;")
+					.replace(/</g, "&lt;")
+					.replace(/>/g, "&gt;")
+					.replace(/"/g, "&quot;");
 			}
 		};
 	})();
@@ -235,6 +141,18 @@
 
 		stop: function() {
 			pywebview.api.stop_compression().then(_dispatch_if_message);
+		},
+
+		get_exclusions: function() {
+			pywebview.api.get_exclusions().then(_dispatch_if_message);
+		},
+
+		add_exclusion: function() {
+			pywebview.api.choose_exclusion_folder().then(_dispatch_if_message);
+		},
+
+		remove_exclusion: function(path) {
+			pywebview.api.remove_exclusion(path).then(_dispatch_if_message);
 		}
 	};
 })();
@@ -250,25 +168,31 @@ var Response = (function() {
 	"use strict";
 
 	return {
+		batch: function(msgs) {
+			if (!msgs) {
+				return;
+			}
+			if (!Array.isArray(msgs)) {
+				Response.dispatch(msgs);
+				return;
+			}
+			for (var i = 0; i < msgs.length; i++) {
+				Response.dispatch(msgs[i]);
+			}
+		},
+
 		dispatch: function(msg) {
 			switch(msg.type) {
 				case "Config":
-										ignore_config_changes = true;
-                                        Gui.set_decimal(msg.decimal);
-                                        Gui.set_min_savings(msg.min_savings);
-                                        Gui.set_checkbox("No_LZX", msg.no_lzx);
-										$("#No_LZX_Help").text(msg.lzx_warning || default_lzx_help).toggleClass("warning", !!msg.lzx_warning);
-                                        Gui.set_checkbox("Single_Worker", msg.single_worker);
-										last_saved_config = Gui.get_config_payload();
-										ignore_config_changes = false;
-                                        break;
+					Gui.apply_config(msg);
+					break;
 
 				case "Folder":
 					Gui.set_folder(msg.path);
 					break;
 
 				case "Status":
-						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final);
 					break;
 
 				case "Paused":
@@ -290,7 +214,7 @@ var Response = (function() {
 					break;
 
 				case "ProgressUpdate":
-						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history);
+						Gui.queue_status(msg.status, msg.pct, !!msg.quick_history, !!msg.final);
 					break;
 
 				case "CompactOSIndicator":
@@ -303,6 +227,10 @@ var Response = (function() {
 
 				case "Error":
 						Gui.show_warning(I18n.t("Error"), msg.message || I18n.t("Unknown error"));
+					break;
+
+				case "Exclusions":
+					Gui.render_exclusions(msg.paths || []);
 					break;
 			}
 		}
@@ -343,6 +271,52 @@ var Gui = (function() {
 		directory_summary_history.push(payload);
 	}
 
+	function _empty_summary() {
+		return {
+			logical_size: 0,
+			physical_size: 0,
+			potential_savings_bytes: 0,
+			compressed: {count: 0, logical_size: 0, physical_size: 0},
+			compressible: {count: 0, logical_size: 0, physical_size: 0},
+			skipped: {count: 0, logical_size: 0, physical_size: 0}
+		};
+	}
+
+	function _summary_metrics(data) {
+		var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
+		var logicalSize = data.logical_size || 0;
+		var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
+		var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
+		var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
+		var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
+		var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
+		var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
+		return {
+			isAnalysis: isAnalysis,
+			logicalSize: logicalSize,
+			projectedOnDisk: projectedOnDisk,
+			currentOnDisk: currentOnDisk,
+			savedPct: savedPct,
+			minSavingsPct: minSavingsPct,
+			savingsRatio: savingsRatio
+		};
+	}
+
+	function _apply_estimate_tone(estimateTo, estimateRecovery, savedPct, minSavingsPct, savingsRatio) {
+		estimateTo.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
+		estimateRecovery.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
+		var toneClass = "estimate-tone-low";
+		if (savedPct < minSavingsPct || savingsRatio < 1.01) {
+			toneClass = "estimate-tone-low";
+		} else if (savingsRatio >= 2.0) {
+			toneClass = "estimate-tone-great";
+		} else {
+			toneClass = "estimate-tone-good";
+		}
+		estimateTo.addClass(toneClass);
+		estimateRecovery.addClass(toneClass);
+	}
+
 	function _sort_directory_summary_history() {
 		directory_summary_history.sort(function(a, b) {
 			var aSize = (a.data && a.data.logical_size) || 0;
@@ -351,8 +325,49 @@ var Gui = (function() {
 		});
 	}
 
+	var flush_raf = 0;
+	var flush_timer = null;
+
+	function _cancel_scheduled_flush() {
+		if (flush_raf && typeof cancelAnimationFrame === "function") {
+			cancelAnimationFrame(flush_raf);
+			flush_raf = 0;
+		}
+		if (flush_timer) {
+			clearTimeout(flush_timer);
+			flush_timer = null;
+		}
+	}
+
+	function schedule_flush() {
+		if (flush_raf || flush_timer) {
+			return;
+		}
+		if (typeof requestAnimationFrame === "function") {
+			flush_raf = requestAnimationFrame(function() {
+				flush_raf = 0;
+				if (flush_timer) {
+					clearTimeout(flush_timer);
+					flush_timer = null;
+				}
+				_flush_queued_updates();
+			});
+		}
+		flush_timer = setTimeout(function() {
+			flush_timer = null;
+			if (flush_raf && typeof cancelAnimationFrame === "function") {
+				cancelAnimationFrame(flush_raf);
+				flush_raf = 0;
+			}
+			_flush_queued_updates();
+		}, 50);
+	}
+
 	function _flush_queued_updates() {
 		var activateQuickHistory = false;
+		var had_work = !!(current_summary_queue || total_summary_queue || directory_summary_pending.length || status_queue);
+
+		_cancel_scheduled_flush();
 
 		if (current_summary_queue) {
 			current_summary_state = current_summary_queue.data;
@@ -380,7 +395,9 @@ var Gui = (function() {
 				directory_summary_index = 0;
 			}
 		}
-		Gui.render_summaries();
+		if (had_work) {
+			Gui.render_summaries();
+		}
 	}
 
 	return {
@@ -402,19 +419,23 @@ var Gui = (function() {
 			try_reset();
 		},
 
+		apply_config: function(msg) {
+			ignore_config_changes = true;
+			Gui.set_decimal(msg.decimal);
+			Gui.set_min_savings(msg.min_savings);
+			Gui.set_checkbox("No_LZX", msg.no_lzx);
+			$("#No_LZX_Help").text(msg.lzx_warning || default_lzx_help).toggleClass("warning", !!msg.lzx_warning);
+			Gui.set_checkbox("Single_Worker", msg.single_worker);
+			last_saved_config = Gui.get_config_payload();
+			ignore_config_changes = false;
+		},
+
 		apply_boot_config: function() {
 			if (!bootConfig || bootConfig.type !== "Config") {
 				return;
 			}
 
-			ignore_config_changes = true;
-			Gui.set_decimal(bootConfig.decimal);
-			Gui.set_min_savings(bootConfig.min_savings);
-			Gui.set_checkbox("No_LZX", bootConfig.no_lzx);
-			$("#No_LZX_Help").text(bootConfig.lzx_warning || default_lzx_help).toggleClass("warning", !!bootConfig.lzx_warning);
-			Gui.set_checkbox("Single_Worker", bootConfig.single_worker);
-			last_saved_config = Gui.get_config_payload();
-			ignore_config_changes = false;
+			Gui.apply_config(bootConfig);
 		},
 
 		localize: function() {
@@ -460,13 +481,18 @@ var Gui = (function() {
 			$("label[for='SI_Units']").text(I18n.t("Units"));
 			$("#SI_Units option[value='I']").text(I18n.t("Binary (MiB)"));
 			$("#SI_Units option[value='D']").text(I18n.t("Decimal (MB)"));
-			$("#Settings .setting-item:last-child .setting-help").text(I18n.t("Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves."));
+			$("#Units_Help").text(I18n.t("Chooses how file sizes are displayed in the interface. This changes the labels you see, but not the compression results themselves."));
+			$("#Exclusions_Label").text(I18n.t("Excluded folders"));
+			$("#Exclusions_Help").text(I18n.t("Folders in this list are never scanned or compressed. Protected system folders cannot be removed."));
+			$("#Exclusions_Empty").text(I18n.t("No excluded folders"));
+			$("#Button_Exclusion_Add").text(I18n.t("Add folder"));
 			$("#About p strong").text(I18n.t("Where we're going, we don't need backups!"));
 			$("#About p:nth-of-type(2)").html(I18n.t("Report problems to:") + " <a href=\"https://github.com/me-when-the-uh/trash-compactor\">https://github.com/me-when-the-uh/trash-compactor</a>.");
 			$("#About_Description").text(I18n.t("A (hopefully) easy-to-use graphical interface for Windows NTFS compression using entropy-based heuristics."));
-			$("#About p:nth-of-type(5)").text(I18n.t("For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea."));
-			$("#About p:nth-of-type(6)").text(I18n.t("Vibe-coded in Python and with Rust duct-taped to this hackjob."));
-			$("#About p:nth-of-type(7)").html(I18n.t("GUI adapted from") + " <a href=\"https://github.com/Freaky/Compactor\">Compactor</a>");
+			$("#About_Rarely_Change").text(I18n.t("For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea."));
+			$("#About_Exclusions").text(I18n.t("If an application misbehaves after compression, add its folder under Excluded folders in Settings. Database files and DirectStorage games (dstorage.dll) are skipped automatically."));
+			$("#About p:nth-of-type(7)").text(I18n.t("Vibe-coded in Python and with Rust duct-taped to this hackjob."));
+			$("#About p:nth-of-type(8)").html(I18n.t("GUI adapted from") + " <a href=\"https://github.com/Freaky/Compactor\">Compactor</a>");
 		},
 
 		boot: function() {
@@ -483,6 +509,10 @@ var Gui = (function() {
 
 			$("#Button_Reset").on("click", function() {
 				Action.reset_config();
+			});
+
+			$("#Button_Exclusion_Add").on("click", function() {
+				Action.add_exclusion();
 			});
 
 			$(document).on("keydown", function(e) {
@@ -509,7 +539,6 @@ var Gui = (function() {
 				}
 			});
 
-			setInterval(_flush_queued_updates, 125);
 			Gui.apply_boot_config();
 			Gui.request_initial_config();
 		},
@@ -521,6 +550,7 @@ var Gui = (function() {
 				quick_history: !!quick_history,
 				final: !!final
 			};
+			schedule_flush();
 		},
 
 		queue_folder_summary: function(data) {
@@ -542,6 +572,7 @@ var Gui = (function() {
 				current_summary_queue = payload;
 				total_summary_queue = payload;
 			}
+			schedule_flush();
 		},
 
 		is_busy: function() {
@@ -572,11 +603,32 @@ var Gui = (function() {
 			$("#Button_Page_" + page).addClass("active");
 			$("section.page").hide();
 			$("#" + page).show();
+			if (page === "Settings") {
+				Action.get_exclusions();
+			}
 		},
 
-		version: function(date, version) {
-			$(".compile-date").text(date);
-			$(".version").text(version);
+		render_exclusions: function(paths) {
+			var list = $("#Exclusions_List");
+			var empty = $("#Exclusions_Empty");
+			list.empty();
+			if (!paths || !paths.length) {
+				empty.show();
+				return;
+			}
+			empty.hide();
+			paths.forEach(function(path) {
+				var item = $("<li></li>");
+				item.append($("<span class=\"exclusion-path\"></span>").text(path).attr("title", path));
+				item.append(
+					$("<button type=\"button\" class=\"exclusion-remove\"></button>")
+						.text(I18n.t("Remove"))
+						.on("click", function() {
+							Action.remove_exclusion(path);
+						})
+				);
+				list.append(item);
+			});
 		},
 
 		set_decimal: function(dec) {
@@ -776,33 +828,13 @@ var Gui = (function() {
 			total_summary_directory = "";
 			directory_summary_index = 0;
 			quick_history_mode = false;
-			Gui.set_folder_summary({
-				logical_size: 0,
-				physical_size: 0,
-				potential_savings_bytes: 0,
-				compressed: {count: 0, logical_size: 0, physical_size: 0},
-				compressible: {count: 0, logical_size: 0, physical_size: 0},
-				skipped: {count: 0, logical_size: 0, physical_size: 0}
-			});
-			Gui.set_current_folder_summary({
-				logical_size: 0,
-				physical_size: 0,
-				potential_savings_bytes: 0,
-				compressed: {count: 0, logical_size: 0, physical_size: 0},
-				compressible: {count: 0, logical_size: 0, physical_size: 0},
-				skipped: {count: 0, logical_size: 0, physical_size: 0}
-			}, "");
+			$("#DirectStorage_Notice").hide().text("");
+			Gui.set_folder_summary(_empty_summary());
+			Gui.set_current_folder_summary(_empty_summary(), "");
 		},
 
 		render_summaries: function() {
-			var current = current_summary_state || total_summary_state || {
-				logical_size: 0,
-				physical_size: 0,
-				potential_savings_bytes: 0,
-				compressed: {count: 0, logical_size: 0, physical_size: 0},
-				compressible: {count: 0, logical_size: 0, physical_size: 0},
-				skipped: {count: 0, logical_size: 0, physical_size: 0}
-			};
+			var current = current_summary_state || total_summary_state || _empty_summary();
 			var total = total_summary_state || current_summary_state || current;
 			if (quick_history_mode && directory_summary_history.length) {
 				var selected = directory_summary_history[Math.max(0, Math.min(directory_summary_index, directory_summary_history.length - 1))];
@@ -901,15 +933,14 @@ var Gui = (function() {
 		},
 
 		set_folder_summary: function(data) {
-			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
-			var logicalSize = data.logical_size || 0;
-			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
-			var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
-			var currentDisplaySize = isAnalysis ? projectedOnDisk : currentOnDisk;
-			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
-			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
-			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
-			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
+			var m = _summary_metrics(data);
+			var isAnalysis = m.isAnalysis;
+			var logicalSize = m.logicalSize;
+			var currentOnDisk = m.currentOnDisk;
+			var currentDisplaySize = isAnalysis ? m.projectedOnDisk : currentOnDisk;
+			var savedPct = m.savedPct;
+			var minSavingsPct = m.minSavingsPct;
+			var savingsRatio = m.savingsRatio;
 
 			$("#Size_Logical").text(Util.bytes_to_human(data.logical_size));
 			$("#Size_Physical").text(Util.bytes_to_human(currentDisplaySize));
@@ -919,20 +950,7 @@ var Gui = (function() {
 			$("#Estimate_Recovery").text(Util.format_number(savedPct, 1) + "%");
 			$("#Estimate_Recovery_Label").text(isAnalysis ? I18n.t("will be recovered") : I18n.t("has been recovered"));
 
-			var estimateTo = $("#Estimate_To");
-			var estimateRecovery = $("#Estimate_Recovery");
-			estimateTo.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
-			estimateRecovery.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
-			var toneClass = "estimate-tone-low";
-			if (savedPct < minSavingsPct || savingsRatio < 1.01) {
-				toneClass = "estimate-tone-low";
-			} else if (savingsRatio >= 2.0) {
-				toneClass = "estimate-tone-great";
-			} else {
-				toneClass = "estimate-tone-good";
-			}
-			estimateTo.addClass(toneClass);
-			estimateRecovery.addClass(toneClass);
+			_apply_estimate_tone($("#Estimate_To"), $("#Estimate_Recovery"), savedPct, minSavingsPct, savingsRatio);
 
 			if (data.logical_size > 0) {
 				var ratio = (currentDisplaySize / data.logical_size);
@@ -982,45 +1000,47 @@ var Gui = (function() {
 			$("#File_Count_Compressed").text(Util.format_number(data.compressed.count, 0));
 			$("#File_Count_Compressible").text(Util.format_number(data.compressible.count, 0));
 			$("#File_Count_Skipped").text(Util.format_number(data.skipped.count, 0));
+
+			var dsSkips = data.directstorage_skips || [];
+			var dsNotice = $("#DirectStorage_Notice");
+			if (dsSkips.length) {
+				var items = [];
+				for (var i = 0; i < dsSkips.length; i++) {
+					var skip = dsSkips[i];
+					var display = skip.display_path || skip.relative_path || skip.path || "";
+					var full = skip.path || display;
+					var line = '<li><span class="ds-skip-name">' + Util.escape_html(display) + "</span>";
+					if (full && full !== display) {
+						line += '<span class="ds-skip-path">' + Util.escape_html(full) + "</span>";
+					}
+					line += "</li>";
+					items.push(line);
+				}
+				dsNotice.html(
+					"<p>" + Util.escape_html(I18n.t("DirectStorage games were skipped. compact.exe compression breaks BypassIO (the fast I/O path those titles use).")) + "</p>"
+					+ '<p class="ds-skip-heading">' + Util.escape_html(I18n.t("Skipped directories:")) + "</p>"
+					+ '<ul class="ds-skip-list">' + items.join("") + "</ul>"
+				).show();
+			} else {
+				dsNotice.hide().empty();
+			}
 		},
 
 		set_current_folder_summary: function(data, directory) {
-			var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
-			var logicalSize = data.logical_size || 0;
-			var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
-			var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
-			var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
-			var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
-			var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
-			var savingsRatio = minSavingsPct > 0 ? (savedPct / minSavingsPct) : 999;
+			var m = _summary_metrics(data);
+			var isAnalysis = m.isAnalysis;
+			var projectedOnDisk = m.projectedOnDisk;
+			var currentOnDisk = m.currentOnDisk;
 
 			$("#Current_Directory_Name").text(directory || I18n.t("Current Directory"));
 			Gui.update_directory_navigation();
-			$("#Current_Estimate_From").text(Util.bytes_to_human(logicalSize));
+			$("#Current_Estimate_From").text(Util.bytes_to_human(m.logicalSize));
 			$("#Current_Estimate_To").text(Util.bytes_to_human(isAnalysis ? projectedOnDisk : currentOnDisk));
 			$("#Current_Estimate_Current_On_Disk").text(Util.bytes_to_human(currentOnDisk));
-			$("#Current_Estimate_Recovery").text(Util.format_number(savedPct, 1) + "%");
+			$("#Current_Estimate_Recovery").text(Util.format_number(m.savedPct, 1) + "%");
 			$("#Current_Estimate_Recovery_Label").text(isAnalysis ? I18n.t("will be recovered") : I18n.t("has been recovered"));
 
-			var estimateTo = $("#Current_Estimate_To");
-			var estimateRecovery = $("#Current_Estimate_Recovery");
-			estimateTo.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
-			estimateRecovery.removeClass("estimate-tone-low estimate-tone-good estimate-tone-great");
-			var toneClass = "estimate-tone-low";
-			if (savedPct < minSavingsPct || savingsRatio < 1.01) {
-				toneClass = "estimate-tone-low";
-			} else if (savingsRatio >= 2.0) {
-				toneClass = "estimate-tone-great";
-			} else {
-				toneClass = "estimate-tone-good";
-			}
-			estimateTo.addClass(toneClass);
-			estimateRecovery.addClass(toneClass);
-		},
-
-		analysis_complete: function() {
-			$("#Activity").hide();
-			$("#Analysis").show();
+			_apply_estimate_tone($("#Current_Estimate_To"), $("#Current_Estimate_Recovery"), m.savedPct, m.minSavingsPct, m.savingsRatio);
 		},
 
 		show_warning: function(title, message) {

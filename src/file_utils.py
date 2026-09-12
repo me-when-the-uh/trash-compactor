@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from .i18n import _
-from .drive_inspector import DRIVE_REMOTE, get_volume_details
+from .drive_inspector import DRIVE_REMOTE, KERNEL32, get_volume_details
 
 
 def sanitize_path(path: str) -> str:
@@ -25,7 +25,13 @@ def is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
-def _normalize_for_compare(path: str | Path) -> str:
+def hidden_startupinfo() -> subprocess.STARTUPINFO:
+    startupinfo = subprocess.STARTUPINFO()
+    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    return startupinfo
+
+
+def normalize_path(path: str | Path) -> str:
     normalized = os.path.normcase(os.path.normpath(str(path)))
     if len(normalized) == 2 and normalized[1] == ':':
         return normalized + os.sep
@@ -115,25 +121,29 @@ def _default_excluded_directories() -> tuple[str, ...]:
 DEFAULT_EXCLUDE_DIRECTORIES: Tuple[str, ...] = _default_excluded_directories()
 
 _DEFAULT_EXCLUDE_MAP: dict[str, str] = {
-    _normalize_for_compare(candidate): os.path.normpath(candidate)
+    normalize_path(candidate): os.path.normpath(candidate)
     for candidate in DEFAULT_EXCLUDE_DIRECTORIES
 }
 
 
+def _within_or_equal(normalized: str, excluded: str) -> bool:
+    return normalized == excluded or normalized.startswith(excluded + os.sep)
+
+
 def _match_exclusion(normalized: str) -> tuple[bool, Optional[str]]:
     for excluded_norm, display in _DEFAULT_EXCLUDE_MAP.items():
+        # Dotted namespace prefix (e.g. C:\Windows.old.000 under Windows.old.)
+        within = _within_or_equal(normalized, excluded_norm) or (
+            excluded_norm.endswith(os.sep + "windows.old.") and normalized.startswith(excluded_norm)
+        )
+        if not within:
+            continue
         if normalized == excluded_norm:
             return True, _("Protected system directory ({display})").format(display=display)
-        prefix = excluded_norm + os.sep
-        if normalized.startswith(prefix):
-            return True, _("Within protected system directory ({display})").format(display=display)
-        # Dotted namespace prefix (e.g. C:\Windows.old.000 under Windows.old.).
-        if excluded_norm.endswith(os.sep + "windows.old.") and normalized.startswith(excluded_norm):
-            return True, _("Within protected system directory ({display})").format(display=display)
+        return True, _("Within protected system directory ({display})").format(display=display)
     return False, None
 
 
-from .drive_inspector import KERNEL32
 _FILE_ATTRIBUTE_COMPRESSED = getattr(stat, 'FILE_ATTRIBUTE_COMPRESSED', 0x800)
 
 _GET_COMPRESSED_FILE_SIZE = KERNEL32.GetCompressedFileSizeW
@@ -156,14 +166,11 @@ def get_ntfs_compressed_size(file_path: str | Path) -> int:
 class DirectoryDecision:
     skip: bool
     reason: str = ""
-
-    @property
-    def allow(self) -> bool:
-        return not self.skip
+    category: str = "system"
 
     @classmethod
-    def deny(cls, reason: str) -> "DirectoryDecision":
-        return cls(True, reason)
+    def deny(cls, reason: str, category: str = "system") -> "DirectoryDecision":
+        return cls(True, reason, category)
 
     @classmethod
     def allow_path(cls) -> "DirectoryDecision":
@@ -171,21 +178,22 @@ class DirectoryDecision:
 
 
 def should_skip_directory(directory: str | Path) -> DirectoryDecision:
-    normalized = _normalize_for_compare(directory)
+    normalized = normalize_path(directory)
     match, reason = _match_exclusion(normalized)
     if match:
-        return DirectoryDecision.deny(reason or _("Protected system directory"))
+        return DirectoryDecision.deny(reason or _("Protected system directory"), category="system")
+    from .exclusions import match_user_exclusion
+
+    user_reason = match_user_exclusion(directory)
+    if user_reason:
+        return DirectoryDecision.deny(user_reason, category="user")
     return DirectoryDecision.allow_path()
 
 
 def get_protection_reason(path: str | Path) -> Optional[str]:
-    normalized = _normalize_for_compare(path)
+    normalized = normalize_path(path)
     _, reason = _match_exclusion(normalized)
     return reason
-
-
-def describe_protected_path(directory: str) -> Optional[str]:
-    return get_protection_reason(directory)
 
 
 def validate_target_path(directory: str) -> Optional[str]:
@@ -198,9 +206,15 @@ def validate_target_path(directory: str) -> Optional[str]:
     if not candidate:
         return _("No folder selected")
 
-    protection_reason = describe_protected_path(candidate)
+    protection_reason = get_protection_reason(candidate)
     if protection_reason:
         return _("Cannot compress protected path: {reason}").format(reason=protection_reason)
+
+    from .exclusions import match_user_exclusion
+
+    user_reason = match_user_exclusion(candidate)
+    if user_reason:
+        return _("Cannot compress excluded path: {reason}").format(reason=user_reason)
 
     from .drive_inspector import get_volume_details_fast
 
