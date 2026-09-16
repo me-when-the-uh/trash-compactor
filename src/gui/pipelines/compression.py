@@ -58,14 +58,14 @@ def _exec_progress_factory(
     return _exec_progress
 
 
-def _batch_start_factory(
+def _stage_start_factory(
     backend: "GuiBackend",
     *,
     compressed_count: list[int],
     total: int,
     pct_fn: Callable[[int, int], float],
 ) -> Callable[[str, int], None]:
-    def _batch_start(algorithm: str, count: int) -> None:
+    def _stage_start(algorithm: str, count: int) -> None:
         n_done = compressed_count[0]
         pct = pct_fn(n_done, total) if total else None
         backend._send_progress(
@@ -76,7 +76,7 @@ def _batch_start_factory(
             pct,
         )
 
-    return _batch_start
+    return _stage_start
 
 
 def run_compression_pipeline(backend: "GuiBackend") -> None:
@@ -129,7 +129,7 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
         pct_fn=_pct_fn,
         summary_fn=_summary,
     )
-    _on_batch = _batch_start_factory(
+    _on_stage = _stage_start_factory(
         backend,
         compressed_count=compressed_count,
         total=total_to_compress,
@@ -144,9 +144,8 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
                 verbosity=0,
                 xp_workers=xp_worker_count(),
                 lzx_workers=lzx_worker_count(),
-                stage_callback=_on_batch,
+                stage_callback=_on_stage,
                 progress_callback=_exec_progress,
-                batch_callback=_on_batch,
             )
     except Exception:
         from ...skip_logic import discard_staged_incompressible_cache
@@ -273,7 +272,7 @@ def _run_quick_compression_loop(
                 update_interval=0.0,
                 use_send_progress=True,
             )
-            _on_batch = _batch_start_factory(
+            _on_stage = _stage_start_factory(
                 backend,
                 compressed_count=compressed_count,
                 total=total_to_compress,
@@ -287,9 +286,8 @@ def _run_quick_compression_loop(
                     verbosity=0,
                     xp_workers=xp_worker_count(),
                     lzx_workers=lzx_worker_count(),
-                    stage_callback=_on_batch,
+                    stage_callback=_on_stage,
                     progress_callback=_exec_progress,
-                    batch_callback=_on_batch,
                 )
 
             from ...stats import accumulate_stats

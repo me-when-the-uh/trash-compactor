@@ -2,10 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [v0.8.1] - 2026-09-17
 
-- `--decompress` expands compressed files in a folder and adds it to Excluded folders.
-- Decompress checkbox: exclude the folder from later compression.
+### Added 
+- A lot of edge-case handling logic for non-existing directories, failed file compression and race conditions
+- Support for Intel's hybrid CPU core architectures of 12th Gen and newer
+
+### Changed
+- Worker counts on mixed-core CPUs leave a P-core and an E-core free and skip extra low-power cores
+- The walker waits for the next batch without Python's GIL, keeping the GUI responsive while a scan runs
+- Entropy windows skip file headers for all window counts instead of only 3
+- A directory deleted after caching is treated as stale
+- The scan root is probed by the native sampler and consulted in the cache like any other directory
+- Up to 4 workers for LZX compression for very high core CPUs, up from 2
+
+### Fixed
+- Multi-threaded performance regression introduced in recent commits. Compression is now much faster 
+- Queued `compact.exe` batches are being cancelled instead of running, if the stop button is pressed
+- The incompressible cache is rewritten on each commit and stops growing between runs
+
 
 ## [v0.8.0] - 2026-09-12
 

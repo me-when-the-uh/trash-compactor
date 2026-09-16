@@ -120,7 +120,6 @@ def execute_compression_plan(
     *,
     stage_callback: Optional[Callable[[str, int], None]] = None,
     progress_callback: Optional[Callable[[Path, str], None]] = None,
-    batch_callback: Optional[Callable[[str, int], None]] = None,
 ) -> None:
     total = len(plan)
     if not total:
@@ -131,6 +130,8 @@ def execute_compression_plan(
     blocked_dirs: set[str] = set()
     bypassio_reason = _("Skipped because BypassIO is active on this file")
     bypassio_warned = False
+    # Set when the run is abandoned: queued batches must not start compact.exe.
+    cancel = threading.Event()
 
     def _block_parent(path_str: str) -> None:
         parent = normalize_path(os.path.dirname(path_str))
@@ -143,13 +144,8 @@ def execute_compression_plan(
         return any(is_under(path_str, blocked) for blocked in blocked_dirs)
 
     def _compact_batch(algo: str, path_strs: Sequence[str]) -> subprocess.CompletedProcess:
-        if batch_callback:
-            try:
-                batch_callback(algo, len(path_strs))
-            except WorkerStopped:
-                raise
-            except Exception:
-                logging.debug("Batch-start callback failed for %s", algo, exc_info=True)
+        if cancel.is_set():
+            raise WorkerStopped()
         # compact /c /a /exe:{algo} path1 path2 ...
         args = ['compact', '/c', '/a', f'/exe:{algo}']
         args.extend(_compact_path(path_str) for path_str in path_strs)
@@ -259,14 +255,29 @@ def execute_compression_plan(
             except Exception:  # pragma: no cover - defensive logging
                 logging.debug("Stage callback failed for %s", algorithm, exc_info=True)
 
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=workers)
+        try:
             futures: dict = {}
+            retry_futures: list = []
             batch: list[tuple[str, int]] = []
             batch_chars = 0
+
+            def _submit_retry(path_str: str, file_size: int) -> None:
+                # Retries go through the pool, so a failed batch keeps the
+                # stage at full parallelism instead of one serial worker.
+                future = executor.submit(
+                    _compress_single,
+                    Path(path_str),
+                    file_size,
+                    algorithm,
+                    timeout=_SINGLE_FILE_TIMEOUT_SECONDS,
+                )
+                retry_futures.append(future)
+
             for path_str, file_size in entries:
                 path_length = len(_compact_path(path_str)) + 3  # for quotes and space
                 if batch and (len(batch) >= batch_size or batch_chars + path_length > max_chars):
-                    futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = batch
+                    futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = list(batch)
                     batch = []
                     batch_chars = 0
 
@@ -274,11 +285,10 @@ def execute_compression_plan(
                 batch_chars += path_length
 
             if batch:
-                futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = batch
+                futures[executor.submit(_compact_batch, algorithm, [p for p, _ in batch])] = list(batch)
 
             for future in as_completed(futures):
                 batch = futures[future]
-
                 try:
                     result = future.result()
                 except WorkerStopped:
@@ -293,7 +303,7 @@ def execute_compression_plan(
                     for path_str, file_size in batch:
                         path = Path(path_str)
                         _record_error(_("Batch exception for {path}: {exc}").format(path=path, exc=exc))
-                        _compress_single(path, file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
+                        _submit_retry(path_str, file_size)
                     continue
 
                 if result.returncode != 0:
@@ -306,14 +316,35 @@ def execute_compression_plan(
                     if batch:
                         _maybe_warn_wof_unattached(batch[0][0], result)
                     for path_str, file_size in batch:
+                        path = Path(path_str)
                         if _is_blocked(path_str):
-                            _record_failure(Path(path_str), file_size, algorithm, bypassio_reason)
+                            _record_failure(path, file_size, algorithm, bypassio_reason)
                             continue
-                        _compress_single(Path(path_str), file_size, algorithm, timeout=_SINGLE_FILE_TIMEOUT_SECONDS)
+                        # One bad path fails the whole batch; the rest usually
+                        # went through. Verify first, retry only what is left.
+                        compressed, compressed_size = is_file_compressed(path)
+                        if compressed:
+                            _record_success(path, compressed_size, algorithm, verified=True)
+                        else:
+                            _submit_retry(path_str, file_size)
                     continue
 
                 for path_str, file_size in batch:
                     _finalize_success(Path(path_str), file_size, algorithm, context='batch')
+
+            # Retries were submitted while the batches ran; wait out the rest.
+            for future in as_completed(retry_futures):
+                try:
+                    future.result()
+                except WorkerStopped:
+                    raise
+                except Exception:  # pragma: no cover - defensive logging
+                    logging.debug("Single-file retry raised", exc_info=True)
+        finally:
+            # Stop without waiting for the queued compact.exe runs the user
+            # just cancelled.
+            cancel.set()
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _uncompact(path_strs: Sequence[str], *, exe: bool) -> subprocess.CompletedProcess:
@@ -335,6 +366,13 @@ def execute_decompression_plan(
 
     batch_size, max_chars = _batch_limits()
     worker_count = max(1, workers)
+    # Set when the run is abandoned: queued batches must not start compact.exe.
+    cancel = threading.Event()
+
+    def _decompress_batch(paths: list[str]) -> subprocess.CompletedProcess:
+        if cancel.is_set():
+            raise WorkerStopped()
+        return _uncompact(paths, exe=True)
 
     def _decompress_one(path_str: str) -> None:
         path = Path(path_str)
@@ -353,20 +391,21 @@ def execute_decompression_plan(
             if progress_callback is not None:
                 progress_callback(path, False)
 
-    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+    executor = ThreadPoolExecutor(max_workers=worker_count)
+    try:
         futures: dict = {}
         batch: list[str] = []
         batch_chars = 0
         for path_str, _size in plan:
             path_length = len(_compact_path(path_str)) + 3
             if batch and (len(batch) >= batch_size or batch_chars + path_length > max_chars):
-                futures[executor.submit(_uncompact, list(batch), exe=True)] = list(batch)
+                futures[executor.submit(_decompress_batch, list(batch))] = list(batch)
                 batch = []
                 batch_chars = 0
             batch.append(path_str)
             batch_chars += path_length
         if batch:
-            futures[executor.submit(_uncompact, list(batch), exe=True)] = list(batch)
+            futures[executor.submit(_decompress_batch, list(batch))] = list(batch)
 
         leftover: list[str] = []
         for future in as_completed(futures):
@@ -394,3 +433,6 @@ def execute_decompression_plan(
 
         for path_str in leftover:
             _decompress_one(path_str)
+    finally:
+        cancel.set()
+        executor.shutdown(wait=False, cancel_futures=True)

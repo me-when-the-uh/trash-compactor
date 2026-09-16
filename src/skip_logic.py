@@ -5,7 +5,6 @@ from typing import Optional
 
 from .i18n import _
 from .config import savings_from_entropy
-from .compression.entropy import sample_directory_entropy
 from .compression.cache import IncompressibleCache
 from .exclusions import app_data_dir
 from .file_utils import DirectoryDecision, should_skip_directory
@@ -53,9 +52,6 @@ def entropy_records_from_probe(
     sampled_paths: Optional[list[str]] = None,
     lz4_certain_paths: Optional[list[str]] = None,
 ) -> tuple[Optional[DirectorySkipRecord], Optional[EntropySampleRecord]]:
-    if directory == base_dir:
-        return None, None
-
     if average_entropy < 0 or sampled_files == 0 or sampled_bytes < 1024:
         return None, None
 
@@ -112,30 +108,6 @@ def entropy_records_from_probe(
         sampled_bytes=sampled_bytes,
     )
     return skip_record, sample_record
-
-
-def evaluate_entropy_directory(
-    directory: Path,
-    base_dir: Path,
-    min_savings_percent: float,
-    verbosity: int,
-) -> tuple[Optional[DirectorySkipRecord], Optional[EntropySampleRecord]]:
-    average_entropy, sampled_files, sampled_bytes, lz4_certain_files, sampled_paths, lz4_certain_paths = sample_directory_entropy(directory)
-    if average_entropy is None:
-        return None, None
-
-    return entropy_records_from_probe(
-        directory,
-        base_dir,
-        min_savings_percent,
-        verbosity,
-        average_entropy,
-        sampled_files,
-        sampled_bytes,
-        lz4_certain_files,
-        sampled_paths=sampled_paths,
-        lz4_certain_paths=lz4_certain_paths,
-    )
 
 
 def maybe_skip_directory(

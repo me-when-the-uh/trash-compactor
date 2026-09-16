@@ -91,7 +91,9 @@ class IncompressibleCache:
         try:
             mtime = int(os.stat(path).st_mtime)
         except OSError:
-            return False
+            # A directory that vanished since the entry was written cannot
+            # back the cached verdict.
+            return True
         return stored is not None and mtime > stored
 
     def clear_hash_cache(self) -> None:
@@ -113,15 +115,19 @@ class IncompressibleCache:
         if not self._staged:
             return
 
+        merged = dict(self._entries)
+        merged.update(self._staged)
+        tmp = self.cache_file_path.with_name(self.cache_file_path.name + ".tmp")
         try:
-            with open(self.cache_file_path, "a", encoding="utf-8") as f:
-                for hash_val in sorted(self._staged):
-                    mtime = self._staged[hash_val]
+            with open(tmp, "w", encoding="utf-8") as f:
+                for hash_val, mtime in sorted(merged.items()):
                     if mtime is not None:
                         f.write(f"{hash_val} {mtime}\n")
                     else:
                         f.write(f"{hash_val}\n")
+            os.replace(tmp, self.cache_file_path)
         except OSError:
+            tmp.unlink(missing_ok=True)
             for hash_val in self._staged:
                 self._entries.pop(hash_val, None)
             self._staged.clear()

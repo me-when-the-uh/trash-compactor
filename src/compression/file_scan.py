@@ -121,4 +121,4 @@ def iter_files(
         scan_worker_count(),
     ):
         for path, size, attributes, algo, category, hint in batch:
-            yield (path, int(size), int(attributes), _ALGO_NAMES[algo], int(category), int(hint))
+            yield (path, size, attributes, _ALGO_NAMES[algo], category, hint)

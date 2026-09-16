@@ -10,7 +10,6 @@ from ..config import (
     ENTROPY_MAX_BYTES,
     ENTROPY_MAX_FILE_BUDGET,
     ENTROPY_MAX_FILES,
-    ENTROPY_SAMPLING_PARAMS,
     savings_from_entropy,
 )
 from ..directstorage import (
@@ -22,14 +21,13 @@ from ..directstorage import (
 from ..skip_logic import (
     append_directory_skip_record,
     entropy_records_from_probe,
-    evaluate_entropy_directory,
     get_incompressible_cache,
     _relative_to_base,
 )
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
-from .entropy import _select_sample_files, get_file_probe_budget, sample_file_entropy
+from .entropy import _entropy_params, get_file_probe_budget, sample_file_entropy
 from .file_scan import (
     CAT_ALREADY_COMPRESSED,
     CAT_DEBUG_EXT,
@@ -195,55 +193,13 @@ def _debug_extension_probe(path: str, file_size: int, min_savings_percent: float
     savings = savings_from_entropy(entropy_sum / sampled_bytes)
     if savings >= min_savings_percent:
         projected = int(file_size * (1 - savings / 100))
-        print(
-            f"\n[DEBUG] File {os.path.basename(path)} has potential savings: {savings:.1f}% "
-            f"({pretty_size(file_size)} -> {pretty_size(projected)})"
+        logging.info(
+            "[DEBUG] File %s has potential savings: %.1f%% (%s -> %s)",
+            os.path.basename(path),
+            savings,
+            pretty_size(file_size),
+            pretty_size(projected),
         )
-
-
-def _probe_file_list(files: list[tuple[Path, int]]) -> tuple[Optional[float], int, int, int, list[str], list[str]]:
-    """Aggregate entropy over a pre-collected list of (path, size) files.
-
-    Mirrors ``sample_directory_entropy``'s aggregation but skips the tree walk;
-    the caller already collected the files (with ``skip_root_files=False``, so
-    root-level files are included).
-    """
-    if not files:
-        return None, 0, 0, 0, [], []
-
-    sampled_files = 0
-    sampled_bytes = 0
-    size_weighted_entropy = 0.0
-    size_total = 0
-    lz4_certain = 0
-    sampled_paths: list[str] = []
-    lz4_certain_paths: list[str] = []
-    remaining = ENTROPY_MAX_BYTES
-
-    for path, file_size in files:
-        if remaining <= 0:
-            break
-        per_file_budget = min(get_file_probe_budget(file_size), remaining)
-        if per_file_budget <= 0:
-            break
-        file_entropy, file_bytes, lz4_flag = sample_file_entropy(
-            path, byte_budget=per_file_budget, file_size=file_size
-        )
-        if file_bytes == 0:
-            continue
-        sampled_files += 1
-        sampled_bytes += file_bytes
-        size_weighted_entropy += (file_entropy / file_bytes) * file_size
-        size_total += file_size
-        sampled_paths.append(str(path))
-        if lz4_flag:
-            lz4_certain += 1
-            lz4_certain_paths.append(str(path))
-        remaining -= file_bytes
-
-    if size_total == 0:
-        return None, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths
-    return size_weighted_entropy / size_total, sampled_files, sampled_bytes, lz4_certain, sampled_paths, lz4_certain_paths
 
 
 def _filter_certainly_incompressible_files(
@@ -284,7 +240,7 @@ def _filter_certainly_incompressible_files(
                 break
             _file_entropy, file_bytes, lz4_certain = sample_file_entropy(
                 Path(path_str),
-                byte_budget=get_file_probe_budget(file_size),
+                byte_budget=min(get_file_probe_budget(file_size), remaining),
                 file_size=file_size,
             )
             if file_bytes == 0:
@@ -332,65 +288,66 @@ def _filter_high_entropy_directories(
     directories = {Path(path_str) for path_str in directory_paths}
 
     root_skip_record: Optional[DirectorySkipRecord] = None
-    root_files: Optional[list[tuple[Path, int]]] = None
+    cache = get_incompressible_cache()
     if any(os.path.dirname(path_str) == base_dir_str for path_str, _, _ in candidates):
-        root_files, root_skipped = _select_sample_files(
-            base_dir,
-            max_files=ENTROPY_MAX_FILES,
-            include_subdirectories=False,
-            skip_root_files=False,
-        )
-        root_entropy, root_files_sampled, root_bytes_sampled, root_lz4, root_sampled_paths, root_lz4_paths = _probe_file_list(root_files or [])
-        if monitor and root_files_sampled > 0:
-            monitor.stats.files_analyzed_for_entropy += root_files_sampled
-
-        if root_entropy is not None and root_files_sampled > 0 and root_bytes_sampled >= 1024:
-            estimated_savings = savings_from_entropy(root_entropy)
-            logging.debug(
-                "Root entropy sample for %s: %.2f bits/byte (~%.1f%% savings) across %s files (%s bytes)",
-                base_dir,
-                root_entropy,
-                estimated_savings,
-                root_files_sampled,
-                root_bytes_sampled,
-            )
-
-            root_sample = EntropySampleRecord(
+        if cache.contains(base_dir):
+            root_skip_record = DirectorySkipRecord(
                 path=str(base_dir),
-                relative_path=_relative_to_base(base_dir, base_dir),
-                average_entropy=root_entropy,
-                estimated_savings=estimated_savings,
-                sampled_files=root_files_sampled,
-                sampled_bytes=root_bytes_sampled,
-                lz4_certain_files=root_lz4,
-                total_bytes=0,
-                sampled_paths=root_sampled_paths,
-                lz4_certain_paths=root_lz4_paths,
+                relative_path='.',
+                reason=_("Cached: High entropy directory"),
+                category='high_entropy',
+                average_entropy=8.0,
+                estimated_savings=0.0,
+                sampled_files=0,
+                sampled_bytes=0,
             )
-            stats.entropy_samples.append(root_sample)
-            stats.entropy_directories_sampled += 1
-            stats.lz4_certain_incompressible_files += root_lz4
-            if estimated_savings < min_savings_percent:
-                stats.entropy_directories_below_threshold += 1
-
-                reason = f"High entropy (est. {estimated_savings:.1f}% savings)"
-                root_skip_record = DirectorySkipRecord(
-                    path=str(base_dir),
-                    relative_path='.',
-                    reason=reason,
-                    category='high_entropy',
-                    average_entropy=root_entropy,
-                    estimated_savings=estimated_savings,
-                    sampled_files=root_files_sampled,
-                    sampled_bytes=root_bytes_sampled,
+            append_directory_skip_record(stats, root_skip_record)
+            if verbosity >= 1:
+                logging.info(
+                    "Skipping root-level files; directory is in the incompressible cache"
                 )
-                append_directory_skip_record(stats, root_skip_record)
-                if verbosity >= 1:
-                    logging.info(
-                        "Skipping root-level files; estimated savings %.1f%% is below threshold %.1f%%",
-                        estimated_savings,
-                        min_savings_percent,
-                    )
+        else:
+            import fast_walk
+
+            results = fast_walk.probe_directories_parallel(
+                _entropy_params(),
+                [base_dir_str],
+                ENTROPY_MAX_FILES,
+                ENTROPY_MAX_BYTES,
+                ENTROPY_MAX_FILE_BUDGET,
+                False,
+                1,
+                True,
+            )
+            skip_record = None
+            sample_record = None
+            if results:
+                skip_record, sample_record = entropy_records_from_probe(
+                    base_dir,
+                    base_dir,
+                    min_savings_percent,
+                    verbosity,
+                    results[0].average_entropy,
+                    results[0].sampled_files,
+                    results[0].sampled_bytes,
+                    results[0].lz4_certain,
+                    has_lz4_certain=results[0].has_lz4_certain,
+                    sampled_paths=list(results[0].sampled_paths),
+                    lz4_certain_paths=list(results[0].lz4_certain_paths),
+                )
+            if monitor and sample_record is not None:
+                monitor.stats.files_analyzed_for_entropy += sample_record.sampled_files
+
+            if sample_record is not None:
+                stats.entropy_samples.append(sample_record)
+                stats.entropy_directories_sampled += 1
+                stats.lz4_certain_incompressible_files += sample_record.lz4_certain_files
+                if sample_record.estimated_savings < min_savings_percent:
+                    stats.entropy_directories_below_threshold += 1
+
+                    if skip_record is not None:
+                        root_skip_record = skip_record
+                        append_directory_skip_record(stats, root_skip_record)
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
     # Dir whose probe confirmed every sampled file as LZ4-certain: skip
@@ -401,7 +358,6 @@ def _filter_high_entropy_directories(
     if root_skip_record is not None:
         skipped_directories[base_dir] = root_skip_record
 
-    cache = get_incompressible_cache()
     sorted_directories = sorted(directories, key=lambda item: (len(item.parts), str(item).casefold()))
     for directory in sorted_directories:
         if directory == base_dir:
@@ -535,31 +491,6 @@ def evaluate_directories_parallel(
     if not directory_list:
         return {}, []
 
-    worker_count = entropy_worker_count()
-    processed_count = 0
-    total_count = len(directory_list)
-
-    def _on_complete(directory: Path, dir_sampled_files: int = 0) -> None:
-        nonlocal processed_count
-        processed_count += 1
-        if progress_callback:
-            progress_callback(directory, processed_count, total_count, dir_sampled_files)
-
-    skip_results: dict[Path, DirectorySkipRecord] = {}
-    sample_results: list[EntropySampleRecord] = []
-
-    serial_threshold = max(worker_count * 2, 8)
-    if worker_count <= 1 or len(directory_list) < serial_threshold:
-        for directory in directory_list:
-            skip_record, sample_record = evaluate_entropy_directory(directory, base_dir, min_savings_percent, verbosity)
-            sampled_files = sample_record.sampled_files if sample_record else 0
-            _on_complete(directory, sampled_files)
-            if skip_record:
-                skip_results[directory] = skip_record
-            if sample_record:
-                sample_results.append(sample_record)
-        return skip_results, sample_results
-
     import fast_walk
 
     rust_progress = None
@@ -576,25 +507,19 @@ def evaluate_directories_parallel(
         rust_progress = _rust_progress
 
     raw_results = fast_walk.probe_directories_parallel(
-        fast_walk.EntropyParams(
-            dynamic_windows_min_file_size=ENTROPY_SAMPLING_PARAMS.dynamic_windows_min_file_size,
-            dynamic_windows_max_file_size=ENTROPY_SAMPLING_PARAMS.dynamic_windows_max_file_size,
-            huge_windows_file_size=ENTROPY_SAMPLING_PARAMS.huge_windows_file_size,
-            base_sample_windows=ENTROPY_SAMPLING_PARAMS.base_sample_windows,
-            dynamic_windows_min=ENTROPY_SAMPLING_PARAMS.dynamic_windows_min,
-            dynamic_windows_max=ENTROPY_SAMPLING_PARAMS.dynamic_windows_max,
-            huge_windows_max=ENTROPY_SAMPLING_PARAMS.huge_windows_max,
-            target_window_size=ENTROPY_SAMPLING_PARAMS.target_window_size,
-        ),
+        _entropy_params(),
         [str(directory) for directory in directory_list],
         ENTROPY_MAX_FILES,
         ENTROPY_MAX_BYTES,
         ENTROPY_MAX_FILE_BUDGET,
         True,
-        worker_count,
+        max(1, entropy_worker_count()),
         True,
         rust_progress,
     )
+
+    skip_results: dict[Path, DirectorySkipRecord] = {}
+    sample_results: list[EntropySampleRecord] = []
 
     for result in raw_results:
         directory = Path(result.dir)

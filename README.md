@@ -8,7 +8,7 @@
 [![NTFS](https://img.shields.io/badge/filesystem-NTFS%20only-blueviolet?style=for-the-badge&labelColor=1b1f27&color=7d5cfc)](#limitations)<!-- [![Python](https://img.shields.io/badge/python-3.11%20-%203.13-yellow?style=for-the-badge&logo=python&logoColor=white&labelColor=1b1f27&color=f0c94a)](#option-2-running-from-source)
 [![Rust](https://img.shields.io/badge/rust%20engine-fast__walk-orange?style=for-the-badge&logo=rust&logoColor=white&labelColor=1b1f27&color=f0753a)](#native-rust-engine) -->
 [![License](https://img.shields.io/badge/license-MIT-brightgreen?style=for-the-badge&labelColor=1b1f27&color=4bc34b)](LICENSE)
-[![Release](https://img.shields.io/badge/latest-v0.8.0-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
+[![Release](https://img.shields.io/badge/latest-v0.8.1-blue?style=for-the-badge&labelColor=1b1f27&color=2f81f7)](https://github.com/me-when-the-uh/trash-compactor/releases/latest)
 [![Build date](https://img.shields.io/badge/build%20date-who%20cares-blue?style=for-the-badge&labelColor=1b1f27&color=6cb6ff)](src/version.py)
 [![Stars](https://img.shields.io/github/stars/me-when-the-uh/trash-compactor?style=for-the-badge&labelColor=1b1f27&color=2f81f7&logo=star&logoColor=white)](https://github.com/me-when-the-uh/trash-compactor/stargazers)
 
@@ -25,7 +25,7 @@ Trash-Compactor's goal is to free up disk space on Windows 10/11 by compressing 
 
 You may have heard of [CompactGUI](https://github.com/IridiumIO/CompactGUI) and [Compactor](https://github.com/Freaky/Compactor) before - they wrap the same API behind this compression, which works on top of `compact.exe`. This program's purpose is to fix all of their apparent downsides. It **automatically** scans through the files, evaluating their compressibility with a complex but fast algorithm, and picking the optimal compression algorithm based on file size. This, in turn, lets you squeeze the most out of the compression algorithms and get even smaller file sizes, all while avoiding unnecessary compression, maximising overall system performance in comparison with the aforementioned tools, and preventing excessive SSD wear.
 
-The latest version, 0.8.0, also takes DirectStorage API into account, to avoid compressing games that rely on DirectStorage API or BypassIO to stream uncompressed assets directly to the GPU to drastically increase loading speeds. Accidentally compressing them would otherwise negate all performance gains, which is the only case when compressing files with `compact.exe` noticeably hinders performance.
+The latest versions also take DirectStorage API into account, to avoid compressing games that rely on DirectStorage API or BypassIO to stream uncompressed assets directly to the GPU to drastically increase loading speeds. Accidentally compressing them would otherwise negate all performance gains, which is the only case when compressing files with `compact.exe` noticeably hinders performance.
 
 
 ### Why this is not a zip

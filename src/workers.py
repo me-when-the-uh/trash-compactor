@@ -1,11 +1,14 @@
 from contextvars import ContextVar
+import logging
 import os
 from typing import Optional
 
-from .config import get_cpu_info
+from .cpu_topology import CpuTopology, baseline_workers, cpu_topology
+from .i18n import _
 
 _WORKER_CAP: ContextVar[Optional[int]] = ContextVar("worker_cap", default=None)
 _HDD_MODE: ContextVar[bool] = ContextVar("hdd_mode", default=False)
+_TOPOLOGY_LOGGED = False
 
 
 def set_worker_cap(limit: Optional[int]) -> None:
@@ -36,12 +39,33 @@ def _apply_worker_cap(default: int) -> int:
     return max(1, min(default, limit))
 
 
+def _log_topology_once(topo: CpuTopology, workers: int) -> None:
+    global _TOPOLOGY_LOGGED
+    if _TOPOLOGY_LOGGED or not topo.hybrid:
+        return
+    _TOPOLOGY_LOGGED = True
+    if topo.lp_e_cores:
+        logging.info(
+            _("Hybrid CPU: %s P-cores, %s E-cores, %s low-power E-cores left idle. Using %s workers."),
+            topo.p_cores,
+            topo.e_cores,
+            topo.lp_e_cores,
+            workers,
+        )
+    else:
+        logging.info(
+            _("Hybrid CPU: %s P-cores, %s E-cores. Using %s workers."),
+            topo.p_cores,
+            topo.e_cores,
+            workers,
+        )
+
+
 def _physical_core_baseline_workers() -> int:
-    physical, logical = get_cpu_info()
-    cores = physical or logical or 1
-    if cores <= 2:
-        return 1
-    return max(1, cores - 1)
+    topo = cpu_topology()
+    workers = baseline_workers(topo)
+    _log_topology_once(topo, workers)
+    return workers
 
 
 def entropy_worker_count() -> int:
@@ -72,12 +96,15 @@ def xp_worker_count() -> int:
     return _apply_worker_cap(default)
 
 
+_LZX_CORES_PER_WORKER = 6
+_LZX_MAX_WORKERS = 4
+
+
 def lzx_worker_count() -> int:
+    """LZX compresses multi-threaded inside compact.exe, spreading over about
+    six cores per process."""
     if _HDD_MODE.get():
         return 1
-    physical, logical = get_cpu_info()
-    cores = physical or logical
-    if not cores or cores <= 4:
-        return _apply_worker_cap(1)
-
-    return _apply_worker_cap(2)
+    p_cores = cpu_topology().p_cores
+    workers = (p_cores + _LZX_CORES_PER_WORKER - 1) // _LZX_CORES_PER_WORKER
+    return _apply_worker_cap(min(_LZX_MAX_WORKERS, workers))

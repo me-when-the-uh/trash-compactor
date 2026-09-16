@@ -4,22 +4,26 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 use pyo3::IntoPyObject;
 use rayon::ThreadPoolBuilder;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf, MAIN_SEPARATOR, MAIN_SEPARATOR_STR};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 const BATCH_SIZE: usize = 4096;
+// Workers park on send once this many batches are queued, so a slow Python
+// consumer bounds walker memory instead of buffering the whole tree.
+const CHANNEL_DEPTH: usize = 8;
 
 const CAT_ELIGIBLE: u8 = 0;
 const CAT_EXTENSION: u8 = 1;
 const CAT_TOO_SMALL: u8 = 2;
 const CAT_DEBUG_EXT: u8 = 3;
 const CAT_ALREADY_COMPRESSED: u8 = 4;
+const CAT_ERROR: u8 = 5;
 const CAT_MAGIC: u8 = 6;
 
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
@@ -63,11 +67,13 @@ fn finalize_entry(
     algo: u8,
     category: u8,
 ) -> (u8, u8, u64) {
-    let physical = get_ntfs_compressed_size(path).unwrap_or(logical);
-
+    // The compressed-size syscall is only meaningful for categories that can
+    // still be compressed; skip categories report the logical size.
     if category != CAT_ELIGIBLE && category != CAT_DEBUG_EXT {
-        return (algo, category, physical);
+        return (algo, category, logical);
     }
+
+    let physical = get_ntfs_compressed_size(path).unwrap_or(logical);
 
     if physical < logical || (attrs & FILE_ATTRIBUTE_COMPRESSED != 0) {
         return (algo, CAT_ALREADY_COMPRESSED, physical);
@@ -210,18 +216,31 @@ fn scan_dir(
     subdirs: &mut Vec<PathBuf>,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
+        out.push((dir.to_string_lossy().into_owned(), 0, 0, 0, CAT_ERROR, 0));
         return;
     };
 
     let mut entry_path = dir.to_path_buf();
 
     for entry in entries.flatten() {
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-
         let file_name = entry.file_name();
         entry_path.push(&file_name);
+
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                out.push((
+                    entry_path.to_string_lossy().into_owned(),
+                    0,
+                    0,
+                    0,
+                    CAT_ERROR,
+                    0,
+                ));
+                entry_path.pop();
+                continue;
+            }
+        };
 
         if metadata.is_dir() {
             if !exclusions.contains_path(entry_path.to_string_lossy().as_ref()) {
@@ -252,8 +271,42 @@ fn scan_dir(
     }
 }
 
+struct SharedStack {
+    dirs: Mutex<VecDeque<PathBuf>>,
+    idle: Condvar,
+}
+
+fn next_dir(
+    stack: &SharedStack,
+    pending: &AtomicUsize,
+    cancelled: &AtomicBool,
+    fifo: bool,
+) -> (Option<PathBuf>, bool) {
+    let mut dirs = stack.dirs.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        // With a single worker (fifo=true, HDD mode) pop from the front so the
+        // disk head sweeps the tree in discovery order instead of jumping
+        // between sibling branches on every pop.
+        let popped = if fifo {
+            dirs.pop_front()
+        } else {
+            dirs.pop_back()
+        };
+        if popped.is_some() {
+            return (popped, false);
+        }
+        if cancelled.load(Ordering::Acquire) {
+            return (None, false);
+        }
+        if pending.load(Ordering::Acquire) == 0 {
+            return (None, true);
+        }
+        dirs = stack.idle.wait(dirs).unwrap_or_else(|e| e.into_inner());
+    }
+}
+
 fn worker_loop(
-    stack: Arc<Mutex<Vec<PathBuf>>>,
+    stack: Arc<SharedStack>,
     pending: Arc<AtomicUsize>,
     exclusions: Arc<ExclusionIndex>,
     skip_ext: Arc<HashSet<String>>,
@@ -261,42 +314,20 @@ fn worker_loop(
     min_size: u64,
     ignore_ext: bool,
     fifo: bool,
-    tx: Sender<Vec<ScanTuple>>,
+    tx: Arc<SyncSender<Vec<ScanTuple>>>,
     cancelled: Arc<AtomicBool>,
 ) {
     let mut local: Vec<ScanTuple> = Vec::with_capacity(BATCH_SIZE);
 
     loop {
-        // The Python consumer dropped the iterator (Stop/GUI cancel): exit
-        // early instead of walking the rest of the tree pointlessly.
-        if cancelled.load(Ordering::Acquire) {
-            return;
-        }
-        if pending.load(Ordering::Acquire) == 0 {
-            if !local.is_empty() {
+        let (dir, done) = next_dir(&stack, &pending, &cancelled, fifo);
+        let Some(dir) = dir else {
+            if done && !local.is_empty() {
                 let _ = tx.send(std::mem::take(&mut local));
             }
+            let _guard = stack.dirs.lock().unwrap_or_else(|e| e.into_inner());
+            stack.idle.notify_all();
             return;
-        }
-
-        // With a single worker (fifo=true, HDD mode) pop from the front so the
-        // disk head sweeps the tree in discovery order instead of jumping
-        // between sibling branches on every pop.
-        let dir = {
-            let mut stack = stack.lock().unwrap_or_else(|e| e.into_inner());
-            if fifo {
-                if stack.is_empty() {
-                    None
-                } else {
-                    Some(stack.remove(0))
-                }
-            } else {
-                stack.pop()
-            }
-        };
-        let Some(dir) = dir else {
-            std::thread::yield_now();
-            continue;
         };
 
         // A panic inside scan_dir (e.g. a poisoned lock) must not kill the
@@ -325,7 +356,11 @@ fn worker_loop(
 
                 if !subdirs.is_empty() {
                     let n = subdirs.len();
-                    stack.lock().unwrap_or_else(|e| e.into_inner()).extend(subdirs);
+                    {
+                        let mut dirs = stack.dirs.lock().unwrap_or_else(|e| e.into_inner());
+                        dirs.extend(subdirs);
+                        stack.idle.notify_all();
+                    }
                     pending.fetch_add(n, Ordering::Release);
                 }
             }
@@ -340,16 +375,23 @@ fn worker_loop(
 
 #[pyclass(unsendable)]
 struct WalkIter {
-    receiver: Receiver<Vec<ScanTuple>>,
+    receiver: Option<Receiver<Vec<ScanTuple>>>,
     cancelled: Arc<AtomicBool>,
+    stack: Arc<SharedStack>,
 }
 
 impl Drop for WalkIter {
     fn drop(&mut self) {
-        // When cancelled via GUI, workers are to be stopped at next loop check,
-        // leaving the receiver non-empty while the walk thread winds down deadlocks
         self.cancelled.store(true, Ordering::Release);
-        while self.receiver.recv().is_ok() {}
+        // Parked workers re-check `cancelled` under the stack lock, so the
+        // wake has to happen while that lock is held.
+        {
+            let _guard = self.stack.dirs.lock().unwrap_or_else(|e| e.into_inner());
+            self.stack.idle.notify_all();
+        }
+        if let Some(receiver) = self.receiver.as_ref() {
+            while receiver.try_recv().is_ok() {}
+        }
     }
 }
 
@@ -359,9 +401,20 @@ impl WalkIter {
         slf
     }
 
-    fn __next__(slf: PyRefMut<'_, Self>) -> PyResult<Option<Py<PyAny>>> {
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> PyResult<Option<Py<PyAny>>> {
         let py = slf.py();
-        let Some(batch) = slf.receiver.recv().ok() else {
+        let Some(receiver) = slf.receiver.take() else {
+            return Ok(None);
+        };
+        // Waiting without the GIL keeps the GUI thread responsive while the
+        // walkers fill the next batch. The receiver moves through the closure
+        // because a shared reference would not be Send.
+        let (batch, receiver) = py.allow_threads(move || {
+            let batch = receiver.recv().ok();
+            (batch, receiver)
+        });
+        slf.receiver = Some(receiver);
+        let Some(batch) = batch else {
             return Ok(None);
         };
 
@@ -383,7 +436,7 @@ fn walk_and_filter(
     ignore_extensions: bool,
     workers: usize,
 ) -> PyResult<WalkIter> {
-    let (tx, rx) = channel();
+    let (tx, rx) = sync_channel(CHANNEL_DEPTH);
     let skip_ext: HashSet<String> = skip_extensions
         .into_iter()
         .map(|e| e.strip_prefix('.').unwrap_or(&e).to_lowercase())
@@ -395,19 +448,24 @@ fn walk_and_filter(
     let fifo = threads == 1;
     let cancelled = Arc::new(AtomicBool::new(false));
     let cancelled_thread = Arc::clone(&cancelled);
+    let stack = Arc::new(SharedStack {
+        dirs: Mutex::new(VecDeque::from([PathBuf::from(root)])),
+        idle: Condvar::new(),
+    });
+    let pending = Arc::new(AtomicUsize::new(1));
 
-    let handle = thread::spawn(move || {
-        let Ok(pool) = ThreadPoolBuilder::new().num_threads(threads).build() else {
-            return;
-        };
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .build()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
-        let stack = Arc::new(Mutex::new(vec![PathBuf::from(root)]));
-        let pending = Arc::new(AtomicUsize::new(1));
-
+    let stack_thread = Arc::clone(&stack);
+    thread::spawn(move || {
+        let tx = Arc::new(tx);
         pool.scope(|s| {
             for _ in 0..threads {
-                let tx = tx.clone();
-                let stack = Arc::clone(&stack);
+                let tx = Arc::clone(&tx);
+                let stack = Arc::clone(&stack_thread);
                 let pending = Arc::clone(&pending);
                 let exclusions = Arc::clone(&exclusions);
                 let skip_ext = Arc::clone(&skip_ext);
@@ -420,8 +478,11 @@ fn walk_and_filter(
         });
     });
 
-    let _ = handle;  // detached; WalkIter::drop drains the channel to join
-    Ok(WalkIter { receiver: rx, cancelled })
+    Ok(WalkIter {
+        receiver: Some(rx),
+        cancelled,
+        stack,
+    })
 }
 
 #[pymodule]

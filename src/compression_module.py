@@ -381,6 +381,10 @@ def _plan_compression(
     def _on_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int) -> None:
         if not timer:
             return
+        # The timer takes a lock per update; 64-file granularity is already
+        # smoother than the spinner renders.
+        if processed % 64:
+            return
         timer.update(processed)
 
     entropy_started = False

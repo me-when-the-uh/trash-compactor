@@ -1,13 +1,12 @@
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use memmap2::Mmap;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 const LZ4_INCOMPRESSIBLE_THRESHOLD: f64 = 0.95;
@@ -79,18 +78,6 @@ pub struct DirEntropyResult {
     pub sampled_paths: Vec<String>,
     #[pyo3(get)]
     pub lz4_certain_paths: Vec<String>,
-}
-
-struct FileProbeJob {
-    path: String,
-    size: u64,
-    budget: u64,
-    order: u32,
-}
-
-struct DirPlan {
-    dir: String,
-    jobs: Vec<FileProbeJob>,
 }
 
 struct FileProbeOutcome {
@@ -372,14 +359,19 @@ fn plan_sample_windows(
             }
         }
     } else {
+        // Spread over [10%, 90%] of the file the way the three-window case
+        // does. Starting at offset 0 reads format headers and under-reports
+        // entropy for exactly the formats worth compressing.
         let max_start = file_size.saturating_sub(window_size);
+        let lo = ((file_size as f64 * 0.10) as u64).min(max_start);
+        let hi = (((file_size as f64 * 0.90) as u64).min(max_start)).max(lo);
         let step = if num_windows > 1 {
-            max_start as f64 / (num_windows - 1) as f64
+            (hi - lo) as f64 / (num_windows - 1) as f64
         } else {
             0.0
         };
         for i in 0..num_windows {
-            let start = (i as f64 * step) as u64;
+            let start = (lo as f64 + i as f64 * step) as u64;
             let end = (start + window_size).min(file_size);
             if end > start {
                 raw_windows.push((start, end));
@@ -437,16 +429,7 @@ fn probe_sample(data: &[u8]) -> (f64, bool) {
     compression_probe_entropy(data)
 }
 
-fn read_window_bytes(file: &mut File, mmap: Option<&Mmap>, offset: u64, length: u64) -> Vec<u8> {
-    if let Some(map) = mmap {
-        let start = offset as usize;
-        let end = (offset + length).min(map.len() as u64) as usize;
-        if start >= end {
-            return Vec::new();
-        }
-        return map[start..end].to_vec();
-    }
-
+fn read_window_bytes(file: &mut File, offset: u64, length: u64) -> Vec<u8> {
     use std::io::{Read, Seek, SeekFrom};
     let mut buf = vec![0u8; length as usize];
     if file.seek(SeekFrom::Start(offset)).is_err() {
@@ -482,12 +465,6 @@ fn probe_file_inner(params: &EntropyParams, path: &str, file_size: u64, byte_bud
     }
 
     let mut file = File::open(path).ok();
-    let mmap = if file_size >= params.dynamic_windows_min_file_size {
-        file.as_ref()
-            .and_then(|f| unsafe { Mmap::map(f).ok() })
-    } else {
-        None
-    };
 
     let mut weighted_entropy = 0.0f64;
     let mut sampled_bytes = 0u64;
@@ -504,7 +481,7 @@ fn probe_file_inner(params: &EntropyParams, path: &str, file_size: u64, byte_bud
         }
 
         let data = match &mut file {
-            Some(f) => read_window_bytes(f, mmap.as_ref(), offset, read_len),
+            Some(f) => read_window_bytes(f, offset, read_len),
             None => Vec::new(),
         };
         if data.is_empty() {
@@ -530,37 +507,8 @@ fn probe_file_inner(params: &EntropyParams, path: &str, file_size: u64, byte_bud
     (weighted_entropy, sampled_bytes, lz4_certain)
 }
 
-fn build_probe_jobs(
-    params: &EntropyParams,
-    sampled_list: &[(String, u64)],
-    chunk_size: u64,
-    max_bytes: u64,
-) -> Vec<FileProbeJob> {
-    let mut jobs = Vec::new();
-    let mut remaining = max_bytes;
-
-    for (order, (path, size)) in sampled_list.iter().enumerate() {
-        if remaining == 0 {
-            break;
-        }
-        let per_file = get_file_probe_budget(params, *size);
-        let budget = per_file.min(chunk_size).min(remaining);
-        if budget == 0 {
-            break;
-        }
-        jobs.push(FileProbeJob {
-            path: path.clone(),
-            size: *size,
-            budget,
-            order: order as u32,
-        });
-        remaining = remaining.saturating_sub(budget);
-    }
-
-    jobs
-}
-
-fn prepare_directory_plan(
+#[allow(clippy::too_many_arguments)]
+fn probe_one_directory(
     params: &EntropyParams,
     dir: &str,
     max_files: u32,
@@ -568,23 +516,60 @@ fn prepare_directory_plan(
     max_bytes: u64,
     include_subdirectories: bool,
     breadth_first: bool,
-) -> DirPlan {
+    collect_paths: bool,
+) -> DirEntropyResult {
     let root = Path::new(dir);
     let sampled_list = if !breadth_first && include_subdirectories {
         collect_sample_selection_parallel(root, max_files)
     } else {
         collect_sample_selection(root, max_files, include_subdirectories, breadth_first)
     };
-    let jobs = build_probe_jobs(params, &sampled_list, chunk_size, max_bytes);
-    DirPlan {
+
+    let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
+    let mut remaining = max_bytes;
+    for (order, (path, size)) in sampled_list.iter().enumerate() {
+        if remaining == 0 {
+            break;
+        }
+        let budget = get_file_probe_budget(params, *size)
+            .min(chunk_size)
+            .min(remaining);
+        if budget == 0 {
+            break;
+        }
+        let (weighted_entropy, sampled_bytes, lz4_certain) =
+            probe_file(params, path, *size, budget);
+        // A failed open read nothing and spends nothing.
+        if sampled_bytes == 0 {
+            continue;
+        }
+        remaining = remaining.saturating_sub(sampled_bytes);
+        outcomes.push(FileProbeOutcome {
+            order: order as u32,
+            path: path.clone(),
+            file_size: *size,
+            weighted_entropy,
+            sampled_bytes,
+            lz4_certain,
+        });
+    }
+
+    let (average_entropy, sampled_files, sampled_bytes, lz4_certain, has_lz4_certain, sampled_paths, lz4_certain_paths) =
+        aggregate_directory(&mut outcomes, collect_paths);
+    DirEntropyResult {
         dir: dir.to_string(),
-        jobs,
+        average_entropy,
+        sampled_files,
+        sampled_bytes,
+        lz4_certain,
+        has_lz4_certain,
+        sampled_paths,
+        lz4_certain_paths,
     }
 }
 
 fn aggregate_directory(
     outcomes: &mut [FileProbeOutcome],
-    max_bytes: u64,
     collect_paths: bool,
 ) -> (f64, u32, u64, u32, bool, Vec<String>, Vec<String>) {
     outcomes.sort_unstable_by_key(|o| o.order);
@@ -599,9 +584,6 @@ fn aggregate_directory(
     let mut lz4_certain_paths: Vec<String> = Vec::new();
 
     for outcome in outcomes.iter() {
-        if sampled_bytes >= max_bytes {
-            break;
-        }
         if outcome.sampled_bytes == 0 {
             continue;
         }
@@ -620,10 +602,6 @@ fn aggregate_directory(
             if collect_paths {
                 lz4_certain_paths.push(outcome.path.clone());
             }
-        }
-
-        if sampled_bytes >= max_bytes {
-            break;
         }
     }
 
@@ -657,15 +635,14 @@ fn fire_progress(
     completed: usize,
     total: usize,
     sampled_files: u32,
-) {
+) -> bool {
     let Some(cb) = callback else {
-        return;
+        return true;
     };
-    Python::with_gil(|py| {
-        let _ = cb.call1(py, (dir, completed, total, sampled_files));
-    });
+    Python::with_gil(|py| cb.call1(py, (dir, completed, total, sampled_files)).is_ok())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn maybe_fire_progress(
     callback: &Option<Py<PyAny>>,
     dir: &str,
@@ -674,12 +651,16 @@ fn maybe_fire_progress(
     sampled_files: u32,
     progress_lock: &Arc<Mutex<()>>,
     interval: usize,
+    cancelled: &AtomicBool,
 ) {
     if completed % interval != 0 && completed != total {
         return;
     }
     let _guard = progress_lock.lock().unwrap_or_else(|e| e.into_inner());
-    fire_progress(callback, dir, completed, total, sampled_files);
+    if !fire_progress(callback, dir, completed, total, sampled_files) {
+        // The Python callback raised (GUI stop); abandon the remaining dirs.
+        cancelled.store(true, Ordering::Release);
+    }
 }
 
 #[pyfunction]
@@ -704,6 +685,7 @@ pub fn probe_directories_parallel(
     let callback = progress_callback;
     let progress_lock = Arc::new(Mutex::new(()));
     let progress_interval = (total / 32).max(1);
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     // One worker = sequential probing in discovery order (HDD mode). Parallel
     // probes would scatter the disk head across directories and files, which
@@ -712,7 +694,10 @@ pub fn probe_directories_parallel(
         let results: Vec<DirEntropyResult> = py.allow_threads(|| {
             let mut results = Vec::with_capacity(total);
             for (done, dir) in dirs.iter().enumerate() {
-                let plan = prepare_directory_plan(
+                if cancelled.load(Ordering::Acquire) {
+                    break;
+                }
+                let result = probe_one_directory(
                     &params,
                     dir,
                     max_files,
@@ -720,40 +705,19 @@ pub fn probe_directories_parallel(
                     max_bytes,
                     include_subdirectories,
                     true,
+                    collect_paths,
                 );
-                let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
-                for job in &plan.jobs {
-                    let (weighted_entropy, sampled_bytes, lz4_certain) =
-                        probe_file(&params, &job.path, job.size, job.budget);
-                    outcomes.push(FileProbeOutcome {
-                        order: job.order,
-                        path: job.path.clone(),
-                        file_size: job.size,
-                        weighted_entropy,
-                        sampled_bytes,
-                        lz4_certain,
-                    });
-                }
-                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, has_lz4_certain, sampled_paths, lz4_certain_paths) =
-                    aggregate_directory(&mut outcomes, max_bytes, collect_paths);
-                results.push(DirEntropyResult {
-                    dir: plan.dir.clone(),
-                    average_entropy,
-                    sampled_files,
-                    sampled_bytes,
-                    lz4_certain,
-                    has_lz4_certain,
-                    sampled_paths,
-                    lz4_certain_paths,
-                });
+                let sampled_files = result.sampled_files;
+                results.push(result);
                 maybe_fire_progress(
                     &callback,
-                    &plan.dir,
+                    dir,
                     done + 1,
                     total,
                     sampled_files,
                     &progress_lock,
                     progress_interval,
+                    &cancelled,
                 );
             }
             results
@@ -774,7 +738,10 @@ pub fn probe_directories_parallel(
             let dirs_completed = Arc::new(AtomicUsize::new(0));
 
             dirs.par_iter().enumerate().for_each(|(dir_index, dir)| {
-                let plan = prepare_directory_plan(
+                if cancelled.load(Ordering::Acquire) {
+                    return;
+                }
+                let result = probe_one_directory(
                     &params,
                     dir,
                     max_files,
@@ -782,51 +749,27 @@ pub fn probe_directories_parallel(
                     max_bytes,
                     include_subdirectories,
                     false,
+                    collect_paths,
                 );
-
-                let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
-                for job in &plan.jobs {
-                    let (weighted_entropy, sampled_bytes, lz4_certain) =
-                        probe_file(&params, &job.path, job.size, job.budget);
-                    outcomes.push(FileProbeOutcome {
-                        order: job.order,
-                        path: job.path.clone(),
-                        file_size: job.size,
-                        weighted_entropy,
-                        sampled_bytes,
-                        lz4_certain,
-                    });
-                }
-
-                let (average_entropy, sampled_files, sampled_bytes, lz4_certain, has_lz4_certain, sampled_paths, lz4_certain_paths) =
-                    aggregate_directory(&mut outcomes, max_bytes, collect_paths);
-                *result_slots[dir_index].lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(DirEntropyResult {
-                        dir: plan.dir.clone(),
-                        average_entropy,
-                        sampled_files,
-                        sampled_bytes,
-                        lz4_certain,
-                        has_lz4_certain,
-                        sampled_paths,
-                        lz4_certain_paths,
-                    });
+                let sampled_files = result.sampled_files;
+                *result_slots[dir_index].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
 
                 let done = dirs_completed.fetch_add(1, Ordering::Relaxed) + 1;
                 maybe_fire_progress(
                     &callback,
-                    &plan.dir,
+                    dir,
                     done,
                     total,
                     sampled_files,
                     &progress_lock,
                     progress_interval,
+                    &cancelled,
                 );
             });
 
             result_slots
                 .into_iter()
-                .map(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).take().unwrap())
+                .filter_map(|slot| slot.lock().unwrap_or_else(|e| e.into_inner()).take())
                 .collect()
         })
     });

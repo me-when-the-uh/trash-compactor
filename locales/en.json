@@ -321,5 +321,7 @@
     "Decompress files": "Decompress files",
     "Cannot compress target: %s": "Cannot compress target: %s",
     "Running in CLI log mode. Output is also being written to %s": "Running in CLI log mode. Output is also being written to %s",
-    "--log-file cannot live inside the target directory: %s": "--log-file cannot live inside the target directory: %s"
+    "--log-file cannot live inside the target directory: %s": "--log-file cannot live inside the target directory: %s",
+    "Hybrid CPU: %s P-cores, %s E-cores, %s low-power E-cores left idle. Using %s workers.": "Hybrid CPU: %s P-cores, %s E-cores, %s low-power E-cores left idle. Using %s workers.",
+    "Hybrid CPU: %s P-cores, %s E-cores. Using %s workers.": "Hybrid CPU: %s P-cores, %s E-cores. Using %s workers."
 }

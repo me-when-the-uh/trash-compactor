@@ -1,15 +1,10 @@
 import logging
-import os
 import zlib
 import lz4.block
-from collections import deque
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 from ..config import (
-    ENTROPY_MAX_BYTES,
-    ENTROPY_MAX_FILE_BUDGET,
-    ENTROPY_MAX_FILES,
     ENTROPY_SAMPLING_PARAMS,
 )
 
@@ -25,156 +20,6 @@ ENTROPY_TARGET_WINDOW_SIZE = _P.target_window_size
 
 _LZ4_INCOMPRESSIBLE_THRESHOLD = 0.95
 
-
-def sample_directory_entropy(
-    path: Path,
-    max_files: int = ENTROPY_MAX_FILES,
-    chunk_size: Optional[int] = None,
-    max_bytes: int = ENTROPY_MAX_BYTES,
-    *,
-    skip_root_files: bool = False,
-    include_subdirectories: bool = True,
-) -> tuple[Optional[float], int, int, int, list[str], list[str]]:
-    if chunk_size is None:
-        chunk_size = ENTROPY_MAX_FILE_BUDGET
-    if max_files <= 0 or max_bytes <= 0:
-        return None, 0, 0, 0, [], []
-
-    files, root_files_skipped = _select_sample_files(
-        path,
-        max_files=max_files,
-        include_subdirectories=include_subdirectories,
-        skip_root_files=skip_root_files,
-    )
-
-    if not files and skip_root_files and root_files_skipped:
-        return sample_directory_entropy(
-            path,
-            max_files=max_files,
-            chunk_size=chunk_size,
-            max_bytes=max_bytes,
-            skip_root_files=False,
-            include_subdirectories=include_subdirectories,
-        )
-
-    sampled_files = 0
-    sampled_bytes = 0
-    size_weighted_entropy = 0.0
-    size_total = 0
-    lz4_certain_incompressible_files = 0
-    sampled_paths: list[str] = []
-    lz4_certain_paths: list[str] = []
-    total_budget = max_bytes
-
-    for file_path, file_size in files:
-        remaining = total_budget - sampled_bytes
-        if remaining <= 0:
-            break
-
-        per_file_budget = min(get_file_probe_budget(file_size), remaining)
-        if per_file_budget <= 0:
-            break
-
-        file_entropy, file_bytes, lz4_certain = sample_file_entropy(
-            file_path,
-            byte_budget=per_file_budget,
-            file_size=file_size,
-        )
-        if file_bytes == 0:
-            continue
-
-        sampled_files += 1
-        sampled_bytes += file_bytes
-        size_weighted_entropy += (file_entropy / file_bytes) * file_size
-        size_total += file_size
-        sampled_paths.append(str(file_path))
-        if lz4_certain:
-            lz4_certain_incompressible_files += 1
-            lz4_certain_paths.append(str(file_path))
-
-        if sampled_bytes >= total_budget:
-            break
-
-    if size_total == 0:
-        if skip_root_files and root_files_skipped:
-            return sample_directory_entropy(
-                path,
-                max_files=max_files,
-                chunk_size=chunk_size,
-                max_bytes=max_bytes,
-                skip_root_files=False,
-                include_subdirectories=include_subdirectories,
-            )
-        return None, sampled_files, sampled_bytes, lz4_certain_incompressible_files, sampled_paths, lz4_certain_paths
-
-    average_entropy = size_weighted_entropy / size_total
-    return average_entropy, sampled_files, sampled_bytes, lz4_certain_incompressible_files, sampled_paths, lz4_certain_paths
-
-
-def _select_sample_files(
-    root: Path,
-    *,
-    max_files: int,
-    include_subdirectories: bool,
-    skip_root_files: bool,
-) -> tuple[list[tuple[Path, int]], bool]:
-    if max_files <= 0:
-        return [], False
-
-    all_files: list[tuple[int, str, Path]] = []
-    root_files_skipped = False
-
-    pending = deque([root])
-    while pending:
-        current = pending.popleft()
-        try:
-            with os.scandir(current) as it:
-                for entry in it:
-                    try:
-                        if entry.is_dir(follow_symlinks=False):
-                            if include_subdirectories:
-                                pending.append(Path(entry.path))
-                            continue
-
-                        if not entry.is_file(follow_symlinks=False):
-                            continue
-
-                        if skip_root_files and current == root:
-                            root_files_skipped = True
-                            continue
-
-                        try:
-                            file_size = entry.stat().st_size
-                        except OSError:
-                            continue
-
-                        if file_size <= 0:
-                            continue
-
-                        all_files.append((file_size, str(entry.path), Path(entry.path)))
-                    except OSError:
-                        continue
-        except OSError as exc:
-            logging.debug("Unable to inspect %s for entropy: %s", current, exc)
-            continue
-
-    if not all_files:
-        return [], root_files_skipped
-
-    all_files.sort(key=lambda item: (-item[0], item[1]))
-
-    if len(all_files) <= max_files:
-        selected = all_files
-    else:
-        strata = max(1, max_files // 5)
-        top_k = max_files - strata
-        selected = all_files[:top_k]
-        remainder = all_files[top_k:]
-        stride = len(remainder) / strata
-        for j in range(strata):
-            selected.append(remainder[int(j * stride)])
-
-    return [(path, size) for size, _path_key, path in selected], root_files_skipped
 
 def get_sample_window_count(file_size: int) -> int:
     if file_size <= ENTROPY_DYNAMIC_WINDOWS_MIN_FILE_SIZE:
@@ -291,10 +136,15 @@ def _plan_sample_windows(file_size: int, window_size: int, num_windows: int) -> 
             if end > start:
                 raw_windows.append((start, end))
     else:
+        # Spread over [10%, 90%] of the file the way the three-window case
+        # does. Starting at offset 0 reads format headers and under-reports
+        # entropy for exactly the formats worth compressing.
         max_start = max(0, file_size - window_size)
-        step = max_start / (num_windows - 1) if num_windows > 1 else 0.0
+        lo = min(int(file_size * 0.10), max_start)
+        hi = max(min(int(file_size * 0.90), max_start), lo)
+        step = (hi - lo) / (num_windows - 1) if num_windows > 1 else 0.0
         for i in range(num_windows):
-            start = int(i * step)
+            start = int(lo + i * step)
             end = min(start + window_size, file_size)
             if end > start:
                 raw_windows.append((start, end))
@@ -345,3 +195,25 @@ def _compression_probe_entropy(sample: bytes) -> tuple[float, bool]:
     compressed_length = len(compressed) or 1
     ratio = compressed_length / len(sample)
     return max(0.0, min(8.0, ratio * 8.0)), False
+
+
+def _entropy_params():
+    """One fast_walk.EntropyParams per process; the PyO3 object is read-only."""
+    global _ENTROPY_PARAMS
+    if _ENTROPY_PARAMS is None:
+        import fast_walk
+
+        _ENTROPY_PARAMS = fast_walk.EntropyParams(
+            dynamic_windows_min_file_size=_P.dynamic_windows_min_file_size,
+            dynamic_windows_max_file_size=_P.dynamic_windows_max_file_size,
+            huge_windows_file_size=_P.huge_windows_file_size,
+            base_sample_windows=_P.base_sample_windows,
+            dynamic_windows_min=_P.dynamic_windows_min,
+            dynamic_windows_max=_P.dynamic_windows_max,
+            huge_windows_max=_P.huge_windows_max,
+            target_window_size=_P.target_window_size,
+        )
+    return _ENTROPY_PARAMS
+
+
+_ENTROPY_PARAMS = None
