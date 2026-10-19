@@ -3,6 +3,7 @@ import logging
 import os
 import stat
 import subprocess
+import threading
 from dataclasses import dataclass
 from ctypes import wintypes
 from pathlib import Path
@@ -29,6 +30,110 @@ def hidden_startupinfo() -> subprocess.STARTUPINFO:
     startupinfo = subprocess.STARTUPINFO()
     startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     return startupinfo
+
+
+def _system32_directory() -> Optional[str]:
+    """System32 from the API, not from the environment."""
+    try:
+        buffer = ctypes.create_unicode_buffer(260)
+        written = ctypes.windll.kernel32.GetSystemDirectoryW(buffer, len(buffer))
+    except (AttributeError, OSError):
+        return None
+    if written <= 0 or written >= len(buffer):
+        return None
+    return buffer.value
+
+
+def windows_system_executable(name: str) -> str:
+    """System32 path for ``name``, or ``name`` on a non-Windows host"""
+    if os.name != "nt":
+        return name
+    system_dir = _system32_directory()
+    if not system_dir:
+        system_dir = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32")
+    return os.path.join(system_dir, name)
+
+
+def oem_encoding() -> str:
+    """Code page compact.exe uses for its console text"""
+    if os.name != "nt":
+        return "utf-8"
+    try:
+        codepage = int(ctypes.windll.kernel32.GetOEMCP())
+    except (AttributeError, OSError, ValueError):
+        return "utf-8"
+    return f"cp{codepage}"
+
+
+def decode_oem(data: bytes | str | None) -> str:
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    return data.decode(oem_encoding(), errors="replace")
+
+
+def win32_system_message(code: int) -> str:
+    """Localized FormatMessage text for a Win32 error, or ''"""
+    if os.name != "nt" or code <= 0:
+        return ""
+    flags = 0x00001000 | 0x00000200  # FORMAT_MESSAGE_FROM_SYSTEM | IGNORE_INSERTS
+    buffer = ctypes.create_unicode_buffer(512)
+    try:
+        written = ctypes.windll.kernel32.FormatMessageW(
+            flags, None, code, 0, buffer, len(buffer), None
+        )
+    except (AttributeError, OSError):
+        return ""
+    if not written:
+        return ""
+    return buffer.value.strip()
+
+
+_tracked_processes: set[subprocess.Popen] = set()
+_tracked_lock = threading.Lock()
+
+
+def track_process(proc: subprocess.Popen) -> None:
+    with _tracked_lock:
+        _tracked_processes.add(proc)
+
+
+def untrack_process(proc: subprocess.Popen) -> None:
+    with _tracked_lock:
+        _tracked_processes.discard(proc)
+
+
+def kill_process_tree(proc: subprocess.Popen) -> None:
+    """Stop a process and the children it spawned"""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                [windows_system_executable("taskkill.exe"), "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=hidden_startupinfo(),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            logging.debug("taskkill failed for pid %s", proc.pid, exc_info=True)
+    else:
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+def terminate_tracked_processes() -> None:
+    with _tracked_lock:
+        procs = list(_tracked_processes)
+    for proc in procs:
+        kill_process_tree(proc)
 
 
 def normalize_path(path: str | Path) -> str:
@@ -67,7 +172,6 @@ def _fixed_drive_roots() -> tuple[str, ...]:
 
 def _default_excluded_directories() -> tuple[str, ...]:
     system_root = os.environ.get('SystemRoot') or ''
-    system_root_norm = os.path.normcase(os.path.normpath(system_root)) if system_root else ''
 
     def _drive_path(root: str, segment: str) -> str:
         return os.path.join(root, segment)
@@ -75,11 +179,8 @@ def _default_excluded_directories() -> tuple[str, ...]:
     entries: list[str] = []
 
     for drive_root in _fixed_drive_roots():
-        # The active Windows install may live on any fixed drive; always exclude
-        # it, even if SystemDrive does not point at it.
-        windows_root = _drive_path(drive_root, 'Windows')
-        if not system_root_norm or os.path.normcase(os.path.normpath(windows_root)) == system_root_norm:
-            entries.append(windows_root)
+        # A second install at D:\Windows is a Windows tree.
+        entries.append(_drive_path(drive_root, 'Windows'))
 
         # Stale installs: Windows.old is always protected at the drive root, and
         # Windows.old.NNN (e.g. Windows.old.000) via the dotted-prefix entry.

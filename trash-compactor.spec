@@ -51,24 +51,35 @@ _version_info = VSVersionInfo(
 )
 
 
-def _assert_fast_walk_bundled() -> None:
+def _fast_walk_extension():
+    """The compiled extension, from whichever copy of the shim got imported."""
     try:
         import fast_walk as module
-
-        package_dir = Path(module.__file__).resolve().parent
-        if not any(package_dir.glob("fast_walk*.pyd")):
-            raise SystemExit(
-                "fast_walk .pyd not found. Build the wheel first:\n"
-                "  cd fast_walk && maturin build --release\n"
-                "  pip install target/wheels/fast_walk-*.whl --force-reinstall"
-            )
     except ImportError:
-        dll = Path("fast_walk/target/release/fast_walk.dll")
-        if not dll.is_file():
-            raise SystemExit(
-                "fast_walk is not installed and fast_walk/target/release/fast_walk.dll "
-                "is missing. Install the wheel before running PyInstaller."
-            )
+        return None
+
+    path = getattr(module, "EXTENSION_PATH", None)
+    if path and Path(path).is_file():
+        return Path(path)
+
+    # Older shims: the extension may sit next to __init__.py.
+    beside = Path(module.__file__).resolve().parent
+    for artifact in sorted(beside.glob("fast_walk*.pyd")):
+        return artifact
+    return None
+
+
+def _assert_fast_walk_bundled() -> None:
+    if _fast_walk_extension() is not None:
+        return
+    dll = Path("fast_walk/target/release/fast_walk.dll")
+    if dll.is_file():
+        return
+    raise SystemExit(
+        "fast_walk extension not found. Build the wheel first:\n"
+        "  cd fast_walk && maturin build --release\n"
+        "  pip install target/wheels/fast_walk-*.whl --force-reinstall"
+    )
 
 
 _assert_fast_walk_bundled()
@@ -81,7 +92,8 @@ a = Analysis(
         ('locales', 'locales'),
         ('src/gui/ui', 'src/gui/ui'),
     ],
-    hiddenimports=['fast_walk', 'fast_walk.fast_walk'],
+    # fast_walk.fast_walk is a bundled binary, not an importable module.
+    hiddenimports=['fast_walk'],
     hookspath=['hooks'],
     hooksconfig={},
     runtime_hooks=['hooks/rthook_fast_walk.py'],

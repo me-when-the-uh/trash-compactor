@@ -70,8 +70,8 @@ class GuiBridge:
     def take_for_dispatch(self) -> list[dict[str, Any]]:
         """Drain coalesced slots then the discrete FIFO.
 
-        Progress and summaries go first so a trailing ``Stopped`` still sees
-        the final totals in the same batch.
+        Progress and summaries go first. A trailing ``Stopped`` then sees the
+        final totals in the same batch.
         """
         with self._lock:
             items: list[dict[str, Any]] = []

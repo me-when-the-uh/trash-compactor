@@ -8,7 +8,7 @@ from . import config
 from .i18n import _
 
 FLAG_METADATA: dict[str, tuple[str, str]] = {
-    'verbose': ('-v', 'Set verbosity level (-v/-vvv); repeat same level to disable'),
+    'verbose': ('-v', 'Set verbosity level (-v/-vvv). Repeat the same level to disable'),
     'no_lzx': ('-x', 'Disable LZX compression'),
     'force_lzx': ('-f', 'Force LZX compression'),
     'dry_run': ('-d', 'Dry-run entropy analysis'),

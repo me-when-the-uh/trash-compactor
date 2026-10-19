@@ -35,7 +35,7 @@ workdir/
 htmlcov/
 .coverage
 .pytest_cache/
+tests/*
 
 # Rust build artifacts
 fast_walk/target
-fast_walk/Cargo.lock

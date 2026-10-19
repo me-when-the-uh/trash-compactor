@@ -1,9 +1,10 @@
 """Native acceleration module for trash-compactor (PyO3 extension).
 
 The compiled extension (``fast_walk*.pyd``) provides the parallel directory
-walk and entropy probing.  It is built with ``maturin`` and installed into
-site-packages; this re-export also keeps development runs working when the
-repository itself is on ``sys.path``.
+walk and entropy probing. It is built with ``maturin`` and installed into
+site-packages. This re-export keeps development runs working when the
+repository itself is on ``sys.path``. The extension's public names are
+re-exported here and ``EXTENSION_PATH`` is the file that got loaded.
 """
 
 import importlib.util
@@ -37,8 +38,8 @@ def _find_extension():
     return None
 
 
-_ext_path = _find_extension()
-if _ext_path is None:
+EXTENSION_PATH = _find_extension()
+if EXTENSION_PATH is None:
     raise ImportError(
         "fast_walk native module not found. Build and install it first:\n"
         "  cd fast_walk && maturin build --release\n"
@@ -47,12 +48,13 @@ if _ext_path is None:
 
 # The extension exports PyInit_fast_walk, so the loader must see the module
 # named exactly "fast_walk".  Load it under that name and stash it privately.
-_spec = importlib.util.spec_from_file_location("fast_walk", _ext_path)
+_spec = importlib.util.spec_from_file_location("fast_walk", EXTENSION_PATH)
 _ext = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_ext)
 sys.modules["fast_walk._native"] = _ext
 
-for _name in ("DirEntropyResult", "EntropyParams", "WalkIter", "probe_directories_parallel", "walk_and_filter"):
-    globals()[_name] = getattr(_ext, _name)
+for _name in dir(_ext):
+    if not _name.startswith("_"):
+        globals()[_name] = getattr(_ext, _name)
 
-del _name, _ext, _ext_path, _spec, _find_extension
+del _name, _ext, _spec, _find_extension

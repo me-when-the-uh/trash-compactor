@@ -10,7 +10,7 @@ from colorama import Fore, Style
 from . import config, benchmark
 from .console import EscapeExit, _interactive_console, announce_cancelled, cprint, read_user_input
 from .drive_inspector import DRIVE_FIXED, DRIVE_REMOTE, get_volume_details
-from .file_utils import hidden_startupinfo, sanitize_path
+from .file_utils import hidden_startupinfo, sanitize_path, windows_system_executable
 from .launch_flags import (
     FLAG_HELP_COMMANDS,
     LaunchState,
@@ -35,7 +35,7 @@ def pick_directory_dialog() -> Optional[str]:
     }
     """
     
-    cmd = ["powershell", "-NoProfile", "-Command", ps_script]
+    cmd = [windows_system_executable("powershell.exe"), "-NoProfile", "-Command", ps_script]
 
     try:
         result = subprocess.run(
@@ -48,10 +48,10 @@ def pick_directory_dialog() -> Optional[str]:
         )
         path = result.stdout.strip()
         if not path:
-            print(Fore.YELLOW + _("Folder picker returned no selection; you can type a path instead.") + Style.RESET_ALL)
+            print(Fore.YELLOW + _("Folder picker returned no selection. You can type a path instead.") + Style.RESET_ALL)
         return path if path else None
     except FileNotFoundError:
-        print(Fore.YELLOW + _("PowerShell is required for the folder picker; type a path instead.") + Style.RESET_ALL)
+        print(Fore.YELLOW + _("PowerShell is required for the folder picker. Type a path instead.") + Style.RESET_ALL)
         return None
 
 
@@ -126,7 +126,7 @@ def confirm_hdd_usage(directory: str, force_serial: bool, *, yes: bool = False) 
 
     if details.drive_type != DRIVE_FIXED:
         logging.info(
-            _("Volume %s is not a fixed disk (type=%s); skipping HDD warning."),
+            _("Volume %s is not a fixed disk (type=%s). Skipping the HDD warning."),
             target_label,
             details.drive_type,
         )
@@ -141,7 +141,7 @@ def confirm_hdd_usage(directory: str, force_serial: bool, *, yes: bool = False) 
     if details.rotational is not True:
         if details.rotational is None:
             logging.debug(
-                _("Drive %s did not report seek penalty; treating as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag. method=%s media=%s"),
+                _("Drive %s did not report seek penalty and is treated as non-HDD. Flash controllers such as eMMC and SD readers may often omit this flag. method=%s media=%s"),
                 target_label,
                 getattr(details, 'detection_method', ''),
                 getattr(details, 'media_type', None),
@@ -162,12 +162,12 @@ def confirm_hdd_usage(directory: str, force_serial: bool, *, yes: bool = False) 
         if yes:
             logging.info(
                 "Non-interactive console: proceeding on HDD %s with --yes override "
-                "(no single-worker prompt; using existing single-worker setting).",
+                "(no single-worker prompt. The existing single-worker setting applies).",
                 target_label,
             )
         else:
             logging.warning(
-                "Non-interactive console detected; refusing to run on HDD %s without --yes. "
+                "Non-interactive console detected. Refusing to run on HDD %s without --yes. "
                 "Re-run with --yes to override.",
                 target_label,
             )
@@ -193,7 +193,7 @@ def confirm_hdd_usage(directory: str, force_serial: bool, *, yes: bool = False) 
                 return False
             throttle_requested = throttle_response in {"", "y", "yes"}
 
-    from .workers import set_hdd_mode, set_worker_cap
+    from .workers import set_hdd_mode
     set_hdd_mode(True)
     logging.info(_("HDD mode engaged for %s: sequential scan/entropy/compression, smaller batches."), target_label)
     if throttle_requested:
@@ -202,14 +202,13 @@ def confirm_hdd_usage(directory: str, force_serial: bool, *, yes: bool = False) 
         if not force_serial:
             print(Fore.YELLOW + _("Running sequentially to keep fragmentation in check.") + Style.RESET_ALL)
     else:
-        print(Fore.YELLOW + _("HDD mode: scanning, entropy sampling, and compression all run sequentially so the disk head moves in order instead of jumping.") + Style.RESET_ALL)
+        print(Fore.YELLOW + _("HDD mode: scanning, entropy sampling, and compression all run sequentially to keep the disk head moving in order instead of jumping.") + Style.RESET_ALL)
 
     print(Fore.YELLOW + _("\nProceeding with compression on HDD. This may impact system performance.") + Style.RESET_ALL)
     return True
 
 
 def print_defrag_hint(compressed_files: int) -> None:
-    """Suggest defragmenting after compression on a spinning drive."""
     from .workers import hdd_mode
 
     if hdd_mode() and compressed_files > 0:

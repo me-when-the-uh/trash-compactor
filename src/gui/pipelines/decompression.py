@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ...compression.compression_executor import execute_decompression_plan
-from ...compression.file_scan import CAT_ALREADY_COMPRESSED, iter_files
+from ...compression.file_scan import CAT_ALREADY_COMPRESSED, CAT_ERROR, iter_files
 from ...exclusions import add_user_exclusion, load_persisted_exclusions
 from ...i18n import _
 from ...stats import CompressionStats
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from ..backend import GuiBackend
 
 FILE_ATTRIBUTE_COMPRESSED = getattr(stat, "FILE_ATTRIBUTE_COMPRESSED", 0x800)
+FILE_ATTRIBUTE_SPARSE_FILE = getattr(stat, "FILE_ATTRIBUTE_SPARSE_FILE", 0x200)
 
 
 def run_decompression_pipeline(backend: "GuiBackend", *, add_exclusion: bool = True) -> None:
@@ -52,10 +53,14 @@ def run_decompression_pipeline(backend: "GuiBackend", *, add_exclusion: bool = T
         processed += 1
         if processed % SCAN_STOP_CHECK_EVERY_FILES == 0:
             backend._check_pause_stop()
-        if (
+        if category == CAT_ERROR:
+            stats.record_error(_("Error processing {file_path}").format(file_path=path))
+        elif (
             category == CAT_ALREADY_COMPRESSED
             or attributes & FILE_ATTRIBUTE_COMPRESSED
-            or 0 < hint < size
+            # A sparse file stores fewer bytes than it reports, and it has
+            # nothing to decompress.
+            or (0 < hint < size and not attributes & FILE_ATTRIBUTE_SPARSE_FILE)
         ):
             compressed.append((path, size))
 
@@ -90,8 +95,12 @@ def run_decompression_pipeline(backend: "GuiBackend", *, add_exclusion: bool = T
     done = [0]
     exec_start = time.perf_counter()
 
-    def _on_progress(_path: Path, _ok: bool) -> None:
+    def _on_progress(path: Path, ok: bool) -> None:
         backend._check_pause_stop()
+        if ok:
+            stats.decompressed_files += 1
+        else:
+            stats.record_error(_("Failed to decompress {path}").format(path=path))
         done[0] += 1
         n = done[0]
         if n % 4 != 0 and n != total:
@@ -121,4 +130,8 @@ def run_decompression_pipeline(backend: "GuiBackend", *, add_exclusion: bool = T
         else:
             backend._send(ExclusionsResponse(paths=load_persisted_exclusions()))
 
-    backend._send_progress(_("Decompression complete"), 0.0, final=True, decompressing=True)
+    if stats.error_count:
+        done_text = _("Finished with {count} errors").format(count=stats.error_count)
+    else:
+        done_text = _("Decompression complete")
+    backend._send_progress(done_text, 0.0, final=True, decompressing=True)

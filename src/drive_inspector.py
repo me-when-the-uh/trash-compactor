@@ -196,7 +196,6 @@ def _probe_volume_details(path: str) -> VolumeDetails:
                 bus_type = bt
                 if meth:
                     detection_method = meth if not detection_method else detection_method + '+' + meth
-            # fallback
             if media_type is None:
                 mt2, ss2, bt2, meth2 = inspector._powershell_physical_disk_info()
                 if mt2 is not None:
@@ -222,7 +221,7 @@ def is_hard_drive(drive_path: str) -> bool:
 
     if details.drive_type != DRIVE_FIXED:
         logging.debug(
-            "Volume %s reports drive type %s; treating as non-HDD",
+            "Volume %s reports drive type %s. Treating as non-HDD",
             details.drive_letter or drive_path,
             details.drive_type,
         )
@@ -257,7 +256,7 @@ class DriveInspector:
         self.conn = None
         self._disk_number: Optional[int] = None
         if wmi is None:
-            logging.debug("wmi module not installed; skipping WMI drive inspection for %s", drive_letter)
+            logging.debug("wmi module not installed. Skipping WMI drive inspection for %s", drive_letter)
             return
         try:
             self.conn = wmi.WMI()
@@ -449,7 +448,7 @@ class DriveInspector:
                 storage_conn = self.conn  # may not have class, will fail gracefully
             for pd in storage_conn.MSFT_PhysicalDisk():
                 try:
-                    # DeviceId or FriendlyName may contain number; match by number in DeviceId
+                    # FriendlyName can carry a number too. Match inside DeviceId only.
                     dev = getattr(pd, 'DeviceId', '') or ''
                     if str(disk_number) in str(dev):
                         mt = getattr(pd, 'MediaType', None)
@@ -475,15 +474,19 @@ class DriveInspector:
     def _powershell_physical_disk_info(self) -> tuple[Optional[int], Optional[int], Optional[str], str]:
         """Fallback using built-in PowerShell Get-PhysicalDisk (no extra deps). Parses for matching disk number (or first if unknown)."""
         import subprocess
+
+        from .file_utils import windows_system_executable
+
         disk_number = self._physical_disk_number()
+        powershell = windows_system_executable("powershell.exe")
         try:
             if disk_number is not None:
                 ps_cmd = [
-                    'powershell', '-NoProfile', '-Command',
+                    powershell, '-NoProfile', '-Command',
                     f'Get-PhysicalDisk | Where-Object {{ $_.DeviceId -eq {disk_number} -or $_.FriendlyName -match "{disk_number}" }} | Select-Object FriendlyName,MediaType,BusType,SpindleSpeed,DeviceId | ConvertTo-Json -Compress'
                 ]
             else:
-                ps_cmd = ['powershell', '-NoProfile', '-Command', 'Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType,SpindleSpeed,DeviceId | ConvertTo-Json -Compress']
+                ps_cmd = [powershell, '-NoProfile', '-Command', 'Get-PhysicalDisk | Select-Object FriendlyName,MediaType,BusType,SpindleSpeed,DeviceId | ConvertTo-Json -Compress']
             cf = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
             res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=5, creationflags=cf)
             out = (res.stdout or '').strip()

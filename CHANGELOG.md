@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.8.2] - 2026-10-18
+
+### Fixed
+- A whole bunch of bugs
+- Stopping the compression drops the queued files
+
+### Changed
+- A whole bunch of subpar functions that were causing various issues
+- Python 3.13 is now the preferred version - though 3.11 is still accepted
+- Build script made more verbose `%TEMP%\tc-pip.log`, `tc-maturin.log`, `tc-pyinstaller.log`, and `tc-build-verify.log`.
+- Updated dependencies
+
 ## [v0.8.1] - 2026-09-17
 
 ### Added 

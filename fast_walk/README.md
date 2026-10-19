@@ -21,7 +21,7 @@ The wheel install is **mandatory** for source runs: `fast_walk/__init__.py` in t
 ## What it does
 
 - **`walk_and_filter`** - parallel directory walk (rayon) with inline extension/size/already-compressed classification and algorithm precompute. Replaces the old Python `os.scandir` walk + `_scan_path_fast` check phases.
-- **`probe_directories_parallel`** - parallel entropy probing (rayon + LZ4 short-circuit + zlib level 2, mmap for large files). Replaces the old `ProcessPoolExecutor` entropy path.
+- **`probe_directories_parallel`** - parallel entropy probing (rayon + LZ4 short-circuit + zlib level 2, positioned reads). Replaces the old `ProcessPoolExecutor` entropy path.
 
 Entropy sampling budgets are configured in `src/config.py` (`ENTROPY_MAX_FILES`, `ENTROPY_MAX_BYTES`).
 

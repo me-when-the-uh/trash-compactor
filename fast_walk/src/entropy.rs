@@ -3,7 +3,8 @@ use flate2::Compression;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 use rayon::ThreadPoolBuilder;
-use std::fs::File;
+use std::collections::HashSet;
+use std::fs::{File, Metadata};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -11,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 const LZ4_INCOMPRESSIBLE_THRESHOLD: f64 = 0.95;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct EntropyParams {
     #[pyo3(get)]
@@ -59,7 +60,7 @@ impl EntropyParams {
     }
 }
 
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct DirEntropyResult {
     #[pyo3(get)]
@@ -135,8 +136,8 @@ impl SampleSelection {
         }
     }
 
-    /// Top ``strata`` slots for the deterministic largest files; the rest is a
-    /// regular stride over the remainder. Mirrors the old full-list behaviour.
+    /// Top ``strata`` slots for the deterministic largest files. The rest is a
+    /// regular stride over the remainder.
     fn finalize(mut self) -> Vec<(String, u64)> {
         if self.entries.len() <= self.max_files {
             return self
@@ -163,12 +164,41 @@ impl SampleSelection {
     }
 }
 
-/// Walk ``root`` once, feeding files into ``selection``; returns subdirs so
-/// the caller can keep walking.
+fn sample_candidate(
+    path: &Path,
+    metadata: &Metadata,
+    skip_ext: &HashSet<String>,
+    min_size: u64,
+) -> Option<(String, u64)> {
+    if !metadata.is_file() {
+        return None;
+    }
+    let size = metadata.len();
+    if size == 0 || size < min_size {
+        return None;
+    }
+    let attrs = super::file_attributes(metadata);
+    if super::is_cloud_placeholder(attrs)
+        || super::is_sparse(attrs)
+        || attrs & super::FILE_ATTRIBUTE_COMPRESSED != 0
+    {
+        return None;
+    }
+    let name = path.file_name()?;
+    if super::skip_extension_name(name, skip_ext) {
+        return None;
+    }
+    Some((path.to_string_lossy().into_owned(), size))
+}
+
+/// Walk ``root`` once, feeding files into ``selection``. Returns the subdirs
+/// for the caller to keep walking.
 fn scan_dir_into_selection(
     dir: &Path,
     selection: &mut SampleSelection,
     subdirs: &mut Vec<PathBuf>,
+    skip_ext: &HashSet<String>,
+    min_size: u64,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -181,14 +211,9 @@ fn scan_dir_into_selection(
             subdirs.push(entry.path());
             continue;
         }
-        if !metadata.is_file() {
-            continue;
+        if let Some((path, size)) = sample_candidate(&entry.path(), &metadata, skip_ext, min_size) {
+            selection.consider(path, size);
         }
-        let size = metadata.len();
-        if size == 0 {
-            continue;
-        }
-        selection.consider(entry.path().to_string_lossy().into_owned(), size);
     }
 }
 
@@ -197,6 +222,8 @@ fn collect_sample_selection(
     max_files: u32,
     include_subdirectories: bool,
     breadth_first: bool,
+    skip_ext: &HashSet<String>,
+    min_size: u64,
 ) -> Vec<(String, u64)> {
     let mut selection = SampleSelection::new(max_files);
     let mut pending: Vec<PathBuf> = vec![root.to_path_buf()];
@@ -212,7 +239,7 @@ fn collect_sample_selection(
         };
 
         let mut subdirs: Vec<PathBuf> = Vec::new();
-        scan_dir_into_selection(&dir, &mut selection, &mut subdirs);
+        scan_dir_into_selection(&dir, &mut selection, &mut subdirs, skip_ext, min_size);
         if include_subdirectories {
             pending.extend(subdirs);
         }
@@ -221,16 +248,23 @@ fn collect_sample_selection(
     selection.finalize()
 }
 
-fn collect_sample_selection_parallel(root: &Path, max_files: u32) -> Vec<(String, u64)> {
+fn collect_sample_selection_parallel(
+    root: &Path,
+    max_files: u32,
+    skip_ext: &HashSet<String>,
+    min_size: u64,
+) -> Vec<(String, u64)> {
     let stack: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(vec![root.to_path_buf()]));
     let pending = Arc::new(AtomicUsize::new(1));
     let shared: Arc<Mutex<SampleSelection>> = Arc::new(Mutex::new(SampleSelection::new(max_files)));
 
+    let skip_ext = skip_ext.clone();
     rayon::scope(|s| {
         for _ in 0..rayon::current_num_threads().max(1) {
             let stack = Arc::clone(&stack);
             let pending = Arc::clone(&pending);
             let shared = Arc::clone(&shared);
+            let skip_ext = skip_ext.clone();
             s.spawn(move |_| {
                 let mut local = SampleSelection::new(max_files);
                 loop {
@@ -265,14 +299,11 @@ fn collect_sample_selection_parallel(root: &Path, max_files: u32) -> Vec<(String
                             new_dirs.push(entry.path());
                             continue;
                         }
-                        if !metadata.is_file() {
-                            continue;
+                        if let Some((path, size)) =
+                            sample_candidate(&entry.path(), &metadata, &skip_ext, min_size)
+                        {
+                            local.consider(path, size);
                         }
-                        let size = metadata.len();
-                        if size == 0 {
-                            continue;
-                        }
-                        local.consider(entry.path().to_string_lossy().into_owned(), size);
                     }
 
                     if !new_dirs.is_empty() {
@@ -449,8 +480,8 @@ fn probe_file(params: &EntropyParams, path: &str, file_size: u64, byte_budget: u
         return (0.0, 0, false);
     }
 
-    // A panic (e.g. an lz4/mmap edge case) must not poison the rayon batch:
-    // degrade to "no sample" so the directory is just skipped by the entropy
+    // A panic (e.g. an lz4/mmap edge case) must not poison the rayon batch.
+    // Fall back to "no sample". The directory is then skipped by the entropy
     // gate, exactly like a file that failed to open.
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| probe_file_inner(params, path, file_size, byte_budget)))
         .unwrap_or((0.0, 0, false))
@@ -517,12 +548,21 @@ fn probe_one_directory(
     include_subdirectories: bool,
     breadth_first: bool,
     collect_paths: bool,
+    skip_ext: &HashSet<String>,
+    min_size: u64,
 ) -> DirEntropyResult {
     let root = Path::new(dir);
     let sampled_list = if !breadth_first && include_subdirectories {
-        collect_sample_selection_parallel(root, max_files)
+        collect_sample_selection_parallel(root, max_files, skip_ext, min_size)
     } else {
-        collect_sample_selection(root, max_files, include_subdirectories, breadth_first)
+        collect_sample_selection(
+            root,
+            max_files,
+            include_subdirectories,
+            breadth_first,
+            skip_ext,
+            min_size,
+        )
     };
 
     let mut outcomes: Vec<FileProbeOutcome> = Vec::new();
@@ -639,7 +679,7 @@ fn fire_progress(
     let Some(cb) = callback else {
         return true;
     };
-    Python::with_gil(|py| cb.call1(py, (dir, completed, total, sampled_files)).is_ok())
+    Python::attach(|py| cb.call1(py, (dir, completed, total, sampled_files)).is_ok())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -658,13 +698,85 @@ fn maybe_fire_progress(
     }
     let _guard = progress_lock.lock().unwrap_or_else(|e| e.into_inner());
     if !fire_progress(callback, dir, completed, total, sampled_files) {
-        // The Python callback raised (GUI stop); abandon the remaining dirs.
+        // A raised Python callback is a GUI stop. Abandon the remaining
+        // directories.
         cancelled.store(true, Ordering::Release);
     }
 }
 
+/// Probe one directory's candidate files, largest first, bounded by
+/// ``max_bytes``. Returns the paths where every sampled window hit the LZ4
+/// gate.
+fn probe_candidate_group(
+    params: &EntropyParams,
+    files: &[(String, u64)],
+    max_bytes: u64,
+) -> Vec<String> {
+    let mut certain: Vec<String> = Vec::new();
+    let mut remaining = max_bytes;
+    for (path, size) in files {
+        if remaining == 0 {
+            break;
+        }
+        let budget = get_file_probe_budget(params, *size).min(remaining);
+        if budget == 0 {
+            break;
+        }
+        let (_entropy, sampled_bytes, lz4_certain) = probe_file(params, path, *size, budget);
+        // A failed open read nothing and spends nothing.
+        if sampled_bytes == 0 {
+            continue;
+        }
+        remaining = remaining.saturating_sub(sampled_bytes);
+        if lz4_certain {
+            certain.push(path.clone());
+        }
+    }
+    certain
+}
+
 #[pyfunction]
-#[pyo3(signature = (params, dirs, max_files, max_bytes, chunk_size, include_subdirectories, workers, collect_paths, progress_callback=None))]
+#[pyo3(signature = (params, groups, max_bytes, workers=1))]
+pub fn probe_candidate_files_parallel(
+    py: Python<'_>,
+    params: EntropyParams,
+    groups: Vec<Vec<(String, u64)>>,
+    max_bytes: u64,
+    workers: usize,
+) -> PyResult<Vec<String>> {
+    if groups.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // One worker = sequential probing in discovery order (HDD mode).
+    if workers <= 1 {
+        let results: Vec<String> = py.detach(|| {
+            groups
+                .iter()
+                .flat_map(|files| probe_candidate_group(&params, files, max_bytes))
+                .collect()
+        });
+        return Ok(results);
+    }
+
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(workers.max(1))
+        .build()
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let results: Vec<String> = py.detach(|| {
+        pool.install(|| {
+            groups
+                .par_iter()
+                .flat_map_iter(|files| probe_candidate_group(&params, files, max_bytes))
+                .collect()
+        })
+    });
+    Ok(results)
+}
+
+#[pyfunction]
+#[pyo3(signature = (params, dirs, max_files, max_bytes, chunk_size, include_subdirectories, workers, collect_paths, progress_callback=None, skip_extensions=None, min_file_size=8192))]
 pub fn probe_directories_parallel(
     py: Python<'_>,
     params: EntropyParams,
@@ -676,6 +788,8 @@ pub fn probe_directories_parallel(
     workers: usize,
     collect_paths: bool,
     progress_callback: Option<Py<PyAny>>,
+    skip_extensions: Option<Vec<String>>,
+    min_file_size: u64,
 ) -> PyResult<Vec<DirEntropyResult>> {
     if dirs.is_empty() {
         return Ok(Vec::new());
@@ -686,12 +800,18 @@ pub fn probe_directories_parallel(
     let progress_lock = Arc::new(Mutex::new(()));
     let progress_interval = (total / 32).max(1);
     let cancelled = Arc::new(AtomicBool::new(false));
+    // Same folding as the walker: ".jpg" and "JPG" both match a .jpg name.
+    let skip_ext: HashSet<String> = skip_extensions
+        .unwrap_or_default()
+        .into_iter()
+        .map(|ext| ext.strip_prefix('.').unwrap_or(&ext).to_lowercase())
+        .collect();
 
     // One worker = sequential probing in discovery order (HDD mode). Parallel
     // probes would scatter the disk head across directories and files, which
     // on a spinning drive costs far more IOPS than it gains.
     if workers <= 1 {
-        let results: Vec<DirEntropyResult> = py.allow_threads(|| {
+        let results: Vec<DirEntropyResult> = py.detach(|| {
             let mut results = Vec::with_capacity(total);
             for (done, dir) in dirs.iter().enumerate() {
                 if cancelled.load(Ordering::Acquire) {
@@ -706,6 +826,8 @@ pub fn probe_directories_parallel(
                     include_subdirectories,
                     true,
                     collect_paths,
+                    &skip_ext,
+                    min_file_size,
                 );
                 let sampled_files = result.sampled_files;
                 results.push(result);
@@ -730,7 +852,7 @@ pub fn probe_directories_parallel(
         .build()
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
-    let results: Vec<DirEntropyResult> = py.allow_threads(|| {
+    let results: Vec<DirEntropyResult> = py.detach(|| {
         pool.install(|| {
             let result_slots: Vec<Arc<Mutex<Option<DirEntropyResult>>>> = (0..dirs.len())
                 .map(|_| Arc::new(Mutex::new(None)))
@@ -750,6 +872,8 @@ pub fn probe_directories_parallel(
                     include_subdirectories,
                     false,
                     collect_paths,
+                    &skip_ext,
+                    min_file_size,
                 );
                 let sampled_files = result.sampled_files;
                 *result_slots[dir_index].lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
@@ -781,6 +905,7 @@ pub fn register_entropy_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<DirEntropyResult>()?;
     m.add_class::<EntropyParams>()?;
     m.add_function(wrap_pyfunction!(probe_directories_parallel, m)?)?;
+    m.add_function(wrap_pyfunction!(probe_candidate_files_parallel, m)?)?;
     Ok(())
 }
 
@@ -815,6 +940,42 @@ mod tests {
         assert_eq!(a.entries.len(), 5);
         let sizes: Vec<u64> = a.entries.iter().map(|(s, _)| *s).collect();
         assert_eq!(sizes, vec![9, 8, 7, 6, 5]);
+    }
+
+    #[test]
+    fn candidate_group_probe_flags_random_data_only() {
+        let dir = std::env::temp_dir().join("fast_walk_candidate_probe_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let random = dir.join("random.bin");
+        let text = dir.join("text.txt");
+
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut data = Vec::with_capacity(64 * 1024);
+        for _ in 0..64 * 1024 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            data.push((state >> 33) as u8);
+        }
+        std::fs::write(&random, &data).unwrap();
+        std::fs::write(&text, b"repeat me ".repeat(8000)).unwrap();
+
+        let params = EntropyParams {
+            dynamic_windows_min_file_size: 2 * 1024 * 1024,
+            dynamic_windows_max_file_size: 100 * 1024 * 1024,
+            huge_windows_file_size: 256 * 1024 * 1024,
+            base_sample_windows: 3,
+            dynamic_windows_min: 4,
+            dynamic_windows_max: 20,
+            huge_windows_max: 40,
+            target_window_size: 16 * 1024,
+        };
+        let files = vec![
+            (random.to_string_lossy().into_owned(), 64 * 1024),
+            (text.to_string_lossy().into_owned(), 80_000),
+        ];
+        let hits = probe_candidate_group(&params, &files, 8 * 1024 * 1024);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].ends_with("random.bin"));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

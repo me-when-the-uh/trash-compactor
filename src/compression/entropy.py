@@ -4,6 +4,7 @@ import lz4.block
 from pathlib import Path
 from typing import Optional
 
+from ..i18n import _
 from ..config import (
     ENTROPY_SAMPLING_PARAMS,
 )
@@ -19,6 +20,43 @@ ENTROPY_HUGE_WINDOWS_MAX = _P.huge_windows_max
 ENTROPY_TARGET_WINDOW_SIZE = _P.target_window_size
 
 _LZ4_INCOMPRESSIBLE_THRESHOLD = 0.95
+
+
+_NATIVE_WARNED: set[str] = set()
+
+
+def native_entry_point(name: str):
+    """The loaded extension's named attribute, or None when it is missing."""
+    try:
+        import fast_walk
+    except Exception:
+        return None
+    entry = getattr(fast_walk, name, None)
+    if callable(entry):
+        return entry
+    if name not in _NATIVE_WARNED:
+        _NATIVE_WARNED.add(name)
+        logging.warning(
+            "fast_walk at %s is older than this source tree: no %s. Rebuild it with "
+            "maturin build --release and pip install --force-reinstall "
+            "target/wheels/fast_walk-*.whl",
+            getattr(fast_walk, "EXTENSION_PATH", "?"),
+            name,
+        )
+    return None
+
+
+def required_native_entry_point(name: str):
+    """The named attribute, or ImportError with the rebuild command."""
+    entry = native_entry_point(name)
+    if entry is None:
+        raise ImportError(
+            _(
+                "The fast_walk extension is out of date ({name} is missing). "
+                "Rebuild it (build.ps1) or reinstall the wheel, then try again."
+            ).format(name=name)
+        )
+    return entry
 
 
 def get_sample_window_count(file_size: int) -> int:
@@ -152,7 +190,6 @@ def _plan_sample_windows(file_size: int, window_size: int, num_windows: int) -> 
     if not raw_windows:
         return []
 
-    # Merge overlaps
     raw_windows.sort()
     merged = []
     current_start, current_end = raw_windows[0]
@@ -174,9 +211,9 @@ def _compression_probe_entropy(sample: bytes) -> tuple[float, bool]:
     if not sample:
         return 0.0, False
 
-    # LZ4 is ~5-10x faster than zlib.
-    # if LZ4 can't compress the sample meaningfully, zlib won't either,
-    # so both algorithms agree on incompressible data w/ entropy ≈ 8.0
+    # LZ4 is ~5-10x faster than zlib. If LZ4 cannot compress the sample
+    # meaningfully, zlib will not either, and both agree on incompressible
+    # data with entropy ≈ 8.0.
     try:
         lz4_len = len(lz4.block.compress(sample, store_size=False))
         if lz4_len / len(sample) >= _LZ4_INCOMPRESSIBLE_THRESHOLD:
@@ -198,12 +235,12 @@ def _compression_probe_entropy(sample: bytes) -> tuple[float, bool]:
 
 
 def _entropy_params():
-    """One fast_walk.EntropyParams per process; the PyO3 object is read-only."""
+    """One fast_walk.EntropyParams per process. The PyO3 object is read-only."""
     global _ENTROPY_PARAMS
     if _ENTROPY_PARAMS is None:
-        import fast_walk
+        params = required_native_entry_point("EntropyParams")
 
-        _ENTROPY_PARAMS = fast_walk.EntropyParams(
+        _ENTROPY_PARAMS = params(
             dynamic_windows_min_file_size=_P.dynamic_windows_min_file_size,
             dynamic_windows_max_file_size=_P.dynamic_windows_max_file_size,
             huge_windows_file_size=_P.huge_windows_file_size,

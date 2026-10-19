@@ -993,7 +993,6 @@ li {
   display: inline-block;
 }
 
-/* legacy label reset; our settings use explicit classes */
 label {
   display: block;
   margin: 0;

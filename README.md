@@ -349,7 +349,7 @@ The cache is loaded into memory when the program is started. New high-entropy en
 
 ### Native Rust engine
 
-The two hottest phases - walking and entropy probing - are extracted into a small Rust crate, `fast_walk`, exposed to Python via PyO3. It uses **rayon** for parallelism and **mmap** for large files, and streams results back to Python as small batches. The GUI stays responsive without buffering an entire multi-gigabyte tree in memory. Measured effects: higher absolute throughput *and* lower RAM residency.
+The two hottest phases - walking and entropy probing - are extracted into a small Rust crate, `fast_walk`, exposed to Python via PyO3. It uses **rayon** for parallelism and positioned reads for sample windows, and streams results back to Python as small batches. The GUI stays responsive without buffering an entire multi-gigabyte tree in memory. Measured effects: higher absolute throughput *and* lower RAM residency.
 
 > **If you're a packager:** the wheel is *mandatory* for source runs. `fast_walk/__init__.py` re-exports the native module from site-packages and raises an error with build instructions when the wheel is missing.
 
@@ -427,6 +427,8 @@ To contribute to this project:
 | `7` | Frozen executable verification failed |
 
 Run it with `powershell -ExecutionPolicy Bypass -File build.ps1` - or skip the verification with `-SkipVerify` if you're feeling reckless.
+
+Every step writes its full output to a log in `%TEMP%` (`tc-pip.log`, `tc-maturin.log`, `tc-pyinstaller.log`, and `tc-build-verify.log` for the frozen-executable check). When a step fails, the script prints the error lines from its log, the tail of the log, and the log path before it exits with the code above.
 
 ### Like this project?
 

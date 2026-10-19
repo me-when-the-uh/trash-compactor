@@ -75,6 +75,35 @@ def build_analysis_timing(
     )
 
 
+def _analysis_projection(
+    stats: CompressionStats,
+    projected_compressed: int,
+    *,
+    current_size_on_disk: int,
+    total_compressible_size: int,
+    already_compressed_physical_size: int,
+    excluded_logical_size: int,
+) -> dict:
+    projected_compressible_size = total_compressible_size
+    if projected_compressed > 0:
+        projected_compressible_size = max(
+            0,
+            projected_compressed - stats.total_skipped_physical_size,
+        )
+    if stats.total_on_disk_size > 0:
+        logical_savings = max(0, total_compressible_size - projected_compressible_size)
+        projected_on_disk_size = max(0, current_size_on_disk - logical_savings)
+    else:
+        projected_on_disk_size = (
+            already_compressed_physical_size + excluded_logical_size + projected_compressible_size
+        )
+    return {
+        "projected_on_disk_size": projected_on_disk_size,
+        "potential_savings_bytes": max(0, current_size_on_disk - projected_on_disk_size),
+        "compressible_physical_size": projected_compressible_size,
+    }
+
+
 def make_stats_summary(
     stats: CompressionStats,
     plan_count: int,
@@ -100,27 +129,29 @@ def make_stats_summary(
                 already_compressed_physical_size + excluded_logical_size + total_compressible_size
             )
 
-        if lzx_enabled:
-            projected_compressed = stats.entropy_projected_size
-        else:
-            projected_compressed = stats.entropy_projected_size_conservative
-
-        projected_compressible_size = total_compressible_size
-        if projected_compressed > 0:
-            projected_compressible_size = max(
-                0,
-                projected_compressed - stats.total_skipped_physical_size,
-            )
-
-        if stats.total_on_disk_size > 0:
-            logical_savings = max(0, total_compressible_size - projected_compressible_size)
-            projected_on_disk_size = max(0, current_size_on_disk - logical_savings)
-        else:
-            projected_on_disk_size = (
-                already_compressed_physical_size + excluded_logical_size + projected_compressible_size
-            )
+        projections = {
+            "lzx": _analysis_projection(
+                stats,
+                stats.entropy_projected_size,
+                current_size_on_disk=current_size_on_disk,
+                total_compressible_size=total_compressible_size,
+                already_compressed_physical_size=already_compressed_physical_size,
+                excluded_logical_size=excluded_logical_size,
+            ),
+            "xpress": _analysis_projection(
+                stats,
+                stats.entropy_projected_size_conservative,
+                current_size_on_disk=current_size_on_disk,
+                total_compressible_size=total_compressible_size,
+                already_compressed_physical_size=already_compressed_physical_size,
+                excluded_logical_size=excluded_logical_size,
+            ),
+        }
+        active = projections["lzx" if lzx_enabled else "xpress"]
+        projected_on_disk_size = active["projected_on_disk_size"]
+        potential_savings_bytes = active["potential_savings_bytes"]
+        projected_compressible_size = active["compressible_physical_size"]
         physical_size = projected_on_disk_size
-        potential_savings_bytes = max(0, current_size_on_disk - projected_on_disk_size)
         compressed_count = already_compressed_files
         compressed_logical_size = already_compressed_logical_size
         compressed_physical_size = already_compressed_physical_size
@@ -144,12 +175,14 @@ def make_stats_summary(
             0,
             current_size_on_disk - already_compressed_physical_size - excluded_logical_size,
         )
+        projections = {}
 
     return {
         "logical_size": stats.total_original_size,
         "physical_size": physical_size,
         "current_size_on_disk": current_size_on_disk,
         "projected_on_disk_size": projected_on_disk_size,
+        "projections": projections,
         "is_analysis": is_analysis,
         "min_savings_percent": min_savings_percent,
         "potential_savings_bytes": potential_savings_bytes,

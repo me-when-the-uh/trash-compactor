@@ -23,6 +23,14 @@ from .stats import (
     print_compression_summary,
     print_dry_run_summary,
 )
+from .file_utils import (
+    decode_oem,
+    kill_process_tree,
+    terminate_tracked_processes,
+    track_process,
+    untrack_process,
+    windows_system_executable,
+)
 from .timer import PerformanceMonitor, TimingStats
 from .config import COMPRESSION_ALGORITHMS
 
@@ -55,7 +63,6 @@ def resolve_targets() -> OneClickTargets:
     if prog_data:
         candidates.append(Path(prog_data))
 
-    # Deduplicate while preserving order, and only keep paths that exist
     seen: set[str] = set()
     selected: list[Path] = []
     for candidate in candidates:
@@ -72,7 +79,10 @@ def resolve_targets() -> OneClickTargets:
 def _compactos_log_path() -> Path:
     import tempfile
 
-    return Path(tempfile.gettempdir()) / f"compactos_result_{os.getpid()}.txt"
+    # mkstemp owns the name: no other process can pre-create it.
+    handle, path = tempfile.mkstemp(prefix="compactos_result_", suffix=".txt")
+    os.close(handle)
+    return Path(path)
 
 
 def _parse_int_token(token: str) -> int:
@@ -138,36 +148,31 @@ def run_compactos_hidden(
 ) -> tuple[bool, str, dict]:
     """Run compact.exe /compactos:always hidden (no visible window)."""
     if os.name != "nt":
-        return False, "Not Windows"
+        return False, "Not Windows", {}
 
     comp_log = _compactos_log_path()
-
-    ps_command = "compact.exe /compactos:always 2>&1"
+    executable = windows_system_executable("compact.exe")
 
     try:
         proc = subprocess.Popen(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                ps_command,
-            ],
+            [executable, "/compactos:always"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NO_WINDOW | 0x00004000,  # BELOW_NORMAL_PRIORITY_CLASS
-            text=True,
-            encoding="utf-8",
-            errors="replace",
         )
+    except OSError:
+        return False, "Failed to start compact.exe", {}
 
+    track_process(proc)
+    try:
         output_lines: list[str] = []
         timed_out = False
 
         def _read_output() -> None:
-            for line in proc.stdout:
-                line = line.rstrip("\r\n")
+            if proc.stdout is None:
+                return
+            for raw in proc.stdout:
+                line = decode_oem(raw).rstrip("\r\n")
                 if not line:
                     continue
                 output_lines.append(line)
@@ -187,8 +192,7 @@ def run_compactos_hidden(
             while True:
                 if stop_check is not None and stop_check():
                     stopped = True
-                    proc.kill()
-                    proc.wait(timeout=5)
+                    kill_process_tree(proc)
                     break
                 try:
                     proc.wait(timeout=0.5)
@@ -198,8 +202,7 @@ def run_compactos_hidden(
                         raise
         except subprocess.TimeoutExpired:
             timed_out = True
-            proc.kill()
-            proc.wait(timeout=5)
+            kill_process_tree(proc)
         reader.join(timeout=5)
 
         output = "\n".join(output_lines)
@@ -219,7 +222,7 @@ def run_compactos_hidden(
                     100.0,
                 )
 
-        # Write log for CLI fallback
+        # The CLI fallback reads this log.
         try:
             comp_log.write_text(output, encoding="utf-8")
             os.environ["COMPACTOS_LOG"] = str(comp_log)
@@ -227,9 +230,8 @@ def run_compactos_hidden(
             pass
 
         return success, output, parsed
-
-    except OSError:
-        return False, "Failed to start compact.exe", {}
+    finally:
+        untrack_process(proc)
 
 
 def _attention_beep() -> None:
@@ -241,7 +243,6 @@ def _attention_beep() -> None:
     try:
         import winsound
 
-        # Hoping this doesn't break
         winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
     except Exception:
         sys.stdout.write("\a")
@@ -329,14 +330,14 @@ def run_one_click_mode(
     min_savings: float,
     compactos_requested: bool = False,
     yes: bool = False,
-) -> list[str]:
-    """1-click compression. Returns the resolved target paths for the log file."""
+) -> tuple[list[str], int]:
+    """1-click compression. Returns target paths and the process exit code"""
     targets = resolve_targets()
     target_paths = [str(p) for p in targets.directories]
     non_interactive = not _interactive_console()
     if non_interactive:
         logging.info(
-            "Non-interactive console detected; running 1-click unattended. "
+            "Non-interactive console detected. Running 1-click unattended. "
             "Pass --no to abort."
         )
 
@@ -344,7 +345,7 @@ def run_one_click_mode(
     print(Fore.CYAN + Style.BRIGHT + _("1-click mode (unattended)") + Style.RESET_ALL)
     if not targets.directories:
         print(Fore.YELLOW + _("No default targets were found on this system.") + Style.RESET_ALL)
-        return target_paths
+        return target_paths, 0
 
     print(_("The following directories will be analysed for compression:"))
     for directory in targets.directories:
@@ -386,6 +387,7 @@ def run_one_click_mode(
         )
 
     per_dir: list[tuple[Path, CompressionStats, list[tuple[str, int, str]]]] = []
+    had_errors = False
 
     total_original = 0
     total_compressed_lzx = 0
@@ -417,6 +419,8 @@ def run_one_click_mode(
         total_timing.total_files += int(getattr(monitor.stats, 'total_files', 0) or 0)
         total_timing.files_analyzed_for_entropy += int(getattr(monitor.stats, 'files_analyzed_for_entropy', 0) or 0)
 
+        if stats.error_count:
+            had_errors = True
         per_dir.append((directory, stats, plan))
 
     print_dry_run_summary(
@@ -432,8 +436,9 @@ def run_one_click_mode(
         if yes:
             logging.info("1-click: skipping the 300-second countdown (--yes).")
         elif not countdown_to_compress(300):
+            terminate_tracked_processes()
             print(Fore.CYAN + _( "\nCompression cancelled." ) + Style.RESET_ALL)
-            return target_paths
+            return target_paths, 130
 
     print(Fore.CYAN + _( "\nStarting compression..." ) + Style.RESET_ALL)
 
@@ -462,12 +467,13 @@ def run_one_click_mode(
             min_savings_percent=min_savings,
         )
 
-        # `execute_compression_plan_wrapper` fills in compressed/skipped counts, but the total
-        # files isn't known unless we set it.
+        # The run fills the compressed and skipped counts only. Derive the total.
         monitor.stats.total_files = int(monitor.stats.files_compressed + monitor.stats.files_skipped)
 
         monitor.print_summary()
 
+        if stats.error_count:
+            had_errors = True
         accumulate_stats(total_comp_stats, stats)
 
         total_comp_timing.total_time += monitor.stats.total_time
@@ -501,4 +507,4 @@ def run_one_click_mode(
             pass
 
     print(Fore.CYAN + _( "\n1-click mode finished." ) + Style.RESET_ALL)
-    return target_paths
+    return target_paths, (1 if had_errors else 0)

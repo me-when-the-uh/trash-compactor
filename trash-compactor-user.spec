@@ -56,16 +56,22 @@ def _fast_walk_bundle():
     datas = []
     try:
         import fast_walk as module
+    except ImportError:
+        module = None
 
+    if module is not None:
+        # The shim names the extension it loaded.
         package_dir = Path(module.__file__).resolve().parent
-        for artifact in package_dir.glob('fast_walk*.pyd'):
-            binaries.append((str(artifact), 'fast_walk'))
+        extension = getattr(module, 'EXTENSION_PATH', None)
+        if not extension:
+            matches = sorted(package_dir.glob('fast_walk*.pyd'))
+            extension = matches[0] if matches else None
+        if extension and Path(extension).is_file():
+            binaries.append((str(extension), 'fast_walk'))
         init_py = package_dir / '__init__.py'
         if init_py.is_file():
             datas.append((str(init_py), 'fast_walk'))
         return binaries, datas
-    except ImportError:
-        pass
 
     dll = Path('fast_walk/target/release/fast_walk.dll')
     if dll.is_file():
@@ -81,6 +87,7 @@ a = Analysis(
     binaries=_fast_walk_binaries,
     datas=[('locales', 'locales'), *_fast_walk_datas],
     hiddenimports=[
+        # fast_walk.fast_walk is a bundled binary, not an importable module.
         'fast_walk',
         'webview',
         'webview.platforms',

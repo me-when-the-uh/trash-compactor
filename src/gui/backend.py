@@ -65,7 +65,12 @@ class GuiBackend:
             single_worker=self.single_worker,
             hdd_mode=self.hdd_mode,
             lzx_warning=self.lzx_warning,
+            lzx_benchmark_failed=self.benchmark_ok is False,
         )
+
+    def _lzx_effective(self) -> bool:
+        """True when LZX will run: not disabled, and either forced or benchmark-approved."""
+        return not self.no_lzx and (self.force_lzx or self.benchmark_ok is not False)
 
     def _mark_single_worker_override(self, value: bool) -> None:
         self._user_overrode_single_worker = True
@@ -120,7 +125,7 @@ class GuiBackend:
                     min_savings_percent=self.min_savings,
                     is_analysis=is_analysis,
                     analysis_timing=analysis_timing,
-                    lzx_enabled=not self.no_lzx,
+                    lzx_enabled=self._lzx_effective(),
                 ),
                 directory=directory,
                 scope=scope,

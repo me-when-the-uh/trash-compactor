@@ -266,7 +266,7 @@ def _prepare_arguments(argv: Sequence[str]) -> tuple[argparse.Namespace, bool]:
         else config.clamp_savings_percent(args.min_savings)
     )
 
-    interactive_launch = not args.directory
+    interactive_launch = len(argv) == 0
 
     from src import benchmark
     benchmark_ok: Optional[bool] = None
@@ -387,21 +387,30 @@ def main() -> int:
         from src.compression.file_scan import fast_walk_available
 
         probe_available = False
+        per_file_probe_available = False
         wheel_version = ""
+        extension_path = ""
         if fast_walk_available():
             try:
                 import fast_walk
 
                 wheel_version = getattr(fast_walk, "__version__", "")
+                extension_path = getattr(fast_walk, "EXTENSION_PATH", "")
                 probe_available = callable(getattr(fast_walk, "probe_directories_parallel", None))
+                per_file_probe_available = callable(
+                    getattr(fast_walk, "probe_candidate_files_parallel", None)
+                )
             except Exception:
                 probe_available = False
+                per_file_probe_available = False
         print(
             f"[diag] frozen={getattr(sys, 'frozen', False)} "
             f"meipass={getattr(sys, '_MEIPASS', '')!r} "
             f"fast_walk={fast_walk_available()} "
             f"fast_walk_version={wheel_version or 'unknown'} "
-            f"probe_directories_parallel={probe_available}",
+            f"fast_walk_path={extension_path or 'unknown'} "
+            f"probe_directories_parallel={probe_available} "
+            f"probe_candidate_files_parallel={per_file_probe_available}",
             flush=True,
         )
 
@@ -452,7 +461,6 @@ def main() -> int:
                 prompt_exit()
                 return 1
 
-    # Build the CliLog for the CLI run.
     log_path: Optional[Path] = None
     if getattr(args, "log_file", False) is not False:
         raw = args.log_file
@@ -496,7 +504,7 @@ def main() -> int:
 
             from src.one_click import run_one_click_mode
 
-            one_click_targets = run_one_click_mode(
+            one_click_targets, one_click_exit = run_one_click_mode(
                 verbosity=args.verbose,
                 min_savings=args.min_savings,
                 compactos_requested=is_admin() and getattr(args, "compactos_always", False),
@@ -512,11 +520,13 @@ def main() -> int:
                 )
 
             print(_("\nOperation completed."))
-            return 0
+            exit_code = one_click_exit
+            return exit_code
 
         directory = _configure_runtime(args, interactive_launch)
         if directory is None:
-            return 1
+            exit_code = 1
+            return exit_code
 
         if getattr(args, "decompress", False):
             mode_name = "decompress"
@@ -544,10 +554,14 @@ def main() -> int:
                 args=args, directory=directory, cli_log=cli_log
             )
     except KeyboardInterrupt:
+        from src.file_utils import terminate_tracked_processes
+
+        terminate_tracked_processes()
         discard_staged_incompressible_cache()
         cprint(Fore.CYAN, _("\nOperation cancelled by user."))
         exit_code = 130
     except Exception:
+        exit_code = 1
         discard_staged_incompressible_cache()
         raise
     finally:
@@ -563,8 +577,8 @@ def _emit_cli_log_mode_and_settings(cli_log, mode_name, target, args) -> None:
     if not isinstance(cli_log, CliLog):
         return
     lzx_status = (
-        "disabled (--no-lzx)" if args.no_lzx
-        else "disabled (benchmark)" if getattr(args, "lzx_disabled_reason", None) == "benchmark"
+        "disabled (benchmark)" if getattr(args, "lzx_disabled_reason", None) == "benchmark"
+        else "disabled (--no-lzx)" if args.no_lzx
         else "enabled"
     )
     hdd_status = "forced (-s)" if getattr(args, "single_worker", False) else "auto"
@@ -646,12 +660,20 @@ def _run_cli_dry_run(args, directory, cli_log) -> int:
         if isinstance(cli_log, CliLog):
             cli_log.errors(stats)
 
+    return _status_exit(stats)
+
+
+def _status_exit(stats) -> int:
+    """1 when the run recorded an error, otherwise 0."""
+    if getattr(stats, "error_count", 0) or getattr(stats, "errors", None):
+        return 1
     return 0
 
 
 def _run_cli_decompress(args, directory, cli_log) -> int:
     from src.compression_module import decompress_directory
     from src.exclusions import add_user_exclusion
+    from src.stats import log_errors
 
     logging.info(_("Starting decompression of directory: %s"), directory)
     stats, monitor, plan = decompress_directory(
@@ -664,13 +686,14 @@ def _run_cli_decompress(args, directory, cli_log) -> int:
             logging.warning(error)
         else:
             logging.info(_("Added %s to Excluded folders."), directory)
-        print(_("Decompressed {count} files.").format(count=len(plan)))
+        print(_("Decompressed {count} files.").format(count=stats.decompressed_files))
+    log_errors(stats)
     monitor.print_summary()
 
     if isinstance(cli_log, CliLog):
         cli_log.timing(monitor)
         cli_log.errors(stats)
-    return 0
+    return _status_exit(stats)
 
 
 def _run_cli_compress(args, directory, cli_log) -> int:
@@ -695,7 +718,7 @@ def _run_cli_compress(args, directory, cli_log) -> int:
         cli_log.errors(stats)
 
     log_by_algorithm(stats, lzx_disabled, lzx_reason)
-    return 0
+    return _status_exit(stats)
 
 
 def _compress_with_log(args, directory):

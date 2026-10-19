@@ -3,16 +3,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from ...compression.compression_executor import execute_compression_plan
+from ...config import COMPRESSION_ALGORITHMS
 from ...exceptions import WorkerStopped
 from ...i18n import _
 from ...skip_logic import commit_incompressible_cache
-from ...stats import CompressionStats
+from ...stats import CompressionStats, retarget_plan
 from ...workers import lzx_worker_count, xp_worker_count
 from ..message_types import ProgressUpdateResponse, StateResponse, StatusResponse, WarningResponse
 from ..progress import COMPRESSION_PROGRESS_GRANULARITY, UI_STATUS_INTERVAL_SECONDS
 
 if TYPE_CHECKING:
     from ..backend import GuiBackend
+
+
+def _plan_for_current_lzx(plan: list) -> list:
+    return retarget_plan(plan, lzx_enabled=COMPRESSION_ALGORITHMS.get("large") == "LZX")
 
 
 def _exec_progress_factory(
@@ -32,10 +37,10 @@ def _exec_progress_factory(
     def _exec_progress(path: Path, algo: str) -> None:
         nonlocal last_update
         compressed_count[0] += 1
+        backend._check_pause_stop()
         if compressed_count[0] % COMPRESSION_PROGRESS_GRANULARITY != 0 and compressed_count[0] != total:
             return
 
-        backend._check_pause_stop()
         now = time.perf_counter()
         if now - last_update <= update_interval and compressed_count[0] != total:
             return
@@ -90,7 +95,7 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
         backend._send(WarningResponse("Warning", "Please analyze the folder before compressing."))
         return
 
-    plan = backend.last_analysis_plan
+    plan = _plan_for_current_lzx(backend.last_analysis_plan)
     stats = backend.last_analysis_stats
     monitor = backend.last_analysis_monitor
 
@@ -157,7 +162,11 @@ def run_compression_pipeline(backend: "GuiBackend") -> None:
     backend.last_analysis_plan = None
     backend.last_analysis_stats = None
 
-    backend._send_progress(_("Complete!"), 100.0, final=True)
+    if stats.error_count:
+        done_text = _("Finished with {count} errors").format(count=stats.error_count)
+    else:
+        done_text = _("Complete!")
+    backend._send_progress(done_text, 100.0, final=True)
     backend._send_folder_summary(
         stats,
         stats.compressed_files,
@@ -216,7 +225,7 @@ def _run_quick_compression_loop(
             backend._check_pause_stop()
 
             directory = str(entry.get("directory") or "")
-            plan = entry.get("plan") or []
+            plan = _plan_for_current_lzx(entry.get("plan") or [])
             stats = entry.get("stats")
             monitor = entry.get("monitor")
 
@@ -319,8 +328,12 @@ def _run_quick_compression_loop(
     backend.last_analysis_plan = None
     backend.last_analysis_stats = None
     backend.quick_analysis_results = []
+    if total_stats.error_count:
+        done_text = _("Finished with {count} errors").format(count=total_stats.error_count)
+    else:
+        done_text = _("Quick compression complete")
     backend._send_progress(
-        _("Quick compression complete"),
+        done_text,
         100.0,
         quick_history=True,
         final=True,

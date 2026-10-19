@@ -76,9 +76,28 @@ def is_directstorage_dll(path: str | Path) -> bool:
     return os.path.basename(str(path)).lower() in DLL_NAMES
 
 
+_LOCALIZED_MARKERS: Optional[tuple[str, ...]] = None
+
+
+def _localized_bypassio_markers() -> tuple[str, ...]:
+    """ERROR_NOT_SUPPORTED (50) text, resolved once per process. 0x80070032 is the HRESULT."""
+    global _LOCALIZED_MARKERS
+    if _LOCALIZED_MARKERS is None:
+        from .file_utils import win32_system_message
+
+        message = win32_system_message(50).lower()
+        markers = ["80070032"]
+        if message:
+            markers.append(message)
+        _LOCALIZED_MARKERS = tuple(markers)
+    return _LOCALIZED_MARKERS
+
+
 def compact_failure_is_bypassio(text: str) -> bool:
     lowered = text.lower()
-    return any(marker in lowered for marker in _BPIO_MARKERS)
+    if any(marker in lowered for marker in _BPIO_MARKERS):
+        return True
+    return any(marker and marker in lowered for marker in _localized_bypassio_markers())
 
 
 def collapse_roots(roots: Iterable[Path]) -> list[Path]:

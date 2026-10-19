@@ -11,6 +11,9 @@ import shutil
 
 from .i18n import _
 
+# A mass failure keeps the count and the first messages only.
+ERROR_LIMIT = 50
+
 
 class ProgressTimer:
     def __init__(self, label: str = "Working") -> None:
@@ -148,41 +151,32 @@ class DirectorySkipRecord:
         return f"{name} ({self.path})"
 
 
-_SKIP_BUCKET_FIELDS: dict = {
-    "extension": ("extension", "extension_logical", "extension_hint"),
-    "too_small": ("too_small", "too_small_logical", "too_small_hint"),
-    "already_compressed": ("already_compressed", "already_compressed_logical", "already_compressed_hint"),
-    "error": ("error", "error_logical", "error_hint"),
-    "magic": ("magic", "magic_logical", "magic_hint"),
-}
+_SKIP_CATEGORIES = (
+    "extension",
+    "too_small",
+    "already_compressed",
+    "error",
+    "magic",
+    "cloud",
+    "sparse",
+    "link",
+    "long_path",
+)
 
 
 @dataclass
 class SkipBulkLedger:
-    extension: int = 0
-    extension_logical: int = 0
-    extension_hint: int = 0
-    too_small: int = 0
-    too_small_logical: int = 0
-    too_small_hint: int = 0
-    already_compressed: int = 0
-    already_compressed_logical: int = 0
-    already_compressed_hint: int = 0
-    error: int = 0
-    error_logical: int = 0
-    error_hint: int = 0
-    magic: int = 0
-    magic_logical: int = 0
-    magic_hint: int = 0
+    """Skip counts per category, filled while verbosity is below 3."""
+
+    buckets: dict[str, list[int]] = field(default_factory=dict)
 
     def add(self, category: str, hint: int, logical: int) -> None:
-        fields = _SKIP_BUCKET_FIELDS.get(category)
-        if fields is None:
+        if category not in _SKIP_CATEGORIES:
             return
-        count_field, logical_field, hint_field = fields
-        setattr(self, count_field, getattr(self, count_field) + 1)
-        setattr(self, logical_field, getattr(self, logical_field) + logical)
-        setattr(self, hint_field, getattr(self, hint_field) + (hint if hint > 0 else logical))
+        counts = self.buckets.setdefault(category, [0, 0, 0])
+        counts[0] += 1
+        counts[1] += logical
+        counts[2] += hint if hint > 0 else logical
 
 
 @dataclass
@@ -211,6 +205,7 @@ class AlgorithmStats:
 @dataclass
 class CompressionStats:
     compressed_files: int = 0
+    decompressed_files: int = 0
     skipped_files: int = 0
     already_compressed_files: int = 0
     excluded_files: int = 0
@@ -224,6 +219,7 @@ class CompressionStats:
     excluded_logical_size: int = 0
     excluded_physical_size: int = 0
     errors: List[str] = field(default_factory=list)
+    error_count: int = 0
     directory_skips: List[DirectorySkipRecord] = field(default_factory=list)
     entropy_samples: List[EntropySampleRecord] = field(default_factory=list)
     base_dir: Optional[Path] = None
@@ -242,6 +238,18 @@ class CompressionStats:
     algo_xpress8k: AlgorithmStats = field(default_factory=AlgorithmStats)
     algo_xpress4k: AlgorithmStats = field(default_factory=AlgorithmStats)
 
+    def record_error(self, message: str) -> None:
+        """Count every error, keep the first ERROR_LIMIT messages."""
+        self.error_count += 1
+        if len(self.errors) < ERROR_LIMIT:
+            self.errors.append(message)
+
+    def merge_errors(self, other: "CompressionStats") -> None:
+        self.error_count += other.error_count
+        for message in other.errors:
+            if len(self.errors) < ERROR_LIMIT:
+                self.errors.append(message)
+
     def by_algorithm_breakdown(self) -> List[dict]:
         buckets = [
             ("LZX", self.algo_lzx),
@@ -253,11 +261,16 @@ class CompressionStats:
         for name, b in buckets:
             if b.files_planned == 0 and b.files_compressed == 0:
                 continue
+            attempted = b.files_compressed > 0 or b.bytes_compressed > 0
+            original = b.bytes_planned
+            post = b.bytes_compressed if attempted else b.bytes_projected
+            saved_pct = (1 - post / original) * 100 if original > 0 and post > 0 else 0.0
             out.append({
                 "name": name,
-                "files": b.files_compressed or b.files_planned,
-                "original": b.bytes_planned,
-                "post": b.bytes_compressed or b.bytes_projected,
+                "files": b.files_planned or b.files_compressed,
+                "original": original,
+                "post": post,
+                "saved_pct": saved_pct,
             })
         return out
 
@@ -292,41 +305,14 @@ class CompressionStats:
         self._record_skip(size_hint, original_size, already_compressed, category)
 
     def record_bulk_skips(self, ledger: SkipBulkLedger) -> None:
-        self._record_skip_batch(
-            ledger.extension,
-            ledger.extension_hint,
-            ledger.extension_logical,
-            already_compressed=False,
-            category="extension",
-        )
-        self._record_skip_batch(
-            ledger.too_small,
-            ledger.too_small_hint,
-            ledger.too_small_logical,
-            already_compressed=False,
-            category="too_small",
-        )
-        self._record_skip_batch(
-            ledger.already_compressed,
-            ledger.already_compressed_hint,
-            ledger.already_compressed_logical,
-            already_compressed=True,
-            category="already_compressed",
-        )
-        self._record_skip_batch(
-            ledger.error,
-            ledger.error_hint,
-            ledger.error_logical,
-            already_compressed=False,
-            category="error",
-        )
-        self._record_skip_batch(
-            ledger.magic,
-            ledger.magic_hint,
-            ledger.magic_logical,
-            already_compressed=False,
-            category="magic",
-        )
+        for category, (count, logical, hint) in ledger.buckets.items():
+            self._record_skip_batch(
+                count,
+                hint,
+                logical,
+                already_compressed=category == "already_compressed",
+                category=category,
+            )
 
     def _record_skip_batch(
         self,
@@ -409,7 +395,7 @@ def accumulate_stats(target: CompressionStats, source: CompressionStats) -> None
     target.already_compressed_physical_size += source.already_compressed_physical_size
     target.skip_extension_files += source.skip_extension_files
     target.skip_low_savings_files += source.skip_low_savings_files
-    target.errors.extend(source.errors)
+    target.merge_errors(source)
     target.entropy_projected_original_bytes += source.entropy_projected_original_bytes or source.total_original_size
     target.entropy_projected_size += source.entropy_projected_size or source.total_compressed_size
     target.entropy_projected_size_conservative += (
@@ -419,11 +405,27 @@ def accumulate_stats(target: CompressionStats, source: CompressionStats) -> None
     target.directory_skips.extend(source.directory_skips)
 
 
+def retarget_plan(
+    plan: list[tuple[str, int, str]],
+    *,
+    lzx_enabled: bool,
+) -> list[tuple[str, int, str]]:
+    """Plan with the 1 MiB band set to LZX or XPRESS16K."""
+    from .config import SIZE_THRESHOLDS
+
+    threshold = SIZE_THRESHOLDS[-1][0]
+    large = "LZX" if lzx_enabled else "XPRESS16K"
+    return [
+        (path_str, size, large if size >= threshold and algo in ("LZX", "XPRESS16K") else algo)
+        for path_str, size, algo in plan
+    ]
+
+
 def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int, str]]) -> None:
     from .config import DRY_RUN_CONSERVATIVE_FACTORS, SIZE_THRESHOLDS
 
-    # Files above the largest size threshold would use LZX when enabled.
-    lzx_size_threshold = SIZE_THRESHOLDS[-1][0]  # 1MB
+    # 1 MiB and up is the LZX band. The walker uses the same cut.
+    lzx_size_threshold = SIZE_THRESHOLDS[-1][0]
 
     stats.entropy_projected_original_bytes = stats.total_original_size
     entropy_map = {Path(record.path): record for record in stats.entropy_samples}
@@ -439,7 +441,7 @@ def apply_entropy_projection(stats: CompressionStats, plan: list[tuple[str, int,
             factor = max(0.0, record.estimated_savings / 100.0)
             base_compressed = size * (1.0 - factor)
 
-            is_large_file = algo == 'LZX' or (algo == 'XPRESS16K' and size > lzx_size_threshold)
+            is_large_file = algo == 'LZX' or (algo == 'XPRESS16K' and size >= lzx_size_threshold)
 
             if is_large_file:
                 lzx_factor = DRY_RUN_CONSERVATIVE_FACTORS.get('LZX', 0.95)
@@ -549,6 +551,7 @@ def print_compression_summary(stats: CompressionStats) -> None:
 
     if stats.compressed_files == 0:
         logging.info(_("\nThis directory may have already been compressed."))
+        log_errors(stats)
         return
 
     total_original = stats.total_original_size
@@ -562,10 +565,19 @@ def print_compression_summary(stats: CompressionStats) -> None:
         logging.info(_("Overall compression ratio: %.2f%%"), ratio)
         logging.info(_("Size after compression: %s"), pretty_size(total_compressed))
 
-    if stats.errors:
-        logging.info(_("\nErrors encountered:"))
-        for error in stats.errors:
-            logging.error(error)
+    log_errors(stats)
+
+
+def log_errors(stats: CompressionStats) -> None:
+    """Log the recorded errors, capped, under an 'Errors encountered' heading."""
+    if not stats.error_count:
+        return
+    logging.info(_("\nErrors encountered:"))
+    for error in stats.errors:
+        logging.error(error)
+    hidden = stats.error_count - len(stats.errors)
+    if hidden > 0:
+        logging.info("  %s", _("...and {count} more").format(count=hidden))
 
 
 def log_by_algorithm(
@@ -580,28 +592,15 @@ def log_by_algorithm(
     if lzx_disabled:
         reason = lzx_disabled_reason or "disabled"
         logging.info("  LZX       : %s", _("disabled ({reason})").format(reason=reason))
-    for name, b in [
-        ("LZX", stats.algo_lzx),
-        ("XPRESS16K", stats.algo_xpress16k),
-        ("XPRESS8K", stats.algo_xpress8k),
-        ("XPRESS4K", stats.algo_xpress4k),
-    ]:
-        if lzx_disabled and name == "LZX":
+    for row in stats.by_algorithm_breakdown():
+        if lzx_disabled and row["name"] == "LZX":
             continue
-        if b.files_planned == 0 and b.files_compressed == 0:
-            continue
-        files = b.files_compressed or b.files_planned
-        post = b.bytes_compressed or b.bytes_projected
-        if b.bytes_planned > 0 and post > 0:
-            saved_pct = (1 - post / b.bytes_planned) * 100
-        else:
-            saved_pct = 0.0
         logging.info(
             "  %-10s: %5d files, %s -> %s (%5.1f%% saved)",
-            name,
-            files,
-            pretty_size(b.bytes_planned),
-            pretty_size(post),
-            saved_pct,
+            row["name"],
+            row["files"],
+            pretty_size(row["original"]),
+            pretty_size(row["post"]),
+            row["saved_pct"],
         )
 

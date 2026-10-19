@@ -20,10 +20,10 @@ def set_worker_cap(limit: Optional[int]) -> None:
 def set_hdd_mode(active: bool = True) -> None:
     """Engage HDD-friendly settings: single worker everywhere.
 
-    Parallel reads on a spinning drive are random access - every seek costs
-    more IOPS than a sequential read saves, so scan, entropy, and compression
-    all run single-worker, with the walker visiting directories in discovery
-    order so the disk head moves forward instead of jumping.
+    Parallel reads on a spinning drive are random access. Every seek costs more
+    IOPS than a sequential read saves. Scan, entropy, and compression all run
+    single-worker, with the walker visiting directories in discovery order. The
+    disk head then moves forward instead of jumping between branches.
     """
     _HDD_MODE.set(active)
 

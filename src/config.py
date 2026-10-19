@@ -69,7 +69,7 @@ class EntropySamplingParams:
 
 
 ENTROPY_SAMPLING_PARAMS: Final[EntropySamplingParams] = EntropySamplingParams(
-    dynamic_windows_min_file_size=2 * 1024 * 1024,  # 2MB
+    dynamic_windows_min_file_size=2 * 1024 * 1024,
     dynamic_windows_max_file_size=100 * 1024 * 1024,
     huge_windows_file_size=256 * 1024 * 1024,
     base_sample_windows=3,
@@ -90,7 +90,11 @@ ENTROPY_MAX_BYTES: Final[int] = _entropy_env_int(
     8 * 1024 * 1024,
 )
 
-MIN_COMPRESSIBLE_SIZE: Final[int] = 8 * 1024  # 8KB minimum
+MIN_COMPRESSIBLE_SIZE: Final[int] = 8 * 1024
+# compact.exe refuses paths at MAX_PATH and beyond. On Windows 11, a
+# 259-character path compresses, a 260-character path fails with "Out of
+# memory.", with and without the \\?\ prefix.
+MAX_COMPACT_PATH: Final[int] = 260
 SIZE_THRESHOLDS: Final[Tuple[Tuple[int, str], ...]] = (
     (64 * 1024, 'tiny'),
     (256 * 1024, 'small'),

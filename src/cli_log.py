@@ -132,11 +132,14 @@ class CliLog:
             self._write(f"Overall compression ratio: {ratio:.2f}%")
             self._write(f"Size after compression: {pretty_size(stats.total_compressed_size)}")
 
-        if stats.errors:
+        if stats.error_count:
             self._write("")
             self._write("Errors encountered:")
             for e in stats.errors:
                 self._write(f"  {e}")
+            hidden = stats.error_count - len(stats.errors)
+            if hidden > 0:
+                self._write(f"  {_('...and {count} more').format(count=hidden)}")
 
     def by_algorithm(
         self,
@@ -148,26 +151,13 @@ class CliLog:
         self._write(_("By algorithm:"))
         if lzx_disabled:
             self._write(f"  LZX       : disabled ({lzx_disabled_reason or 'disabled'})")
-        for name, b in [
-            ("LZX", stats.algo_lzx),
-            ("XPRESS16K", stats.algo_xpress16k),
-            ("XPRESS8K", stats.algo_xpress8k),
-            ("XPRESS4K", stats.algo_xpress4k),
-        ]:
-            if lzx_disabled and name == "LZX":
+        for row in stats.by_algorithm_breakdown():
+            if lzx_disabled and row["name"] == "LZX":
                 continue
-            if b.files_planned == 0 and b.files_compressed == 0:
-                continue
-            files = b.files_compressed or b.files_planned
-            post = b.bytes_compressed or b.bytes_projected
-            if b.bytes_planned > 0 and post > 0:
-                saved_pct = (1 - post / b.bytes_planned) * 100
-            else:
-                saved_pct = 0.0
             self._write(
-                f"  {name:<10}: {files:>5} files, "
-                f"{pretty_size(b.bytes_planned)} -> {pretty_size(post)} "
-                f"({saved_pct:>5.1f}% saved)"
+                f"  {row['name']:<10}: {row['files']:>5} files, "
+                f"{pretty_size(row['original'])} -> {pretty_size(row['post'])} "
+                f"({row['saved_pct']:>5.1f}% saved)"
             )
 
     def timing(self, monitor) -> None:
@@ -219,12 +209,15 @@ class CliLog:
                 self._write(f"  - {r.relative_path} - {r.reason}")
 
     def errors(self, stats: CompressionStats) -> None:
-        if not stats.errors:
+        if not stats.error_count:
             return
         self._write("")
         self._write("Errors:")
         for e in stats.errors:
             self._write(f"  {e}")
+        hidden = stats.error_count - len(stats.errors)
+        if hidden > 0:
+            self._write(f"  {_('...and {count} more').format(count=hidden)}")
 
     def finish(self, exit_code: int) -> None:
         self._write(

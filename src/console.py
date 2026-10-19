@@ -81,8 +81,8 @@ def display_banner(version: str, build_date: str) -> None:
 def _interactive_console() -> bool:
     """True when stdin is attached to a real interactive console.
 
-    sys.stdin.isatty() alone is unreliable on Windows (NUL reports True), so
-    probe the console handle directly with GetConsoleMode.
+    sys.stdin.isatty() alone is unreliable on Windows (NUL reports True). Probe
+    the console handle directly with GetConsoleMode.
     """
     try:
         if not sys.stdin.isatty():
@@ -121,7 +121,7 @@ def _std_handle_valid() -> bool:
         if not handle or handle == ctypes.c_void_p(-1).value:
             return False
         file_type = kernel32.GetFileType(handle)
-        # FILE_TYPE_CHAR (2) = console or NUL; treat NUL as not a redirect.
+        # FILE_TYPE_CHAR (2) = console or NUL. NUL is not a redirect.
         # FILE_TYPE_DISK (1) / FILE_TYPE_PIPE (3) = genuine redirection.
         if file_type in (1, 3):
             return True
@@ -131,7 +131,7 @@ def _std_handle_valid() -> bool:
 
 
 def _stdin_handle_valid() -> bool:
-    """True when stdin is a real file/pipe (redirected). Mirror of `_std_handle_valid`."""
+    """True when stdin is a real file or pipe (redirected)."""
     if os.name != "nt" or sys.stdin is None:
         try:
             return sys.stdin is not None and sys.stdin.fileno() >= 0

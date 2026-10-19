@@ -14,7 +14,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
 const BATCH_SIZE: usize = 4096;
-// Workers park on send once this many batches are queued, so a slow Python
+// Workers park on send once this many batches are queued. A slow Python
 // consumer bounds walker memory instead of buffering the whole tree.
 const CHANNEL_DEPTH: usize = 8;
 
@@ -25,10 +25,25 @@ const CAT_DEBUG_EXT: u8 = 3;
 const CAT_ALREADY_COMPRESSED: u8 = 4;
 const CAT_ERROR: u8 = 5;
 const CAT_MAGIC: u8 = 6;
+const CAT_CLOUD: u8 = 7;
+const CAT_SPARSE: u8 = 8;
+const CAT_LINK: u8 = 9;
 
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
-const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x800;
+pub(crate) const FILE_ATTRIBUTE_COMPRESSED: u32 = 0x800;
+pub(crate) const FILE_ATTRIBUTE_SPARSE_FILE: u32 = 0x200;
+const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x00000400;
+const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x00040000;
+const FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS: u32 = 0x00400000;
+
+pub(crate) fn is_cloud_placeholder(attrs: u32) -> bool {
+    attrs & (FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) != 0
+}
+
+pub(crate) fn is_sparse(attrs: u32) -> bool {
+    attrs & FILE_ATTRIBUTE_SPARSE_FILE != 0
+}
 
 type ScanTuple = (String, u64, u32, u8, u8, u64);
 
@@ -68,12 +83,18 @@ fn finalize_entry(
     category: u8,
 ) -> (u8, u8, u64) {
     // The compressed-size syscall is only meaningful for categories that can
-    // still be compressed; skip categories report the logical size.
+    // still be compressed. Skip categories report the logical size.
     if category != CAT_ELIGIBLE && category != CAT_DEBUG_EXT {
         return (algo, category, logical);
     }
 
     let physical = get_ntfs_compressed_size(path).unwrap_or(logical);
+
+    // Sparse files are left alone: their holes are free by design, and
+    // compacting one can allocate the unallocated ranges.
+    if is_sparse(attrs) && attrs & FILE_ATTRIBUTE_COMPRESSED == 0 {
+        return (algo, CAT_SPARSE, physical);
+    }
 
     if physical < logical || (attrs & FILE_ATTRIBUTE_COMPRESSED != 0) {
         return (algo, CAT_ALREADY_COMPRESSED, physical);
@@ -86,7 +107,7 @@ fn normalize_for_compare(path: &str) -> String {
     let normalized = path.replace('/', MAIN_SEPARATOR_STR);
     #[cfg(windows)]
     {
-        let lower = normalized.to_ascii_lowercase();
+        let lower = normalized.to_lowercase();
         if lower.len() == 2 && lower.as_bytes().get(1) == Some(&b':') {
             return format!("{lower}{MAIN_SEPARATOR}");
         }
@@ -133,17 +154,17 @@ impl ExclusionIndex {
 }
 
 #[cfg(windows)]
-fn file_attributes(metadata: &std::fs::Metadata) -> u32 {
+pub(crate) fn file_attributes(metadata: &std::fs::Metadata) -> u32 {
     use std::os::windows::fs::MetadataExt;
     metadata.file_attributes()
 }
 
 #[cfg(not(windows))]
-fn file_attributes(_metadata: &std::fs::Metadata) -> u32 {
+pub(crate) fn file_attributes(_metadata: &std::fs::Metadata) -> u32 {
     0
 }
 
-fn skip_extension_name(name: &OsStr, skip_ext: &HashSet<String>) -> bool {
+pub(crate) fn skip_extension_name(name: &OsStr, skip_ext: &HashSet<String>) -> bool {
     Path::new(name).extension().map_or(false, |ext| {
         skip_ext.contains(&*ext.to_string_lossy().to_lowercase())
     })
@@ -179,8 +200,8 @@ fn looks_like_sqlite(path: &Path, name: &OsStr, size: u64, min_size: u64) -> boo
     sqlite_header_match(path)
 }
 
-/// (algorithm byte, category byte). Algorithm index matches SIZE_THRESHOLDS
-/// ordering in Python: 0=XPRESS4K, 1=XPRESS8K, 2=XPRESS16K, 3=LZX.
+/// (algorithm byte, category byte). The algorithm index is shared with the
+/// Python size thresholds: 0=XPRESS4K, 1=XPRESS8K, 2=XPRESS16K, 3=LZX.
 fn classify(
     size: u64,
     is_skip_ext: bool,
@@ -214,6 +235,7 @@ fn scan_dir(
     breaks: &[u64],
     out: &mut Vec<ScanTuple>,
     subdirs: &mut Vec<PathBuf>,
+    cancelled: &AtomicBool,
 ) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         out.push((dir.to_string_lossy().into_owned(), 0, 0, 0, CAT_ERROR, 0));
@@ -221,8 +243,13 @@ fn scan_dir(
     };
 
     let mut entry_path = dir.to_path_buf();
+    let mut seen = 0usize;
 
     for entry in entries.flatten() {
+        seen += 1;
+        if seen % 64 == 0 && cancelled.load(Ordering::Acquire) {
+            return;
+        }
         let file_name = entry.file_name();
         entry_path.push(&file_name);
 
@@ -250,7 +277,20 @@ fn scan_dir(
             continue;
         }
 
+        let attrs = file_attributes(&metadata);
         if !metadata.is_file() {
+            // Neither a directory nor a file: a junction or symlink. It is not
+            // followed, and the planner reports it as a skip.
+            if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                out.push((
+                    entry_path.to_string_lossy().into_owned(),
+                    0,
+                    attrs,
+                    0,
+                    CAT_LINK,
+                    0,
+                ));
+            }
             entry_path.pop();
             continue;
         }
@@ -260,11 +300,24 @@ fn scan_dir(
             entry_path.pop();
             continue;
         }
+        if is_cloud_placeholder(attrs) {
+            // Opening the file would download a OneDrive placeholder.
+            let algo = breaks.iter().filter(|&&b| size >= b).count() as u8;
+            out.push((
+                entry_path.to_string_lossy().into_owned(),
+                size,
+                attrs,
+                algo,
+                CAT_CLOUD,
+                size,
+            ));
+            entry_path.pop();
+            continue;
+        }
         let is_skip_ext = skip_extension_name(&file_name, skip_ext);
         let is_magic = looks_like_sqlite(&entry_path, &file_name, size, min_size);
         let (algo, category) = classify(size, is_skip_ext, is_magic, ignore_ext, min_size, breaks);
         let path_str = entry_path.to_string_lossy().into_owned();
-        let attrs = file_attributes(&metadata);
         let (algo, category, hint) = finalize_entry(&path_str, size, attrs, algo, category);
         out.push((path_str, size, attrs, algo, category, hint));
         entry_path.pop();
@@ -284,8 +337,12 @@ fn next_dir(
 ) -> (Option<PathBuf>, bool) {
     let mut dirs = stack.dirs.lock().unwrap_or_else(|e| e.into_inner());
     loop {
-        // With a single worker (fifo=true, HDD mode) pop from the front so the
-        // disk head sweeps the tree in discovery order instead of jumping
+        if cancelled.load(Ordering::Acquire) {
+            dirs.clear();
+            return (None, false);
+        }
+        // With a single worker (fifo=true, HDD mode) pop from the front. The
+        // disk head then sweeps the tree in discovery order instead of jumping
         // between sibling branches on every pop.
         let popped = if fifo {
             dirs.pop_front()
@@ -344,16 +401,20 @@ fn worker_loop(
                 &breaks,
                 &mut local,
                 &mut subdirs,
+                &cancelled,
             );
             subdirs
         }));
 
         match result {
-            Ok(subdirs) => {
+            Ok(mut subdirs) => {
                 if local.len() >= BATCH_SIZE {
                     let _ = tx.send(std::mem::take(&mut local));
                 }
 
+                if cancelled.load(Ordering::Acquire) {
+                    subdirs.clear();
+                }
                 if !subdirs.is_empty() {
                     let n = subdirs.len();
                     {
@@ -365,8 +426,8 @@ fn worker_loop(
                 }
             }
             Err(_) => {
-                // Swallow the panic; remaining directories on the stack are
-                // still processed by other workers.
+                // Swallow the panic. Other workers still process the
+                // directories left on the stack.
             }
         }
         pending.fetch_sub(1, Ordering::Release);
@@ -383,8 +444,8 @@ struct WalkIter {
 impl Drop for WalkIter {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
-        // Parked workers re-check `cancelled` under the stack lock, so the
-        // wake has to happen while that lock is held.
+        // Parked workers re-check `cancelled` under the stack lock. The wake
+        // has to happen while that lock is held.
         {
             let _guard = self.stack.dirs.lock().unwrap_or_else(|e| e.into_inner());
             self.stack.idle.notify_all();
@@ -409,7 +470,7 @@ impl WalkIter {
         // Waiting without the GIL keeps the GUI thread responsive while the
         // walkers fill the next batch. The receiver moves through the closure
         // because a shared reference would not be Send.
-        let (batch, receiver) = py.allow_threads(move || {
+        let (batch, receiver) = py.detach(move || {
             let batch = receiver.recv().ok();
             (batch, receiver)
         });
@@ -492,4 +553,67 @@ fn fast_walk(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     entropy::register_entropy_module(m)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_for_compare_folds_cyrillic() {
+        let folded = normalize_for_compare("D:/Папка/ФАЙЛ");
+        assert!(folded.contains('\\'));
+        #[cfg(windows)]
+        {
+            assert_eq!(folded, normalize_for_compare(r"D:\папка\файл"));
+            assert!(folded.contains('п'));
+            assert!(folded.contains('ф'));
+        }
+    }
+
+    #[test]
+    fn cloud_placeholder_attributes() {
+        assert!(is_cloud_placeholder(FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS));
+        assert!(is_cloud_placeholder(FILE_ATTRIBUTE_RECALL_ON_OPEN));
+        assert!(is_cloud_placeholder(
+            FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_COMPRESSED
+        ));
+        assert!(!is_cloud_placeholder(FILE_ATTRIBUTE_COMPRESSED));
+        assert!(!is_cloud_placeholder(0));
+    }
+
+    #[test]
+    fn sparse_entries_skip_the_compression_checks() {
+        assert!(is_sparse(FILE_ATTRIBUTE_SPARSE_FILE));
+        assert!(!is_sparse(FILE_ATTRIBUTE_COMPRESSED));
+        // The path does not exist: the physical size falls back to the logical
+        // one, and the attributes alone decide the category.
+        let (_, category, _) = finalize_entry("Z:\\missing", 100, FILE_ATTRIBUTE_SPARSE_FILE, 0, CAT_ELIGIBLE);
+        assert_eq!(category, CAT_SPARSE);
+        let (_, category, _) = finalize_entry(
+            "Z:\\missing",
+            100,
+            FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_COMPRESSED,
+            0,
+            CAT_ELIGIBLE,
+        );
+        assert_eq!(category, CAT_ALREADY_COMPRESSED);
+    }
+
+    #[test]
+    fn next_dir_drops_the_queue_when_cancelled() {
+        let stack = SharedStack {
+            dirs: Mutex::new(VecDeque::from([
+                PathBuf::from(r"C:\a"),
+                PathBuf::from(r"C:\b"),
+            ])),
+            idle: Condvar::new(),
+        };
+        let pending = AtomicUsize::new(2);
+        let cancelled = AtomicBool::new(true);
+        let (dir, done) = next_dir(&stack, &pending, &cancelled, true);
+        assert!(dir.is_none());
+        assert!(!done);
+        assert!(stack.dirs.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+    }
 }

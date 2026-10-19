@@ -1,7 +1,4 @@
-"""
-Message types for GUI <-> Backend IPC communication.
-JSON-serializable dataclasses matching Compactor's request/response pattern.
-"""
+"""JSON-serializable request and response types for the GUI bridge."""
 
 import json
 from dataclasses import asdict, dataclass, field
@@ -10,7 +7,6 @@ from typing import Any, Dict, Optional
 
 @dataclass
 class GuiRequest:
-    """Base class for all GUI -> Backend requests."""
     type: str = field(init=False, default="")
 
     def to_json(self) -> str:
@@ -19,7 +15,6 @@ class GuiRequest:
 
 @dataclass
 class GuiResponse:
-    """Base class for all Backend -> GUI responses."""
     type: str = field(init=False, default="")
 
     def to_json(self) -> str:
@@ -120,6 +115,7 @@ class ConfigResponse(GuiResponse):
     single_worker: bool = False
     hdd_mode: bool = False
     lzx_warning: str = ""
+    lzx_benchmark_failed: bool = False
 
 
 @dataclass

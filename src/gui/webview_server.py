@@ -1,7 +1,4 @@
-"""
-Webview-based GUI server for trash-compactor.
-Handles IPC between HTML/JS frontend and Python compression backend.
-"""
+"""IPC bridge between the HTML frontend and the compression backend."""
 
 import logging
 import os
@@ -31,6 +28,11 @@ from .message_types import (
 from ..i18n import _, get_current_locale, get_translations
 
 
+def _inline_json(value: Any) -> str:
+    """JSON that is safe inside a <script> element."""
+    return json.dumps(value, ensure_ascii=False).replace("<", "\\u003c")
+
+
 class GuiApi:
     """API exposed to JavaScript via pywebview."""
 
@@ -48,7 +50,6 @@ class GuiApi:
         return result[0]
 
     def choose_folder(self) -> Dict[str, Any]:
-        """Show folder picker dialog."""
         try:
             folder = self._pick_folder()
 
@@ -61,37 +62,30 @@ class GuiApi:
             return {"type": "Error", "message": str(e)}
 
     def start_compression(self) -> Dict[str, Any]:
-        """Start compression on current folder."""
         req = StartCompressionRequest(path=self.current_folder)
         return self.backend_handler(req)
 
     def pause_compression(self) -> Dict[str, Any]:
-        """Pause ongoing compression."""
         req = PauseCompressionRequest()
         return self.backend_handler(req)
 
     def resume_compression(self) -> Dict[str, Any]:
-        """Resume paused compression."""
         req = ResumeCompressionRequest()
         return self.backend_handler(req)
 
     def stop_compression(self) -> Dict[str, Any]:
-        """Stop ongoing compression."""
         req = StopCompressionRequest()
         return self.backend_handler(req)
 
     def analyse_folder(self) -> Dict[str, Any]:
-        """Analyse current folder for compression opportunities."""
         req = AnalyseFolderRequest(path=self.current_folder)
         return self.backend_handler(req)
 
     def get_quick_compression_targets(self) -> Dict[str, Any]:
-        """Fetch the default quick-compression targets from the backend."""
         req = GetQuickCompressionTargetsRequest()
         return self.backend_handler(req)
 
     def start_quick_compression(self, compactos: bool = False) -> Dict[str, Any]:
-        """Start the one-click compression pipeline."""
         req = StartQuickCompressionRequest(compactos=compactos)
         return self.backend_handler(req)
 
@@ -115,7 +109,6 @@ class GuiApi:
             return {"type": "Error", "message": str(exc)}
 
     def save_config(self, config: Dict[str, Any] = None, **kwargs) -> Dict[str, Any]:
-        """Save configuration."""
         if config is None:
             config = kwargs
         req = SaveConfigRequest(
@@ -128,7 +121,6 @@ class GuiApi:
         return self.backend_handler(req)
 
     def reset_config(self) -> Dict[str, Any]:
-        """Reset configuration to defaults."""
         req = ResetConfigRequest()
         return self.backend_handler(req)
 
@@ -156,7 +148,9 @@ class GuiApi:
             return {"type": "Error", "message": str(exc)}
 
     def open_url(self, url: str) -> Dict[str, Any]:
-        """Open URL in default browser."""
+        """Open an http(s) URL in the default browser."""
+        if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+            return {"type": "Error", "message": _("Unsupported link")}
         try:
             webbrowser.open(url)
             return {"type": "Success"}
@@ -188,7 +182,6 @@ class GuiServer:
             return {"type": "Error", "message": str(e)}
 
     def start(self, folder: Optional[str] = None) -> None:
-        """Start the GUI server."""
         if not pywebview:
             logging.error("pywebview not installed. Install with: pip install pywebview")
             return
@@ -216,17 +209,16 @@ class GuiServer:
         html = html.replace("/*__STYLE__*/", style)
         html = html.replace(
             "/*__I18N__*/",
-            json.dumps(
+            _inline_json(
                 {
                     "locale": get_current_locale(),
                     "translations": get_translations(),
-                },
-                ensure_ascii=False,
+                }
             ),
         )
         html = html.replace(
             "/*__BOOT_CONFIG__*/",
-            json.dumps(getattr(self, "initial_config", {}) or {}, ensure_ascii=False),
+            _inline_json(getattr(self, "initial_config", {}) or {}),
         )
         html = html.replace("/*__JQUERY__*/", jquery)
         html = html.replace("/*__SCRIPT__*/", script)
@@ -258,7 +250,6 @@ class GuiServer:
             self.stop()
 
     def stop(self) -> None:
-        """Stop the GUI server."""
         self.running = False
         self._bridge.stop()
 
@@ -269,12 +260,11 @@ class GuiServer:
         self.window.evaluate_js(f"Response.batch({payload})")
 
     def send_response(self, response: GuiResponse) -> None:
-        """Enqueue a response for the GUI pump. Never calls evaluate_js."""
+        """Queue a response for the GUI pump, without touching the webview."""
         if not self.running:
             return
         self._bridge.enqueue(response)
 
 
 def create_gui_app(request_handler: Callable[[GuiRequest], GuiResponse]) -> GuiServer:
-    """Create and configure the GUI server."""
     return GuiServer(request_handler)

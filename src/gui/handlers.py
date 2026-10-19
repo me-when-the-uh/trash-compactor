@@ -99,13 +99,27 @@ def _adopt_folder(backend: "GuiBackend", requested_path: str) -> None:
         pass
 
 
+def _worker_is_running(backend: "GuiBackend") -> bool:
+    thread = backend.worker_thread
+    return thread is not None and thread.is_alive()
+
+
+def _refuse_if_busy(backend: "GuiBackend") -> Optional[GuiResponse]:
+    if _worker_is_running(backend):
+        return WarningResponse(_("Warning"), _("Could not start. Wait for the current task to finish."))
+    return None
+
+
 def _launch(backend: "GuiBackend", worker: Callable[[], None]) -> GuiResponse:
     if not backend.start_worker(worker):
-        return WarningResponse(_("Warning"), _("Could not start; wait for the current task to finish."))
+        return WarningResponse(_("Warning"), _("Could not start. Wait for the current task to finish."))
     return StateResponse("Scanning")
 
 
 def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    busy = _refuse_if_busy(backend)
+    if busy is not None:
+        return busy
     requested_path = backend._requested_path(request)
     if not requested_path and backend.last_analysis_plan is None and not backend.quick_analysis_results:
         return WarningResponse(_("Warning"), _("No folder selected"))
@@ -131,6 +145,9 @@ def _start_compression(backend: "GuiBackend", request: GuiRequest) -> GuiRespons
 
 
 def _analyse_folder(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    busy = _refuse_if_busy(backend)
+    if busy is not None:
+        return busy
     requested_path = backend._requested_path(request)
     validation = _validate_target_path(backend, requested_path)
     if validation is not None:
@@ -153,6 +170,9 @@ def _quick_targets(_backend: "GuiBackend", _request: GuiRequest) -> GuiResponse:
 
 
 def _start_quick_compression(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    busy = _refuse_if_busy(backend)
+    if busy is not None:
+        return busy
     compactos = getattr(request, "compactos", False)
     backend._clear_quick_analysis_results()
     backend._clear_analysis_state()
@@ -160,6 +180,9 @@ def _start_quick_compression(backend: "GuiBackend", request: GuiRequest) -> GuiR
 
 
 def _start_decompression(backend: "GuiBackend", request: GuiRequest) -> GuiResponse:
+    busy = _refuse_if_busy(backend)
+    if busy is not None:
+        return busy
     requested_path = backend._requested_path(request)
     validation = _validate_target_path(backend, requested_path, allow_user_exclusion=True)
     if validation is not None:

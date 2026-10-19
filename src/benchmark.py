@@ -5,10 +5,10 @@ from .i18n import _
 _benchmark_cached_result = None
 
 def run_benchmark() -> bool:
-    """
-    Runs a CPU benchmark simulating decompression workload.
-    If the machine doesn't complete the benchmark in time because it's too slow, LZX compression will be disabled.
-    We surely don't want to make it even slower from using LZX which only gives additional 5-10% storage savings idk.
+    """True when the machine completes the decompression benchmark in time.
+
+    A machine that fails it is too slow for LZX, which buys another 5-10% of
+    storage at a cost in responsiveness.
     """
     global _benchmark_cached_result
     if _benchmark_cached_result is not None:
@@ -18,7 +18,7 @@ def run_benchmark() -> bool:
     deadline = start_time + config.BENCHMARK_DURATION_LIMIT
     iterations = config.BENCHMARK_WORKLOAD_ITERATIONS
     
-    # Sliding window simulation (64KB)
+    # Sliding window standing in for the LZX window.
     window_size = 65536
     window = bytearray(window_size)
     pos = 0
@@ -45,8 +45,7 @@ def run_benchmark() -> bool:
             # Match copy simulation
             offset = (state >> 8) & (window_size - 1)
             length = (token & 0x0F) + 3
-            
-            # Unrolled copy loop for realistic memory access pattern
+
             src_pos = (pos - offset) & (window_size - 1)
             for _j in range(length):
                 window[pos] = window[src_pos]

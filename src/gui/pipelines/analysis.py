@@ -73,9 +73,9 @@ def run_analysis_pipeline(
 
         discovery.notify_check_progress(processed)
         total_files = max(discovery.count, processed)
+        backend._check_pause_stop()
         if processed % PLAN_PROGRESS_GRANULARITY != 0 and not discovery.complete:
             return
-        backend._check_pause_stop()
 
         now = time.perf_counter()
 
@@ -170,6 +170,7 @@ def run_analysis_pipeline(
         entropy_progress_callback=_entropy_progress,
         debug_scan_all=False,
     )
+    backend._check_pause_stop()
 
     total_files = discovery.count
     analysis_elapsed = max(0.001, time.perf_counter() - overall_start_time)

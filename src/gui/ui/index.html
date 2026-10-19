@@ -29,9 +29,6 @@
           <li><button id="Button_Page_Settings" onclick="Gui.page('Settings')">☸ Settings</button></li>
           <li><button id="Button_Page_About" onclick="Gui.page('About')">⌕ About</button></li>
         </ul>
-        <!-- <div style="text-align: right; margin: 4px">
-          <small style="color: grey;"><span class="version"></span> / <span class="compile-date"></span></small>
-        </div> -->
       </nav>
     </header>
 
@@ -181,6 +178,14 @@
       </div>
 
       <div class="setting-item">
+        <label class="setting-row setting-toggle" for="Force_LZX">
+          <span class="setting-label">Force LZX compression</span>
+          <input type="checkbox" id="Force_LZX" name="force_lzx">
+        </label>
+        <div id="Force_LZX_Help" class="setting-help">Runs LZX compression even when the startup benchmark says this system is too slow for it. Leave it off to accept the benchmark.</div>
+      </div>
+
+      <div class="setting-item">
         <label class="setting-row setting-toggle" for="Single_Worker">
           <span class="setting-label">Slow HDD mode</span>
           <input type="checkbox" id="Single_Worker" name="single_worker">
@@ -223,7 +228,7 @@
 
       <p id="About_Description"></p>
 
-      <p id="About_Rarely_Change">For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea.</p>
+      <p id="About_Rarely_Change">For use with files and programs that rarely change. Any change to a file undoes the compression for that file, and a periodic re-run keeps the folder compact.</p>
       <p id="About_Exclusions">If an application misbehaves after compression, add its folder under Excluded folders in Settings. Database files and DirectStorage games are skipped automatically.</p>
 
       <p>Alternatively, the program can be used as a script to periodically run the compression on specific folders without calling the GUI window, which only appears if you launch the executable file without passing the directory that is to be compressed.</p>

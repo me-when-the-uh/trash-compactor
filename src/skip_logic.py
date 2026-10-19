@@ -90,7 +90,7 @@ def entropy_records_from_probe(
 
     if verbosity >= 1:
         logging.info(
-            _("Skipping directory %s; estimated savings %.1f%% is below threshold %.1f%%"),
+            _("Skipping directory %s. Estimated savings %.1f%% is below threshold %.1f%%"),
             directory,
             estimated_savings,
             min_savings_percent,

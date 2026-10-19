@@ -10,7 +10,7 @@ from colorama import Fore, Style
 
 from .compression.compression_executor import execute_compression_plan, execute_decompression_plan
 from .compression.compression_planner import CountingDirEntryIter, PlanEntry, iter_files, plan_compression
-from .compression.file_scan import CAT_ALREADY_COMPRESSED
+from .compression.file_scan import CAT_ALREADY_COMPRESSED, CAT_ERROR
 from .config import (
     DEFAULT_MIN_SAVINGS_PERCENT,
     clamp_savings_percent,
@@ -25,6 +25,7 @@ from .workers import lzx_worker_count, set_worker_cap, xp_worker_count
 
 REPORTABLE_DIRECTORY_MIN_BYTES = 5 * 1024 * 1024
 FILE_ATTRIBUTE_COMPRESSED = getattr(stat, "FILE_ATTRIBUTE_COMPRESSED", 0x800)
+FILE_ATTRIBUTE_SPARSE_FILE = getattr(stat, "FILE_ATTRIBUTE_SPARSE_FILE", 0x200)
 
 
 def _setup_context(
@@ -130,7 +131,7 @@ def decompress_directory(
 ) -> tuple[CompressionStats, PerformanceMonitor, list[tuple[str, int]]]:
     import logging
 
-    stats, monitor, base_dir, _, verbosity_level = _setup_context(
+    stats, monitor, base_dir, _min_savings, verbosity_level = _setup_context(
         directory_path, DEFAULT_MIN_SAVINGS_PERCENT, verbosity
     )
     interactive_output = verbosity_level == 0 and getattr(sys.stdout, "isatty", lambda: True)()
@@ -150,10 +151,14 @@ def decompress_directory(
             include_user_exclusions=False,
         ):
             processed += 1
-            if (
+            if category == CAT_ERROR:
+                stats.record_error(_("Error processing {file_path}").format(file_path=path))
+            elif (
                 category == CAT_ALREADY_COMPRESSED
                 or attributes & FILE_ATTRIBUTE_COMPRESSED
-                or 0 < hint < size
+                # A sparse file stores fewer bytes than it reports, and it has
+                # nothing to decompress.
+                or (0 < hint < size and not attributes & FILE_ATTRIBUTE_SPARSE_FILE)
             ):
                 compressed.append((path, size))
             if timer:
@@ -184,6 +189,10 @@ def decompress_directory(
 
     def _on_file(path: Path, ok: bool) -> None:
         done[0] += 1
+        if ok:
+            stats.decompressed_files += 1
+        else:
+            stats.record_error(_("Failed to decompress {path}").format(path=path))
         if timer:
             timer.update(done[0], "")
         if progress_callback is not None:
@@ -381,7 +390,7 @@ def _plan_compression(
     def _on_progress(path: Path, processed: int, should_compress: bool, reason: Optional[str], size: int) -> None:
         if not timer:
             return
-        # The timer takes a lock per update; 64-file granularity is already
+        # The timer takes a lock per update. 64-file granularity is already
         # smoother than the spinner renders.
         if processed % 64:
             return

@@ -2,11 +2,13 @@ import json
 import locale
 import logging
 import os
+import re
 import sys
 from typing import Dict, Optional
 
 _translations: Dict[str, str] = {}
 _current_locale: str = "en"
+_LOCALE_CODE = re.compile(r"[A-Za-z0-9_-]{1,20}")
 
 def load_translations(locale_code: Optional[str] = None) -> None:
     global _translations, _current_locale
@@ -20,6 +22,10 @@ def load_translations(locale_code: Optional[str] = None) -> None:
             pass
 
     if not locale_code:
+        locale_code = "en"
+    elif not _LOCALE_CODE.fullmatch(locale_code):
+        # --language takes a raw argument. Only names may reach the file system.
+        logging.warning("Ignoring invalid language code %r", locale_code)
         locale_code = "en"
 
     _current_locale = locale_code

@@ -5,21 +5,26 @@ module_collection_mode = {
     "fast_walk": "py",
 }
 
-hiddenimports = ["fast_walk", "fast_walk.fast_walk"]
+
+hiddenimports = ["fast_walk"]
 
 binaries = []
 datas = []
 
+
 try:
     import fast_walk as module
 
-    package_dir = Path(module.__file__).resolve().parent
-    for artifact in sorted(package_dir.glob("fast_walk*.pyd")):
-        binaries.append((str(artifact), "fast_walk"))
-    init_py = package_dir / "__init__.py"
-    if init_py.is_file():
-        datas.append((str(init_py), "fast_walk"))
+    shim = Path(module.__file__).resolve()
+    extension = getattr(module, "EXTENSION_PATH", None)
+    if not extension:
+        matches = sorted(shim.parent.glob("fast_walk*.pyd"))
+        extension = matches[0] if matches else None
 except ImportError:
-    dll = Path("fast_walk/target/release/fast_walk.dll")
-    if dll.is_file():
-        binaries.append((str(dll.resolve()), "fast_walk"))
+    extension = Path("fast_walk/target/release/fast_walk.dll").resolve()
+    shim = Path("fast_walk/__init__.py").resolve()
+
+if extension and Path(extension).is_file():
+    binaries.append((str(extension), "fast_walk"))
+if shim.is_file():
+    datas.append((str(shim), "fast_walk"))

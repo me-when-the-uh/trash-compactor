@@ -10,6 +10,9 @@ from ..config import (
     ENTROPY_MAX_BYTES,
     ENTROPY_MAX_FILE_BUDGET,
     ENTROPY_MAX_FILES,
+    MAX_COMPACT_PATH,
+    MIN_COMPRESSIBLE_SIZE,
+    SKIP_EXTENSIONS,
     savings_from_entropy,
 )
 from ..directstorage import (
@@ -27,14 +30,24 @@ from ..skip_logic import (
 from ..stats import CompressionStats, DirectorySkipRecord, EntropySampleRecord, SkipBulkLedger
 from ..timer import PerformanceMonitor
 from ..workers import entropy_worker_count
-from .entropy import _entropy_params, get_file_probe_budget, sample_file_entropy
+from .compression_executor import _compact_path
+from .entropy import (
+    _entropy_params,
+    get_file_probe_budget,
+    native_entry_point,
+    required_native_entry_point,
+    sample_file_entropy,
+)
 from .file_scan import (
     CAT_ALREADY_COMPRESSED,
+    CAT_CLOUD,
     CAT_DEBUG_EXT,
     CAT_ELIGIBLE,
     CAT_ERROR,
     CAT_EXTENSION,
+    CAT_LINK,
     CAT_MAGIC,
+    CAT_SPARSE,
     CountingDirEntryIter,
     iter_files,
 )  # noqa: F401
@@ -67,6 +80,10 @@ def plan_compression(
             CAT_ALREADY_COMPRESSED: ("already_compressed", True, _("File is already compressed"), "Skipping %s: already compressed"),
             CAT_EXTENSION: ("extension", False, _("Skipped due to extension"), None),
             CAT_MAGIC: ("magic", False, _("Skipped database file"), "Skipping %s: SQLite header"),
+            CAT_CLOUD: ("cloud", False, _("Skipped cloud placeholder"), "Skipping %s: cloud placeholder"),
+            CAT_SPARSE: ("sparse", False, _("Skipped sparse file"), "Skipping %s: sparse file"),
+            CAT_LINK: ("link", False, _("Skipped link"), "Skipping %s: link or junction"),
+            "long_path": ("long_path", False, _("Skipped: path too long"), "Skipping %s: path is too long for compact.exe"),
         }
         too_small_bucket = ("too_small", False, _("File too small"), "Skipping %s: file too small")
         for path, size, _attributes, algo, category, hint in files:
@@ -78,7 +95,7 @@ def plan_compression(
 
             if category == CAT_ERROR:
                 reason = _("Error processing {file_path}").format(file_path=path)
-                stats.errors.append(reason)
+                stats.record_error(reason)
                 if use_bulk_skips:
                     bulk_skips.add("error", hint, size)
                 else:
@@ -92,12 +109,15 @@ def plan_compression(
             stats.total_on_disk_size += hint
 
             if category == CAT_ELIGIBLE or category == CAT_DEBUG_EXT:
-                candidates.append((path, size, algo))
-                if category == CAT_DEBUG_EXT:
-                    _debug_extension_probe(path, size, min_savings_percent)
-                if progress_callback:
-                    progress_callback(path, processed, True, None, size)
-                continue
+                if len(_compact_path(path)) >= MAX_COMPACT_PATH:
+                    category = "long_path"
+                else:
+                    candidates.append((path, size, algo))
+                    if category == CAT_DEBUG_EXT:
+                        _debug_extension_probe(path, size, min_savings_percent)
+                    if progress_callback:
+                        progress_callback(path, processed, True, None, size)
+                    continue
 
             bulk_key, already_compressed, progress_message, debug_message = skip_buckets.get(category, too_small_bucket)
             if use_bulk_skips:
@@ -123,7 +143,7 @@ def plan_compression(
 
     if apply_entropy_filter:
         with monitor.time_entropy_analysis():
-            get_incompressible_cache().clear_hash_cache()
+            get_incompressible_cache().clear_run_cache()
             candidates = _filter_high_entropy_directories(
                 candidates,
                 base_dir=base_dir,
@@ -164,7 +184,7 @@ def _filter_directstorage_trees(
         )
         append_directory_skip_record(stats, record)
         logging.warning(
-            _("Skipping DirectStorage game {path}; compact.exe would disable BypassIO").format(path=root)
+            _("Skipping DirectStorage game {path}: compact.exe would disable BypassIO").format(path=root)
         )
 
     filtered: list[PlanEntry] = []
@@ -209,11 +229,11 @@ def _filter_certainly_incompressible_files(
 ) -> list[PlanEntry]:
     """Drop files that are certainly incompressible.
 
-    Probes surviving candidates per directory (largest first, bounded by
-    ENTROPY_MAX_BYTES) and skips only files where every sampled window hit the
-    LZ4 gate. Files already measured by the directory pass (``already_sampled``)
-    are not re-probed; their LZ4 verdicts were recorded in the sample records
-    and are applied here directly.
+    The native sampler probes surviving candidates per directory, largest first,
+    bounded by the sampling budget, and skips only files where every sampled
+    window hit the LZ4 gate. Files already measured by the directory pass are
+    not re-probed. Their LZ4 verdicts come from the sample records and are
+    applied here directly.
     """
     by_dir: dict[str, list[tuple[int, int, str]]] = {}
     order: list[str] = []
@@ -229,25 +249,30 @@ def _filter_certainly_incompressible_files(
         for record in stats.entropy_samples
         for path in record.lz4_certain_paths
     }
+    groups: list[list[tuple[str, int]]] = []
     for parent_dir in order:
         entries = sorted(by_dir[parent_dir], key=lambda item: item[1], reverse=True)
-        remaining = ENTROPY_MAX_BYTES
-        for index, file_size, _algorithm in entries:
-            path_str = candidates[index][0]
-            if already_sampled and path_str in already_sampled:
-                continue
-            if remaining <= 0:
-                break
-            _file_entropy, file_bytes, lz4_certain = sample_file_entropy(
-                Path(path_str),
-                byte_budget=min(get_file_probe_budget(file_size), remaining),
-                file_size=file_size,
+        files = [
+            (candidates[index][0], file_size)
+            for index, file_size, _algorithm in entries
+            if not already_sampled or candidates[index][0] not in already_sampled
+        ]
+        if files:
+            groups.append(files)
+
+    if groups:
+        probe = native_entry_point("probe_candidate_files_parallel")
+        if probe is None:
+            return candidates
+
+        hit_paths.update(
+            probe(
+                _entropy_params(),
+                groups,
+                ENTROPY_MAX_BYTES,
+                max(1, entropy_worker_count()),
             )
-            if file_bytes == 0:
-                continue
-            remaining -= file_bytes
-            if lz4_certain:
-                hit_paths.add(path_str)
+        )
 
     if not hit_paths:
         return candidates
@@ -290,7 +315,7 @@ def _filter_high_entropy_directories(
     root_skip_record: Optional[DirectorySkipRecord] = None
     cache = get_incompressible_cache()
     if any(os.path.dirname(path_str) == base_dir_str for path_str, _, _ in candidates):
-        if cache.contains(base_dir):
+        if cache.contains(base_dir, min_savings_percent):
             root_skip_record = DirectorySkipRecord(
                 path=str(base_dir),
                 relative_path='.',
@@ -304,12 +329,12 @@ def _filter_high_entropy_directories(
             append_directory_skip_record(stats, root_skip_record)
             if verbosity >= 1:
                 logging.info(
-                    "Skipping root-level files; directory is in the incompressible cache"
+                    "Skipping root-level files: the directory is in the incompressible cache"
                 )
         else:
-            import fast_walk
+            probe = required_native_entry_point("probe_directories_parallel")
 
-            results = fast_walk.probe_directories_parallel(
+            results = probe(
                 _entropy_params(),
                 [base_dir_str],
                 ENTROPY_MAX_FILES,
@@ -318,6 +343,9 @@ def _filter_high_entropy_directories(
                 False,
                 1,
                 True,
+                None,
+                sorted(SKIP_EXTENSIONS),
+                MIN_COMPRESSIBLE_SIZE,
             )
             skip_record = None
             sample_record = None
@@ -350,11 +378,10 @@ def _filter_high_entropy_directories(
                         append_directory_skip_record(stats, root_skip_record)
 
     skipped_directories: dict[Path, DirectorySkipRecord] = {}
-    # Dir whose probe confirmed every sampled file as LZ4-certain: skip
-    # candidates without a second per-file probe.
+    # The directory probe marked every sampled file LZ4-certain. Skip its
+    # candidates without probing them again.
     directory_lz4_certain: set[Path] = set()
-    # A high-entropy root means the whole subtree is high-entropy: seed the
-    # root's skip record so the ancestor walk cascades it to subdirectories
+    # Subdirectories are scored on their own files.
     if root_skip_record is not None:
         skipped_directories[base_dir] = root_skip_record
 
@@ -362,9 +389,9 @@ def _filter_high_entropy_directories(
     for directory in sorted_directories:
         if directory == base_dir:
             continue
-        if _has_skipped_ancestor(directory, base_dir, skipped_directories):
+        if directory in skipped_directories:
             continue
-        if not cache.contains(directory):
+        if not cache.contains(directory, min_savings_percent):
             continue
 
         record = DirectorySkipRecord(
@@ -384,7 +411,7 @@ def _filter_high_entropy_directories(
     directories_to_evaluate = [
         directory
         for directory in directories
-        if directory != base_dir and not _has_skipped_ancestor(directory, base_dir, skipped_directories)
+        if directory != base_dir and directory not in skipped_directories
     ]
 
     if progress_callback and directories_to_evaluate:
@@ -412,14 +439,14 @@ def _filter_high_entropy_directories(
             stats.entropy_directories_below_threshold += 1
 
     for directory in sorted_directories:
-        if _has_skipped_ancestor(directory, base_dir, skipped_directories):
+        if directory in skipped_directories:
             continue
 
         record = entropy_records.get(directory)
         if record:
             append_directory_skip_record(stats, record)
             skipped_directories[directory] = record
-            cache.add(directory)
+            cache.add(directory, min_savings_percent)
             if sample_records_by_dir[directory].lz4_certain_files > 0:
                 directory_lz4_certain.add(directory)
 
@@ -431,14 +458,10 @@ def _filter_high_entropy_directories(
     for path_str, file_size, algorithm in candidates:
         parent_str = os.path.dirname(path_str)
         parent = Path(parent_str)
-        if root_skip_record is not None and parent_str == base_dir_str:
-            _skip_file(path_str, file_size, root_skip_record.reason, root_skip_record.category)
-            continue
         if parent in directory_lz4_certain:
-            # Dir probe already confirmed LZ4-certain; no re-probe.
             _skip_file(path_str, file_size, _("File is certainly incompressible (LZ4 gate)"), 'high_entropy')
             continue
-        skip_record = _locate_skip_record(parent, base_dir, skipped_directories)
+        skip_record = skipped_directories.get(parent)
         if skip_record is not None:
             _skip_file(path_str, file_size, skip_record.reason, skip_record.category)
             continue
@@ -453,33 +476,6 @@ def _filter_high_entropy_directories(
     return _filter_certainly_incompressible_files(filtered, stats, already_sampled)
 
 
-def _has_skipped_ancestor(
-    directory: Path,
-    base_dir: Path,
-    skipped: dict[Path, DirectorySkipRecord],
-) -> bool:
-    return _locate_skip_record(directory, base_dir, skipped) is not None
-
-
-def _locate_skip_record(
-    directory: Path,
-    base_dir: Path,
-    skipped: dict[Path, DirectorySkipRecord],
-) -> Optional[DirectorySkipRecord]:
-    current = directory
-    while True:
-        record = skipped.get(current)
-        if record is not None:
-            return record
-        if current == base_dir:
-            break
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return None
-
-
 def evaluate_directories_parallel(
     directories: Iterable[Path],
     base_dir: Path,
@@ -491,7 +487,7 @@ def evaluate_directories_parallel(
     if not directory_list:
         return {}, []
 
-    import fast_walk
+    probe = required_native_entry_point("probe_directories_parallel")
 
     rust_progress = None
     if progress_callback:
@@ -506,16 +502,18 @@ def evaluate_directories_parallel(
 
         rust_progress = _rust_progress
 
-    raw_results = fast_walk.probe_directories_parallel(
+    raw_results = probe(
         _entropy_params(),
         [str(directory) for directory in directory_list],
         ENTROPY_MAX_FILES,
         ENTROPY_MAX_BYTES,
         ENTROPY_MAX_FILE_BUDGET,
-        True,
+        False,
         max(1, entropy_worker_count()),
         True,
         rust_progress,
+        sorted(SKIP_EXTENSIONS),
+        MIN_COMPRESSIBLE_SIZE,
     )
 
     skip_results: dict[Path, DirectorySkipRecord] = {}

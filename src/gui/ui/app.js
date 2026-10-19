@@ -76,7 +76,6 @@
 
 	Util.bytes_to_human = Util.bytes_to_human_bin;
 
-	// Actions call back into Python
 	var Action = (function() {
 		"use strict";
 
@@ -192,7 +191,6 @@ function _dispatch_if_message(res) {
 	}
 }
 
-// Responses come from Python
 var Response = (function() {
 	"use strict";
 
@@ -266,7 +264,6 @@ var Response = (function() {
 	};
 })();
 
-// Anything poking the GUI lives here
 var Gui = (function() {
 	"use strict";
 
@@ -289,6 +286,7 @@ var Gui = (function() {
 	var decompress_active = false;
 	var total_analysis_timing = null;
 	var last_lz4_certain_files = 0;
+	var lzx_benchmark_failed = false;
 
 	function _upsert_directory_summary(payload) {
 		var i;
@@ -312,11 +310,30 @@ var Gui = (function() {
 		};
 	}
 
+	function _lzx_enabled() {
+		if ($("#No_LZX").is(":checked")) {
+			return false;
+		}
+		return $("#Force_LZX").is(":checked") || !lzx_benchmark_failed;
+	}
+
+	function _summary_override(data) {
+		var table = data ? data.projections : null;
+		if (!table) {
+			return null;
+		}
+		return table[_lzx_enabled() ? "lzx" : "xpress"] || null;
+	}
+
 	function _summary_metrics(data) {
 		var isAnalysis = data.is_analysis !== undefined ? data.is_analysis : (data.compressible.count > 0 && data.compressed.count === 0);
 		var logicalSize = data.logical_size || 0;
 		var projectedOnDisk = data.projected_on_disk_size != null ? data.projected_on_disk_size : (data.physical_size || 0);
 		var currentOnDisk = data.current_size_on_disk != null ? data.current_size_on_disk : logicalSize;
+		var override = isAnalysis ? _summary_override(data) : null;
+		if (override && override.projected_on_disk_size != null) {
+			projectedOnDisk = override.projected_on_disk_size;
+		}
 		var savedBytes = isAnalysis ? Math.max(0, currentOnDisk - projectedOnDisk) : Math.max(0, logicalSize - currentOnDisk);
 		var savedPct = logicalSize > 0 ? (savedBytes * 100.0 / logicalSize) : 0;
 		var minSavingsPct = data.min_savings_percent != null ? data.min_savings_percent : parseFloat($("#Min_Savings").val() || 15);
@@ -328,7 +345,8 @@ var Gui = (function() {
 			currentOnDisk: currentOnDisk,
 			savedPct: savedPct,
 			minSavingsPct: minSavingsPct,
-			savingsRatio: savingsRatio
+			savingsRatio: savingsRatio,
+			override: override
 		};
 	}
 
@@ -455,9 +473,12 @@ var Gui = (function() {
 			Gui.set_min_savings(msg.min_savings);
 			Gui.set_checkbox("No_LZX", msg.no_lzx);
 			$("#No_LZX_Help").text(msg.lzx_warning || default_lzx_help).toggleClass("warning", !!msg.lzx_warning);
+			lzx_benchmark_failed = !!msg.lzx_benchmark_failed;
+			Gui.set_checkbox("Force_LZX", msg.force_lzx);
 			Gui.set_checkbox("Single_Worker", msg.single_worker);
 			last_saved_config = Gui.get_config_payload();
 			ignore_config_changes = false;
+			Gui.render_summaries();
 		},
 
 		apply_boot_config: function() {
@@ -515,6 +536,8 @@ var Gui = (function() {
 			$("label[for='Min_Savings']").text(I18n.t("Minimum savings"));
 			$("#Settings .setting-item").eq(0).find(".setting-help").text(I18n.t("Only files that can save at least this much space will be compressed. Higher values are more selective and faster; lower values squeeze out more space."));
 			$("label[for='No_LZX'] .setting-label").text(I18n.t("Disable LZX compression"));
+			$("label[for='Force_LZX'] .setting-label").text(I18n.t("Force LZX compression"));
+			$("#Force_LZX_Help").text(I18n.t("Runs LZX compression even when the startup benchmark says this system is too slow for it. Leave it off to accept the benchmark."));
 			default_lzx_help = I18n.t("Skips the strongest compression method, which can speed things up on systems where LZX would be too slow. Leave it enabled if you want the best balance of speed and savings.");
 			$("#No_LZX_Help").text(default_lzx_help).removeClass("warning");
 			$("label[for='Single_Worker'] .setting-label").text(I18n.t("Slow HDD mode"));
@@ -530,7 +553,7 @@ var Gui = (function() {
 			$("#About p strong").text(I18n.t("Where we're going, we don't need backups!"));
 			$("#About p:nth-of-type(2)").html(I18n.t("Report problems to:") + " <a href=\"https://github.com/me-when-the-uh/trash-compactor\">https://github.com/me-when-the-uh/trash-compactor</a>.");
 			$("#About_Description").text(I18n.t("A (hopefully) easy-to-use graphical interface for Windows NTFS compression using entropy-based heuristics."));
-			$("#About_Rarely_Change").text(I18n.t("For use with files and programs that rarely change - any file modifications will undo the compression for that file, so re-running this tool periodically is a good idea."));
+			$("#About_Rarely_Change").text(I18n.t("For use with files and programs that rarely change. Any change to a file undoes the compression for that file, and a periodic re-run keeps the folder compact."));
 			$("#About_Exclusions").text(I18n.t("If an application misbehaves after compression, add its folder under Excluded folders in Settings. Database files and DirectStorage games (dstorage.dll) are skipped automatically."));
 			$("#About p:nth-of-type(7)").text(I18n.t("Vibe-coded in Python and with Rust duct-taped to this hackjob."));
 			$("#About p:nth-of-type(8)").html(I18n.t("GUI adapted from") + " <a href=\"https://github.com/Freaky/Compactor\">Compactor</a>");
@@ -544,7 +567,10 @@ var Gui = (function() {
 				return false;
 			});
 
-			$("#Settings input, #Settings select").on("change input", function() {
+			$("#Settings input, #Settings select").on("change input", function(event) {
+				if (event.target && (event.target.id === "No_LZX" || event.target.id === "Force_LZX")) {
+					Gui.render_summaries();
+				}
 				Gui.schedule_config_save();
 			});
 
@@ -693,7 +719,7 @@ var Gui = (function() {
 				decimal: $("#SI_Units").val() == "D",
 				min_savings: parseFloat($("#Min_Savings").val()),
 				no_lzx: $("#No_LZX").is(":checked"),
-				force_lzx: !$("#No_LZX").is(":checked"),
+				force_lzx: $("#Force_LZX").is(":checked"),
 				single_worker: $("#Single_Worker").is(":checked")
 			};
 		},
@@ -1033,7 +1059,7 @@ var Gui = (function() {
 			if (data.logical_size > 0) {
 				var total = data.logical_size;
 				var compressedPhysical = data.compressed && data.compressed.physical_size ? data.compressed.physical_size : 0;
-				var compressiblePhysical = data.compressible && data.compressible.physical_size ? data.compressible.physical_size : 0;
+				var compressiblePhysical = m.override && m.override.compressible_physical_size != null ? m.override.compressible_physical_size : (data.compressible && data.compressible.physical_size ? data.compressible.physical_size : 0);
 				var skippedPhysical = data.skipped && data.skipped.physical_size ? data.skipped.physical_size : 0;
 
 				$("#Compressed_Size").text(Util.bytes_to_human(compressedPhysical));
@@ -1045,7 +1071,7 @@ var Gui = (function() {
 				document.getElementById("Breakdown_Skipped").style.width = "" + (100 * skippedPhysical / total).toFixed(2) + "%";
 			}
 
-			var potentialSavings = data.potential_savings_bytes;
+			var potentialSavings = m.override && m.override.potential_savings_bytes != null ? m.override.potential_savings_bytes : data.potential_savings_bytes;
 			if (potentialSavings === undefined || potentialSavings === null) {
 				potentialSavings = Math.max(0, (data.logical_size || 0) - (data.physical_size || 0));
 			}

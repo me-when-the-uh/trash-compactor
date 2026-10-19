@@ -136,7 +136,7 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
                     entropy_files=total_entropy_files,
                     total_seconds=quick_elapsed,
                 ),
-                lzx_enabled=not backend.no_lzx,
+                lzx_enabled=backend._lzx_effective(),
             )
 
             current_summary = make_stats_summary(
@@ -145,7 +145,7 @@ def run_quick_compression_pipeline(backend: "GuiBackend", compactos: bool = Fals
                 current_plan_size,
                 min_savings_percent=backend.min_savings,
                 analysis_timing=current_timing,
-                lzx_enabled=not backend.no_lzx,
+                lzx_enabled=backend._lzx_effective(),
             )
             backend._send(FolderSummaryResponse(current_summary, directory=str(directory), scope="directory"))
             backend._send(FolderSummaryResponse(total_summary, directory="Total", scope="total"))
